@@ -1,0 +1,32 @@
+name: CUDA-cache
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  SOLUTION_FILE_PATH: Project1/Project1.sln
+  BUILD_CONFIGURATION: Release
+  BUILD_PLATFORM: x64
+  ERROR_KEYWORDS: "error|warning|fatal|undefined"
+  LOG_SUMMARY_LINES: 50
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+    - name: Cache CUDA Toolkit
+      uses: actions/cache@v3
+      with:
+        path: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA
+        key: cuda-12.6.0
+
+    - name: Setup CUDA 12.6
+      uses: Jimver/cuda-toolkit@v0.2.18
+      with:
+        cuda: '12.6.0'
+        method: 'local'
+
+    - name: Show CUDA directory contents
+      run: dir "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA"
