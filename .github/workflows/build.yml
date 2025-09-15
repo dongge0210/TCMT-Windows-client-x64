@@ -2,7 +2,7 @@ name: Build TCMT Windows Client
 
 on:
   pull_request:
-    branches: [ main , dev ]
+    branches: [ main ]
   workflow_dispatch:
 
 env:
@@ -33,7 +33,7 @@ jobs:
       uses: Jimver/cuda-toolkit@v0.2.18
       with:
         cuda: '12.6.0'
-        method: 'local'
+        method: 'network'
 
     - name: Show CUDA directory contents
       run: dir "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA"
@@ -87,14 +87,13 @@ jobs:
           Project1/x64/${{ env.BUILD_CONFIGURATION }}/*.dll
           Project1/x64/${{ env.BUILD_CONFIGURATION }}/*.pdb
 
-    # 自动评论PR（PowerShell语法，编译失败时触发）
     - name: Comment build result to PR
       if: failure()
-      env:
-        GITHUB_TOKEN: ${{ secrets.MY_GITHUB_TOKEN }}
       shell: pwsh
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        # 获取PR号
+        # 获取PR号（PR事件下直接拿，不用自己猜分支）
         $PR_NUMBER = $env:GITHUB_EVENT_PULL_REQUEST_NUMBER
         if (-not $PR_NUMBER) {
           if ($env:GITHUB_REF -match 'refs/pull/(\d+)/merge') {
@@ -121,6 +120,3 @@ jobs:
         $repo = $env:GITHUB_REPOSITORY
         $url = "https://api.github.com/repos/$repo/issues/$PR_NUMBER/comments"
         Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $body
-          Project1/x64/${{ env.BUILD_CONFIGURATION }}/*.exe
-          Project1/x64/${{ env.BUILD_CONFIGURATION }}/*.dll
-          Project1/x64/${{ env.BUILD_CONFIGURATION }}/*.pdb
