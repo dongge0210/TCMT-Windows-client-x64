@@ -33,7 +33,7 @@ jobs:
       uses: Jimver/cuda-toolkit@v0.2.18
       with:
         cuda: '12.6.0'
-        method: 'network'
+        method: 'local'
 
     - name: Show CUDA directory contents
       run: dir "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA"
