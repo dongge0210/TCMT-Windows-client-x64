@@ -1,0 +1,47 @@
+name: Auto Comment & Mention on CI Fail
+
+on:
+  workflow_run:
+    workflows: ["CI"] # 改成你的主CI workflow名字
+    types:
+      - completed
+
+jobs:
+  comment_on_fail:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Dump failed logs
+        run: |
+          gh run view ${{ github.event.workflow_run.id }} --log > ci_error.log
+          tail -n 100 ci_error.log
+
+      - name: Find PR by commit
+        env:
+          GITHUB_TOKEN: ${{ secrets.MY_GITHUB_TOKEN }}
+        id: findpr
+        run: |
+          COMMIT_SHA="${{ github.event.workflow_run.head_sha }}"
+          PR_LIST=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/commits/$COMMIT_SHA/pulls" \
+            -H "Accept: application/vnd.github.groot-preview+json")
+          PR_NUMBER=$(echo "$PR_LIST" | jq '.[0].number')
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+
+      - name: Comment & Mention on PR
+        env:
+          GITHUB_TOKEN: ${{ secrets.MY_GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER="${{ steps.findpr.outputs.pr_number }}"
+          if [ "$PR_NUMBER" == "null" ] || [ -z "$PR_NUMBER" ]; then
+            echo "没找到对应PR，跳过评论"
+            exit 0
+          fi
+          ERROR_LOG=$(tail -n 20 ci_error.log | sed 's/"/\\"/g')
+          COMMENT="嘿 @dongge0210，CI挂了！\n最近20行错误日志：\n\`\`\`\n$ERROR_LOG\n\`\`\`\n@copilot"
+          curl -X POST -H "Authorization: token $GITHUB_TOKEN" \
+            -d "{\"body\":\"$COMMENT\"}" \
+            "https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
