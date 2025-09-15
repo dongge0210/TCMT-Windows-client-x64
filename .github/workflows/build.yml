@@ -2,14 +2,14 @@ name: Build TCMT Windows Client
 
 on:
   pull_request:
-    branches: [ main ]   # 只针对PR
+    branches: [ main ]
   workflow_dispatch:
 
 env:
   SOLUTION_FILE_PATH: Project1/Project1.sln
   BUILD_CONFIGURATION: Release
   BUILD_PLATFORM: x64
-  ERROR_KEYWORDS: error|warning|fatal|undefined
+  ERROR_KEYWORDS: "error|warning|fatal|undefined"
   LOG_SUMMARY_LINES: 50
 
 jobs:
@@ -23,7 +23,6 @@ jobs:
         submodules: recursive
         fetch-depth: 0
 
-    # CUDA Toolkit 缓存
     - name: Cache CUDA Toolkit
       uses: actions/cache@v3
       with:
@@ -42,7 +41,6 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
-    # .NET tools 缓存
     - name: Cache .NET tools
       uses: actions/cache@v3
       with:
@@ -65,20 +63,20 @@ jobs:
     - name: Build LibreHardwareMonitorLib
       run: |
         cd src/third_party/LibreHardwareMonitor
-        dotnet build LibreHardwareMonitorLib/LibreHardwareMonitorLib.csproj -c Release -f net472 2>&1 | tee ..\..\..\build_lib.log
+        dotnet build LibreHardwareMonitorLib/LibreHardwareMonitorLib.csproj -c Release -f net472 2>&1 | Tee-Object -FilePath ..\..\..\build_lib.log
 
     - name: Build CPP-parsers
       run: |
-        msbuild src/CPP-parsers/CPP-parsers/CPP-parsers.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m 2>&1 | tee cpp_parsers_build.log
+        msbuild src/CPP-parsers/CPP-parsers/CPP-parsers.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m 2>&1 | Tee-Object -FilePath cpp_parsers_build.log
 
     - name: Build WPF-UI1
       run: |
         cd WPF-UI1
-        dotnet build WPF-UI1.csproj -c Release 2>&1 | tee ..\wpfui1_build.log
+        dotnet build WPF-UI1.csproj -c Release 2>&1 | Tee-Object -FilePath ..\wpfui1_build.log
 
     - name: Build main project
       run: |
-        msbuild ${{ env.SOLUTION_FILE_PATH }} /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ env.BUILD_PLATFORM }} /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m 2>&1 | tee main_build.log
+        msbuild ${{ env.SOLUTION_FILE_PATH }} /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ env.BUILD_PLATFORM }} /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m 2>&1 | Tee-Object -FilePath main_build.log
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
@@ -89,30 +87,37 @@ jobs:
           Project1/x64/${{ env.BUILD_CONFIGURATION }}/*.dll
           Project1/x64/${{ env.BUILD_CONFIGURATION }}/*.pdb
 
-    # -------------------------------
-    # 自动评论PR（编译失败才发）
-    # -------------------------------
+    # 自动评论PR（PowerShell语法，编译失败时触发）
     - name: Comment build result to PR
       if: failure()
       env:
         GITHUB_TOKEN: ${{ secrets.MY_GITHUB_TOKEN }}
+      shell: pwsh
       run: |
-        PR_NUMBER="${{ github.event.pull_request.number }}"
+        # 获取PR号
+        $PR_NUMBER = $env:GITHUB_EVENT_PULL_REQUEST_NUMBER
+        if (-not $PR_NUMBER) {
+          if ($env:GITHUB_REF -match 'refs/pull/(\d+)/merge') {
+            $PR_NUMBER = $Matches[1]
+          } else {
+            Write-Host "No PR number found, skip commenting"
+            exit 0
+          }
+        }
 
-        # 合并各编译日志，grep错误关键词，tail摘要
-        (
-          echo "==== main_build.log ====";
-          grep -iE "${{ env.ERROR_KEYWORDS }}" main_build.log | tail -n ${{ env.LOG_SUMMARY_LINES }};
-          echo "==== cpp_parsers_build.log ====";
-          grep -iE "${{ env.ERROR_KEYWORDS }}" cpp_parsers_build.log | tail -n 20;
-          echo "==== wpfui1_build.log ====";
-          grep -iE "${{ env.ERROR_KEYWORDS }}" wpfui1_build.log | tail -n 10;
-          echo "==== build_lib.log ====";
-          grep -iE "${{ env.ERROR_KEYWORDS }}" build_lib.log | tail -n 10;
-        ) > build_errors_summary.log
+        # 合并并过滤日志
+        $mainLog = Get-Content main_build.log | Select-String -Pattern $env:ERROR_KEYWORDS | Select-Object -Last $env:LOG_SUMMARY_LINES
+        $cppLog = Get-Content cpp_parsers_build.log | Select-String -Pattern $env:ERROR_KEYWORDS | Select-Object -Last 20
+        $wpfLog = Get-Content wpfui1_build.log | Select-String -Pattern $env:ERROR_KEYWORDS | Select-Object -Last 10
+        $libLog = Get-Content build_lib.log | Select-String -Pattern $env:ERROR_KEYWORDS | Select-Object -Last 10
 
-        ERR_SUMMARY=$(cat build_errors_summary.log | sed 's/"/\\"/g')
-        COMMENT="PR编译失败了，@copilot\n\n关键错误日志如下：\n\`\`\`\n$ERR_SUMMARY\n\`\`\`\n如需完整日志请查Actions artifacts。"
-        curl -X POST -H "Authorization: token $GITHUB_TOKEN" \
-          -d "{\"body\":\"$COMMENT\"}" \
-          "https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
+        $fullLog = "==== main_build.log ====`n$($mainLog)`n==== cpp_parsers_build.log ====`n$($cppLog)`n==== wpfui1_build.log ====`n$($wpfLog)`n==== build_lib.log ====`n$($libLog)"
+        $fullLog = $fullLog -replace '"','\"'
+
+        $comment = "PR编译失败了，@copilot`n`n关键错误日志如下：`n```$fullLog``` `n如需完整日志请查Actions artifacts。"
+
+        $headers = @{ Authorization = "token $env:GITHUB_TOKEN" }
+        $body = @{ body = $comment } | ConvertTo-Json
+        $repo = $env:GITHUB_REPOSITORY
+        $url = "https://api.github.com/repos/$repo/issues/$PR_NUMBER/comments"
+        Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $body
