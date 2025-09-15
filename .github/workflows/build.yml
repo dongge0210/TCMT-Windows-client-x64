@@ -2,7 +2,7 @@ name: Build TCMT Windows Client
 
 on:
   pull_request:
-    branches: [ dongge0210-patch-1 ]   # 只针对PR
+    branches: [ main ]   # 只针对PR
   workflow_dispatch:
 
 env:
