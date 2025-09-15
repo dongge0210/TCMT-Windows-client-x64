@@ -2,14 +2,6 @@ name: CUDA-cache
 on:
   pull_request:
     branches: [ main ]
-  workflow_dispatch:
-
-env:
-  SOLUTION_FILE_PATH: Project1/Project1.sln
-  BUILD_CONFIGURATION: Release
-  BUILD_PLATFORM: x64
-  ERROR_KEYWORDS: "error|warning|fatal|undefined"
-  LOG_SUMMARY_LINES: 50
 
 jobs:
   build:
