@@ -92,9 +92,10 @@ jobs:
       shell: pwsh
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
       run: |
-        # 获取PR号（PR事件下直接拿，不用自己猜分支）
-        $PR_NUMBER = $env:GITHUB_EVENT_PULL_REQUEST_NUMBER
+        # 获取PR号
+        $PR_NUMBER = $env:PR_NUMBER
         if (-not $PR_NUMBER) {
           if ($env:GITHUB_REF -match 'refs/pull/(\d+)/merge') {
             $PR_NUMBER = $Matches[1]
@@ -115,8 +116,15 @@ jobs:
 
         $comment = "PR编译失败了，@copilot`n`n关键错误日志如下：`n```$fullLog``` `n如需完整日志请查Actions artifacts。"
 
-        $headers = @{ Authorization = "token $env:GITHUB_TOKEN" }
+        # 补充User-Agent防止403
+        $headers = @{
+          Authorization = "token $env:GITHUB_TOKEN"
+          "User-Agent" = "github-actions-powershell"
+          "Accept" = "application/vnd.github+json"
+        }
         $body = @{ body = $comment } | ConvertTo-Json
         $repo = $env:GITHUB_REPOSITORY
         $url = "https://api.github.com/repos/$repo/issues/$PR_NUMBER/comments"
+
+        Write-Host "Commenting on PR #$PR_NUMBER, url: $url"
         Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $body
