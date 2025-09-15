@@ -1,21 +1,21 @@
 name: Build TCMT Windows Client
 
 on:
-  push:
-    branches: [ main, develop ]
   pull_request:
-    branches: [ main ]
+    branches: [ main ]   # 只针对PR
   workflow_dispatch:
 
 env:
   SOLUTION_FILE_PATH: Project1/Project1.sln
   BUILD_CONFIGURATION: Release
   BUILD_PLATFORM: x64
+  ERROR_KEYWORDS: error|warning|fatal|undefined
+  LOG_SUMMARY_LINES: 50
 
 jobs:
   build:
     runs-on: windows-2022
-    
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -53,7 +53,6 @@ jobs:
       uses: ilammy/msvc-dev-cmd@v1
       with:
         arch: x64
-        # toolset: 14.3 # 云端不用写死，自动选最新
 
     - name: Setup .NET Framework
       uses: actions/setup-dotnet@v4
@@ -66,20 +65,20 @@ jobs:
     - name: Build LibreHardwareMonitorLib
       run: |
         cd src/third_party/LibreHardwareMonitor
-        dotnet build LibreHardwareMonitorLib/LibreHardwareMonitorLib.csproj -c Release -f net472
+        dotnet build LibreHardwareMonitorLib/LibreHardwareMonitorLib.csproj -c Release -f net472 2>&1 | tee ..\..\..\build_lib.log
 
     - name: Build CPP-parsers
       run: |
-        msbuild src/CPP-parsers/CPP-parsers/CPP-parsers.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m
+        msbuild src/CPP-parsers/CPP-parsers/CPP-parsers.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m 2>&1 | tee cpp_parsers_build.log
 
     - name: Build WPF-UI1
       run: |
         cd WPF-UI1
-        dotnet build WPF-UI1.csproj -c Release
+        dotnet build WPF-UI1.csproj -c Release 2>&1 | tee ..\wpfui1_build.log
 
     - name: Build main project
       run: |
-        msbuild ${{ env.SOLUTION_FILE_PATH }} /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ env.BUILD_PLATFORM }} /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /p:LangVersion=preview /m
+        msbuild ${{ env.SOLUTION_FILE_PATH }} /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ env.BUILD_PLATFORM }} /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m 2>&1 | tee main_build.log
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
@@ -89,3 +88,31 @@ jobs:
           Project1/x64/${{ env.BUILD_CONFIGURATION }}/*.exe
           Project1/x64/${{ env.BUILD_CONFIGURATION }}/*.dll
           Project1/x64/${{ env.BUILD_CONFIGURATION }}/*.pdb
+
+    # -------------------------------
+    # 自动评论PR（编译失败才发）
+    # -------------------------------
+    - name: Comment build result to PR
+      if: failure()
+      env:
+        GITHUB_TOKEN: ${{ secrets.MY_GITHUB_TOKEN }}
+      run: |
+        PR_NUMBER="${{ github.event.pull_request.number }}"
+
+        # 合并各编译日志，grep错误关键词，tail摘要
+        (
+          echo "==== main_build.log ====";
+          grep -iE "${{ env.ERROR_KEYWORDS }}" main_build.log | tail -n ${{ env.LOG_SUMMARY_LINES }};
+          echo "==== cpp_parsers_build.log ====";
+          grep -iE "${{ env.ERROR_KEYWORDS }}" cpp_parsers_build.log | tail -n 20;
+          echo "==== wpfui1_build.log ====";
+          grep -iE "${{ env.ERROR_KEYWORDS }}" wpfui1_build.log | tail -n 10;
+          echo "==== build_lib.log ====";
+          grep -iE "${{ env.ERROR_KEYWORDS }}" build_lib.log | tail -n 10;
+        ) > build_errors_summary.log
+
+        ERR_SUMMARY=$(cat build_errors_summary.log | sed 's/"/\\"/g')
+        COMMENT="PR编译失败了，@copilot\n\n关键错误日志如下：\n\`\`\`\n$ERR_SUMMARY\n\`\`\`\n如需完整日志请查Actions artifacts。"
+        curl -X POST -H "Authorization: token $GITHUB_TOKEN" \
+          -d "{\"body\":\"$COMMENT\"}" \
+          "https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
