@@ -32,14 +32,53 @@ jobs:
       run: |
         cd src/third_party/LibreHardwareMonitor
         dotnet build LibreHardwareMonitorLib/LibreHardwareMonitorLib.csproj -c Release -f net472 2>&1 | Tee-Object -FilePath ..\..\..\build_lib.log
-    - uses: actions/upload-artifact@v4
+    - name: 提取警告和错误
+      shell: pwsh
+      run: |
+        $log = Get-Content build_lib.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
+        $summary = if ($log) { $log | Out-String } else { "没有警告或错误。" }
+        Set-Content build_lib.summary.txt $summary
+        echo "$summary" >> $GITHUB_STEP_SUMMARY
+    - name: 上传日志和总结
+      uses: actions/upload-artifact@v4
       with:
-        name: build_lib.log
-        path: build_lib.log
+        name: build_lib_logs
+        path: |
+          build_lib.log
+          build_lib.summary.txt
+
+  build_wpf:
+    runs-on: windows-2022
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        submodules: recursive
+        fetch-depth: 0
+    - name: Setup .NET Framework
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: '8.x'
+    - name: Build WPF-UI1
+      run: |
+        cd WPF-UI1
+        dotnet build WPF-UI1.csproj -c Release 2>&1 | Tee-Object -FilePath ..\wpfui1_build.log
+    - name: 提取警告和错误
+      shell: pwsh
+      run: |
+        $log = Get-Content wpfui1_build.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
+        $summary = if ($log) { $log | Out-String } else { "没有警告或错误。" }
+        Set-Content wpfui1_build.summary.txt $summary
+        echo "$summary" >> $GITHUB_STEP_SUMMARY
+    - name: 上传日志和总结
+      uses: actions/upload-artifact@v4
+      with:
+        name: wpfui1_build_logs
+        path: |
+          wpfui1_build.log
+          wpfui1_build.summary.txt
 
   build_cpp:
     runs-on: windows-2022
-    needs: build_lib
     steps:
     - uses: actions/checkout@v5
       with:
@@ -54,45 +93,41 @@ jobs:
     - name: Build CPP-parsers
       run: |
         msbuild src/CPP-parsers/CPP-parsers/CPP-parsers.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m 2>&1 | Tee-Object -FilePath cpp_parsers_build.log
-    - uses: actions/upload-artifact@v4
-      with:
-        name: cpp_parsers_build.log
-        path: cpp_parsers_build.log
-
-  build_wpf:
-    runs-on: windows-2022
-    needs: build_lib
-    steps:
-    - uses: actions/checkout@v5
-      with:
-        submodules: recursive
-        fetch-depth: 0
-    - name: Setup .NET Framework
-      uses: actions/setup-dotnet@v5
-      with:
-        dotnet-version: '8.x'
-    - name: Build WPF-UI1
+    - name: 提取警告和错误
+      shell: pwsh
       run: |
-        cd WPF-UI1
-        dotnet build WPF-UI1.csproj -c Release 2>&1 | Tee-Object -FilePath ..\wpfui1_build.log
-    - uses: actions/upload-artifact@v4
+        $log = Get-Content cpp_parsers_build.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
+        $summary = if ($log) { $log | Out-String } else { "没有警告或错误。" }
+        Set-Content cpp_parsers_build.summary.txt $summary
+        echo "$summary" >> $GITHUB_STEP_SUMMARY
+    - name: 上传日志和总结
+      uses: actions/upload-artifact@v4
       with:
-        name: wpfui1_build.log
-        path: wpfui1_build.log
+        name: cpp_parsers_build_logs
+        path: |
+          cpp_parsers_build.log
+          cpp_parsers_build.summary.txt
 
   build_main:
     runs-on: windows-2022
-    needs: [build_lib, build_cpp, build_wpf]
+    needs: [build_lib, build_wpf, build_cpp]
     steps:
     - uses: actions/checkout@v5
       with:
         submodules: recursive
         fetch-depth: 0
+    - name: Cache CUDA Toolkit
+      uses: actions/cache@v4
+      with:
+        path: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA
+        key: cuda-12.6.0
     - name: Setup CUDA 12.6
       uses: Jimver/cuda-toolkit@v0.2.18
       with:
         cuda: '12.6.0'
         method: 'network'
+    - name: Show CUDA directory contents
+      run: dir "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA"
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
     - name: Setup Visual Studio environment
@@ -102,25 +137,69 @@ jobs:
     - name: Build main project
       run: |
         msbuild ${{ env.SOLUTION_FILE_PATH }} /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ env.BUILD_PLATFORM }} /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m 2>&1 | Tee-Object -FilePath main_build.log
-    - uses: actions/upload-artifact@v4
+    - name: 提取警告和错误
+      shell: pwsh
+      run: |
+        $log = Get-Content main_build.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
+        $summary = if ($log) { $log | Out-String } else { "没有警告或错误。" }
+        Set-Content main_build.summary.txt $summary
+        echo "$summary" >> $GITHUB_STEP_SUMMARY
+    - name: 上传日志和总结
+      uses: actions/upload-artifact@v4
+      with:
+        name: main_build_logs
+        path: |
+          main_build.log
+          main_build.summary.txt
+    - name: 上传主程序产物
+      uses: actions/upload-artifact@v4
       with:
         name: TCMT-Windows-Client-${{ env.BUILD_PLATFORM }}-${{ env.BUILD_CONFIGURATION }}
         path: |
           Project1/x64/${{ env.BUILD_CONFIGURATION }}/*.exe
           Project1/x64/${{ env.BUILD_CONFIGURATION }}/*.dll
           Project1/x64/${{ env.BUILD_CONFIGURATION }}/*.pdb
-          main_build.log
 
-  comment-on-pr:
-    if: failure() && github.event_name == 'pull_request'
+  report_error:
+    if: always() && github.event_name == 'pull_request'
     runs-on: windows-2022
-    needs: build_main
+    needs: [build_lib, build_wpf, build_cpp, build_main]
     steps:
     - name: Download logs
       uses: actions/download-artifact@v4
       with:
         path: logs
-    - name: Comment build result to PR (仅Copilot Agent PR自动)
+    - name: 汇总所有模块警告和错误
+      shell: pwsh
+      run: |
+        $modules = @("build_lib", "wpfui1_build", "cpp_parsers_build", "main_build")
+        $report = ""
+        foreach ($m in $modules) {
+          $sfile = "logs/${m}.summary.txt"
+          if (Test-Path $sfile) {
+            $txt = Get-Content $sfile -Raw
+            $report += "`n==== $m ====`n$txt"
+          }
+        }
+        if ($report -eq "") { $report = "没有模块产生任何警告或错误。" }
+        Set-Content logs/ci_error_report.txt $report
+        echo "$report" >> $GITHUB_STEP_SUMMARY
+    - name: 上传error report
+      uses: actions/upload-artifact@v4
+      with:
+        name: ci_error_report.txt
+        path: logs/ci_error_report.txt
+
+  comment-on-pr:
+    if: failure() && github.event_name == 'pull_request'
+    runs-on: windows-2022
+    needs: [build_lib, build_wpf, build_cpp, build_main, report_error]
+    steps:
+    - name: Download logs
+      uses: actions/download-artifact@v4
+      with:
+        path: logs
+    - name: 评论到PR（仅Copilot Agent PR自动）
       shell: pwsh
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -137,25 +216,13 @@ jobs:
         }
 
         $PR_NUMBER = $env:PR_NUMBER
-        if (-not $PR_NUMBER) {
-          if ($env:GITHUB_REF -match 'refs/pull/(\d+)/merge') {
-            $PR_NUMBER = $Matches[1]
-          } else {
-            Write-Host "No PR number found, skip commenting"
-            exit 0
-          }
-        }
         $actions_url = "https://github.com/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)"
 
-        # 合并并过滤日志
-        $mainLog = Get-Content logs/main_build.log | Select-String -Pattern $env:ERROR_KEYWORDS | Select-Object -Last $env:LOG_SUMMARY_LINES
-        $cppLog = Get-Content logs/cpp_parsers_build.log | Select-String -Pattern $env:ERROR_KEYWORDS | Select-Object -Last 20
-        $wpfLog = Get-Content logs/wpfui1_build.log | Select-String -Pattern $env:ERROR_KEYWORDS | Select-Object -Last 10
-        $libLog = Get-Content logs/build_lib.log | Select-String -Pattern $env:ERROR_KEYWORDS | Select-Object -Last 10
-        $fullLog = "==== main_build.log ====`n$($mainLog)`n==== cpp_parsers_build.log ====`n$($cppLog)`n==== wpfui1_build.log ====`n$($wpfLog)`n==== build_lib.log ====`n$($libLog)"
+        # 汇总所有模块的警告和错误
+        $errMsg = Get-Content logs/ci_error_report.txt -Raw
 
         # 评论内容
-        $comment = "@copilot @$pr_author  `n`nPR编译失败了  `n`n关键错误日志如下：  `n````  `n$fullLog`n````  `n如需完整日志请查Actions artifacts。  `n`n$actions_url"
+        $comment = "@copilot @$pr_author  `n`nPR编译失败了  `n`n关键警告和错误日志如下：  `n````  `n$errMsg`n````  `n如需完整日志请查Actions artifacts。  `n`n$actions_url"
         $headers = @{
           Authorization = "token $env:GITHUB_TOKEN"
           "User-Agent" = "github-actions-powershell"
@@ -166,4 +233,3 @@ jobs:
         $url = "https://api.github.com/repos/$repo/issues/$PR_NUMBER/comments"
         Write-Host "Commenting on PR #$PR_NUMBER, url: $url"
         Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $body
-
