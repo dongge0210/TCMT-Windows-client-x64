@@ -15,6 +15,43 @@ env:
   LOG_SUMMARY_LINES: 50
 
 jobs:
+  cuda:
+    runs-on: windows-2022
+    outputs:
+      cuda_ok: ${{ steps.check_cuda.outcome == 'success' }}
+    steps:
+    - name: Cache CUDA Toolkit
+      uses: actions/cache@v4
+      with:
+        path: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA
+        key: cuda-12.6.0
+    - name: Setup CUDA 12.6
+      id: cuda_install
+      uses: Jimver/cuda-toolkit@v0.2.18
+      with:
+        cuda: '12.6.0'
+        method: 'network'
+    - name: Check CUDA directory
+      id: check_cuda
+      shell: pwsh
+      run: |
+        if (-not (Test-Path "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6")) {
+          Write-Host "CUDA 12.6 安装失败！"
+          exit 1
+        } else {
+          Write-Host "CUDA 12.6 安装成功。"
+        }
+    - name: 上传CUDA安装log
+      if: failure()
+      shell: pwsh
+      run: |
+        Set-Content -Path cuda_install_failed.txt -Value "CUDA 12.6 安装失败，main编译不会继续。"
+    - uses: actions/upload-artifact@v4
+      if: failure()
+      with:
+        name: cuda_install_failed.txt
+        path: cuda_install_failed.txt
+
   build_lib:
     runs-on: windows-2022
     steps:
@@ -110,24 +147,13 @@ jobs:
 
   build_main:
     runs-on: windows-2022
-    needs: [build_lib, build_wpf, build_cpp]
+    needs: [cuda, build_lib, build_wpf, build_cpp]
+    if: needs.cuda.result == 'success'
     steps:
     - uses: actions/checkout@v5
       with:
         submodules: recursive
         fetch-depth: 0
-    - name: Cache CUDA Toolkit
-      uses: actions/cache@v4
-      with:
-        path: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA
-        key: cuda-12.6.0
-    - name: Setup CUDA 12.6
-      uses: Jimver/cuda-toolkit@v0.2.18
-      with:
-        cuda: '12.6.0'
-        method: 'network'
-    - name: Show CUDA directory contents
-      run: dir "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA"
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
     - name: Setup Visual Studio environment
@@ -163,7 +189,7 @@ jobs:
   report_error:
     if: always() && github.event_name == 'pull_request'
     runs-on: windows-2022
-    needs: [build_lib, build_wpf, build_cpp, build_main]
+    needs: [cuda, build_lib, build_wpf, build_cpp, build_main]
     steps:
     - name: Download logs
       uses: actions/download-artifact@v4
@@ -172,16 +198,20 @@ jobs:
     - name: 汇总所有模块警告和错误
       shell: pwsh
       run: |
-        $modules = @("build_lib", "wpfui1_build", "cpp_parsers_build", "main_build")
         $report = ""
-        foreach ($m in $modules) {
-          $sfile = "logs/${m}.summary.txt"
-          if (Test-Path $sfile) {
-            $txt = Get-Content $sfile -Raw
-            $report += "`n==== $m ====`n$txt"
+        if (Test-Path "logs/cuda_install_failed.txt") {
+          $report = Get-Content "logs/cuda_install_failed.txt" -Raw
+        } else {
+          $modules = @("build_lib", "wpfui1_build", "cpp_parsers_build", "main_build")
+          foreach ($m in $modules) {
+            $sfile = "logs/${m}.summary.txt"
+            if (Test-Path $sfile) {
+              $txt = Get-Content $sfile -Raw
+              $report += "`n==== $m ====`n$txt"
+            }
           }
+          if ($report -eq "") { $report = "没有模块产生任何警告或错误。" }
         }
-        if ($report -eq "") { $report = "没有模块产生任何警告或错误。" }
         Set-Content logs/ci_error_report.txt $report
         echo "$report" >> $GITHUB_STEP_SUMMARY
     - name: 上传error report
@@ -193,7 +223,7 @@ jobs:
   comment-on-pr:
     if: failure() && github.event_name == 'pull_request'
     runs-on: windows-2022
-    needs: [build_lib, build_wpf, build_cpp, build_main, report_error]
+    needs: [cuda, build_lib, build_wpf, build_cpp, build_main, report_error]
     steps:
     - name: Download logs
       uses: actions/download-artifact@v4
@@ -218,10 +248,8 @@ jobs:
         $PR_NUMBER = $env:PR_NUMBER
         $actions_url = "https://github.com/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)"
 
-        # 汇总所有模块的警告和错误
         $errMsg = Get-Content logs/ci_error_report.txt -Raw
 
-        # 评论内容
         $comment = "@copilot @$pr_author  `n`nPR编译失败了  `n`n关键警告和错误日志如下：  `n````  `n$errMsg`n````  `n如需完整日志请查Actions artifacts。  `n`n$actions_url"
         $headers = @{
           Authorization = "token $env:GITHUB_TOKEN"
@@ -232,4 +260,4 @@ jobs:
         $repo = $env:GITHUB_REPOSITORY
         $url = "https://api.github.com/repos/$repo/issues/$PR_NUMBER/comments"
         Write-Host "Commenting on PR #$PR_NUMBER, url: $url"
-        Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $body
+        Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $bodyy
