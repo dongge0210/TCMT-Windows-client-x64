@@ -2,7 +2,7 @@ name: Build TCMT Windows Client
 
 on:
   pull_request:
-    branches: [ main , dev ]
+    branches: [ main, dev ]
   workflow_dispatch:
 
 env:
@@ -93,6 +93,8 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
+        RUN_ID: ${{ github.run_id }}
+        REPO: ${{ github.repository }}
       run: |
         # 获取PR号
         $PR_NUMBER = $env:PR_NUMBER
@@ -105,6 +107,9 @@ jobs:
           }
         }
 
+        # 拼出actions运行链接
+        $actions_url = "https://github.com/$($env:REPO)/actions/runs/$($env:RUN_ID)"
+
         # 合并并过滤日志
         $mainLog = Get-Content main_build.log | Select-String -Pattern $env:ERROR_KEYWORDS | Select-Object -Last $env:LOG_SUMMARY_LINES
         $cppLog = Get-Content cpp_parsers_build.log | Select-String -Pattern $env:ERROR_KEYWORDS | Select-Object -Last 20
@@ -114,7 +119,7 @@ jobs:
         $fullLog = "==== main_build.log ====`n$($mainLog)`n==== cpp_parsers_build.log ====`n$($cppLog)`n==== wpfui1_build.log ====`n$($wpfLog)`n==== build_lib.log ====`n$($libLog)"
         $fullLog = $fullLog -replace '"','\"'
 
-        $comment = "PR编译失败了，@copilot`n`n关键错误日志如下：`n```$fullLog``` `n如需完整日志请查Actions artifacts。"
+        $comment = "@copilot\nPR编译失败了\n\n关键错误日志如下：\n```$fullLog```\n如需完整日志请查Actions artifacts。\n\n[action运行链接]($actions_url)"
 
         $headers = @{
           Authorization = "token $env:GITHUB_TOKEN"
