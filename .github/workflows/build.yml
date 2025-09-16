@@ -93,8 +93,9 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
-        RUN_ID: ${{ github.run_id }}
-        REPO: ${{ github.repository }}
+        GITHUB_RUN_ID: ${{ github.run_id }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_ACTOR: ${{ github.actor }}
       run: |
         # 获取PR号
         $PR_NUMBER = $env:PR_NUMBER
@@ -107,8 +108,11 @@ jobs:
           }
         }
 
+        # 获取PR作者
+        $pr_author = $env:GITHUB_ACTOR
+
         # 拼出actions运行链接
-        $actions_url = "https://github.com/$($env:REPO)/actions/runs/$($env:RUN_ID)"
+        $actions_url = "https://github.com/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)"
 
         # 合并并过滤日志
         $mainLog = Get-Content main_build.log | Select-String -Pattern $env:ERROR_KEYWORDS | Select-Object -Last $env:LOG_SUMMARY_LINES
@@ -117,9 +121,9 @@ jobs:
         $libLog = Get-Content build_lib.log | Select-String -Pattern $env:ERROR_KEYWORDS | Select-Object -Last 10
 
         $fullLog = "==== main_build.log ====`n$($mainLog)`n==== cpp_parsers_build.log ====`n$($cppLog)`n==== wpfui1_build.log ====`n$($wpfLog)`n==== build_lib.log ====`n$($libLog)"
-        $fullLog = $fullLog -replace '"','\"'
 
-        $comment = "@copilot\nPR编译失败了\n\n关键错误日志如下：\n```$fullLog```\n如需完整日志请查Actions artifacts。\n\n[action运行链接]($actions_url)"
+        # 评论内容（空格分段，段间空行）
+        $comment = "@copilot @$pr_author [actions自动编译-MSVC]  `n`nPR编译失败了  `n`n关键错误日志如下：  `n````  `n$fullLog`n````  `n如需完整日志请查Actions artifacts。  `n`n$actions_url"
 
         $headers = @{
           Authorization = "token $env:GITHUB_TOKEN"
