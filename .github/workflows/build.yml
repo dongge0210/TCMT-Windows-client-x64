@@ -250,7 +250,7 @@ jobs:
 
         $errMsg = Get-Content logs/ci_error_report.txt -Raw
 
-        $comment = "@copilot @$pr_author  `n`nPR编译失败了  `n`n关键警告和错误日志如下：  `n````  `n$errMsg`n````  `n如需完整日志请查Actions artifacts。  `n`n$actions_url"
+        $comment = "@copilot @$pr_author [Actions编译报告-MSVC] `n`nPR编译失败了  `n`n关键警告和错误日志如下：  `n````  `n$errMsg`n````  `n如需完整日志请查Actions artifacts。  `n`n$actions_url"
         $headers = @{
           Authorization = "token $env:GITHUB_TOKEN"
           "User-Agent" = "github-actions-powershell"
@@ -260,4 +260,4 @@ jobs:
         $repo = $env:GITHUB_REPOSITORY
         $url = "https://api.github.com/repos/$repo/issues/$PR_NUMBER/comments"
         Write-Host "Commenting on PR #$PR_NUMBER, url: $url"
-        Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $bodyy
+        Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $body
