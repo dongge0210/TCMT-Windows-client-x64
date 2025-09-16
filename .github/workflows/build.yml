@@ -1,24 +1,21 @@
 name: Build TCMT Windows Client
 
 on:
-  push:
-    branches: [ main, dev ]
   pull_request:
     branches: [ main, dev ]
   workflow_dispatch:
-
-permissions:
-  contents: read
 
 env:
   SOLUTION_FILE_PATH: Project1/Project1.sln
   BUILD_CONFIGURATION: Release
   BUILD_PLATFORM: x64
+  ERROR_KEYWORDS: "error|warning|fatal|undefined"
+  LOG_SUMMARY_LINES: 50
 
 jobs:
   build:
     runs-on: windows-2022
-    
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -26,21 +23,17 @@ jobs:
         submodules: recursive
         fetch-depth: 0
 
-    # CUDA Toolkit 缓存
     - name: Cache CUDA Toolkit
-      uses: actions/cache@v4.2.4
+      uses: actions/cache@v3
       with:
         path: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA
-        key: CUDA
-        enableCrossOsArchive: true
-        save-always: true
+        key: cuda-12.6.0
 
-    - name: Setup CUDA 12.8
-      uses: Jimver/cuda-toolkit@v0.2.20
+    - name: Setup CUDA 12.6
+      uses: Jimver/cuda-toolkit@v0.2.18
       with:
-        cuda: '12.8.0'
-        method: 'local'
-        
+        cuda: '12.6.0'
+        method: 'network'
 
     - name: Show CUDA directory contents
       run: dir "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA"
@@ -48,7 +41,6 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
-    # .NET tools 缓存
     - name: Cache .NET tools
       uses: actions/cache@v3
       with:
@@ -71,20 +63,20 @@ jobs:
     - name: Build LibreHardwareMonitorLib
       run: |
         cd src/third_party/LibreHardwareMonitor
-        dotnet build LibreHardwareMonitorLib/LibreHardwareMonitorLib.csproj -c Release -f net472
+        dotnet build LibreHardwareMonitorLib/LibreHardwareMonitorLib.csproj -c Release -f net472 2>&1 | Tee-Object -FilePath ..\..\..\build_lib.log
 
     - name: Build CPP-parsers
       run: |
-        msbuild src/CPP-parsers/CPP-parsers/CPP-parsers.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m
+        msbuild src/CPP-parsers/CPP-parsers/CPP-parsers.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m 2>&1 | Tee-Object -FilePath cpp_parsers_build.log
 
     - name: Build WPF-UI1
       run: |
         cd WPF-UI1
-        dotnet build WPF-UI1.csproj -c Release
+        dotnet build WPF-UI1.csproj -c Release 2>&1 | Tee-Object -FilePath ..\wpfui1_build.log
 
-    - name: Build main project1
+    - name: Build main project
       run: |
-        msbuild ${{ env.SOLUTION_FILE_PATH }} /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ env.BUILD_PLATFORM }} /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0
+        msbuild ${{ env.SOLUTION_FILE_PATH }} /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ env.BUILD_PLATFORM }} /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m 2>&1 | Tee-Object -FilePath main_build.log
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
@@ -94,3 +86,53 @@ jobs:
           Project1/x64/${{ env.BUILD_CONFIGURATION }}/*.exe
           Project1/x64/${{ env.BUILD_CONFIGURATION }}/*.dll
           Project1/x64/${{ env.BUILD_CONFIGURATION }}/*.pdb
+
+    - name: Comment build result to PR
+      if: failure()
+      shell: pwsh
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        GITHUB_RUN_ID: ${{ github.run_id }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_ACTOR: ${{ github.actor }}
+      run: |
+        # 获取PR号
+        $PR_NUMBER = $env:PR_NUMBER
+        if (-not $PR_NUMBER) {
+          if ($env:GITHUB_REF -match 'refs/pull/(\d+)/merge') {
+            $PR_NUMBER = $Matches[1]
+          } else {
+            Write-Host "No PR number found, skip commenting"
+            exit 0
+          }
+        }
+
+        # 获取PR作者
+        $pr_author = $env:GITHUB_ACTOR
+
+        # 拼出actions运行链接
+        $actions_url = "https://github.com/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)"
+
+        # 合并并过滤日志
+        $mainLog = Get-Content main_build.log | Select-String -Pattern $env:ERROR_KEYWORDS | Select-Object -Last $env:LOG_SUMMARY_LINES
+        $cppLog = Get-Content cpp_parsers_build.log | Select-String -Pattern $env:ERROR_KEYWORDS | Select-Object -Last 20
+        $wpfLog = Get-Content wpfui1_build.log | Select-String -Pattern $env:ERROR_KEYWORDS | Select-Object -Last 10
+        $libLog = Get-Content build_lib.log | Select-String -Pattern $env:ERROR_KEYWORDS | Select-Object -Last 10
+
+        $fullLog = "==== main_build.log ====`n$($mainLog)`n==== cpp_parsers_build.log ====`n$($cppLog)`n==== wpfui1_build.log ====`n$($wpfLog)`n==== build_lib.log ====`n$($libLog)"
+
+        # 评论内容（空格分段，段间空行）
+        $comment = "@copilot @$pr_author [actions自动编译-MSVC]  `n`nPR编译失败了  `n`n关键错误日志如下：  `n````  `n$fullLog`n````  `n如需完整日志请查Actions artifacts。  `n`n$actions_url"
+
+        $headers = @{
+          Authorization = "token $env:GITHUB_TOKEN"
+          "User-Agent" = "github-actions-powershell"
+          "Accept" = "application/vnd.github+json"
+        }
+        $body = @{ body = $comment } | ConvertTo-Json
+        $repo = $env:GITHUB_REPOSITORY
+        $url = "https://api.github.com/repos/$repo/issues/$PR_NUMBER/comments"
+
+        Write-Host "Commenting on PR #$PR_NUMBER, url: $url"
+        Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $body
