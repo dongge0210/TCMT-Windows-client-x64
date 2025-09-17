@@ -13,6 +13,8 @@ env:
   BUILD_PLATFORM: x64
   ERROR_KEYWORDS: "error|warning|fatal|undefined"
   LOG_SUMMARY_LINES: 50
+  # 判定“致命错误”用于让 job 失败的严格匹配（大小写不敏感）
+  FAIL_ERROR_REGEX: "(?i)(: error | fatal error| fatal: )"
 
 jobs:
   cuda:
@@ -49,7 +51,7 @@ jobs:
     - uses: actions/upload-artifact@v4
       if: failure()
       with:
-        name: cuda_install_failed.txt
+        name: cuda_install_failed
         path: cuda_install_failed.txt
 
   build_lib:
@@ -72,20 +74,36 @@ jobs:
     - name: 提取警告和错误
       shell: pwsh
       run: |
-        $log = Get-Content build_lib.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
-        $summary = if ($log) { $log | Out-String } else { "没有警告或错误。" }
+        $summaryLines = Get-Content build_lib.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
+        $summary = if ($summaryLines) { $summaryLines | Out-String } else { "没有警告或错误。" }
         Set-Content build_lib.summary.txt $summary
         echo "### build_lib 警告/错误" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
         echo "$summary" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
+    - name: 扫描致命错误并决定失败
+      shell: pwsh
+      run: |
+        $lines = Get-Content build_lib.log | Select-String -Pattern "${{ env.FAIL_ERROR_REGEX }}"
+        # 排除 MSBuild 总结里的 "0 Error(s)"
+        $lines = $lines | Where-Object { $_.Line -notmatch '0 Error\(s\)' }
+        if ($lines) {
+          Write-Host "检测到致命错误行（build_lib）:"
+          $lines | ForEach-Object { Write-Host $_.Line }
+          Set-Content build_lib.errors.txt ($lines | ForEach-Object {$_.Line} | Out-String)
+          exit 1
+        } else {
+          Write-Host "未发现致命错误(build_lib)。"
+        }
     - name: 上传日志和总结
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: build_lib_logs
         path: |
           build_lib.log
           build_lib.summary.txt
+          build_lib.errors.txt
 
   build_wpf:
     runs-on: windows-2022
@@ -105,20 +123,35 @@ jobs:
     - name: 提取警告和错误
       shell: pwsh
       run: |
-        $log = Get-Content wpfui1_build.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
-        $summary = if ($log) { $log | Out-String } else { "没有警告或错误。" }
+        $summaryLines = Get-Content wpfui1_build.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
+        $summary = if ($summaryLines) { $summaryLines | Out-String } else { "没有警告或错误。" }
         Set-Content wpfui1_build.summary.txt $summary
         echo "### wpfui1_build 警告/错误" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
         echo "$summary" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
+    - name: 扫描致命错误并决定失败
+      shell: pwsh
+      run: |
+        $lines = Get-Content wpfui1_build.log | Select-String -Pattern "${{ env.FAIL_ERROR_REGEX }}"
+        $lines = $lines | Where-Object { $_.Line -notmatch '0 Error\(s\)' }
+        if ($lines) {
+          Write-Host "检测到致命错误行（wpfui1_build）:"
+            $lines | ForEach-Object { Write-Host $_.Line }
+          Set-Content wpfui1_build.errors.txt ($lines | ForEach-Object {$_.Line} | Out-String)
+          exit 1
+        } else {
+          Write-Host "未发现致命错误(wpfui1_build)。"
+        }
     - name: 上传日志和总结
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: wpfui1_build_logs
         path: |
           wpfui1_build.log
           wpfui1_build.summary.txt
+          wpfui1_build.errors.txt
 
   build_cpp:
     runs-on: windows-2022
@@ -140,25 +173,40 @@ jobs:
     - name: 提取警告和错误
       shell: pwsh
       run: |
-        $log = Get-Content cpp_parsers_build.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
-        $summary = if ($log) { $log | Out-String } else { "没有警告或错误。" }
+        $summaryLines = Get-Content cpp_parsers_build.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
+        $summary = if ($summaryLines) { $summaryLines | Out-String } else { "没有警告或错误。" }
         Set-Content cpp_parsers_build.summary.txt $summary
         echo "### cpp_parsers_build 警告/错误" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
         echo "$summary" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
+    - name: 扫描致命错误并决定失败
+      shell: pwsh
+      run: |
+        $lines = Get-Content cpp_parsers_build.log | Select-String -Pattern "${{ env.FAIL_ERROR_REGEX }}"
+        $lines = $lines | Where-Object { $_.Line -notmatch '0 Error\(s\)' }
+        if ($lines) {
+          Write-Host "检测到致命错误行（cpp_parsers_build）:"
+          $lines | ForEach-Object { Write-Host $_.Line }
+          Set-Content cpp_parsers_build.errors.txt ($lines | ForEach-Object {$_.Line} | Out-String)
+          exit 1
+        } else {
+          Write-Host "未发现致命错误(cpp_parsers_build)。"
+        }
     - name: 上传日志和总结
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: cpp_parsers_build_logs
         path: |
           cpp_parsers_build.log
           cpp_parsers_build.summary.txt
+          cpp_parsers_build.errors.txt
 
   build_main:
     runs-on: windows-2022
     needs: [cuda, build_lib, build_wpf, build_cpp]
-    if: needs.cuda.result == 'success'
+    if: ${{ needs.cuda.result == 'success' && needs.build_lib.result == 'success' && needs.build_wpf.result == 'success' && needs.build_cpp.result == 'success' }}
     steps:
     - uses: actions/checkout@v5
       with:
@@ -178,20 +226,35 @@ jobs:
     - name: 提取警告和错误
       shell: pwsh
       run: |
-        $log = Get-Content main_build.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
-        $summary = if ($log) { $log | Out-String } else { "没有警告或错误。" }
+        $summaryLines = Get-Content main_build.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
+        $summary = if ($summaryLines) { $summaryLines | Out-String } else { "没有警告或错误。" }
         Set-Content main_build.summary.txt $summary
         echo "### main_build 警告/错误" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
         echo "$summary" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
+    - name: 扫描致命错误并决定失败
+      shell: pwsh
+      run: |
+        $lines = Get-Content main_build.log | Select-String -Pattern "${{ env.FAIL_ERROR_REGEX }}"
+        $lines = $lines | Where-Object { $_.Line -notmatch '0 Error\(s\)' }
+        if ($lines) {
+          Write-Host "检测到致命错误行（main_build）:"
+          $lines | ForEach-Object { Write-Host $_.Line }
+          Set-Content main_build.errors.txt ($lines | ForEach-Object {$_.Line} | Out-String)
+          exit 1
+        } else {
+          Write-Host "未发现致命错误(main_build)。"
+        }
     - name: 上传日志和总结
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: main_build_logs
         path: |
           main_build.log
           main_build.summary.txt
+          main_build.errors.txt
     - name: 上传主程序产物
       uses: actions/upload-artifact@v4
       with:
@@ -201,10 +264,53 @@ jobs:
           Project1/x64/${{ env.BUILD_CONFIGURATION }}/*.dll
           Project1/x64/${{ env.BUILD_CONFIGURATION }}/*.pdb
 
+  # 运行主程序并截图（实现需求C）
+  run_and_screenshot:
+    runs-on: windows-2022
+    needs: [build_main]
+    if: needs.build_main.result == 'success'
+    steps:
+    - name: 下载主程序产物
+      uses: actions/download-artifact@v4
+      with:
+        name: TCMT-Windows-Client-${{ env.BUILD_PLATFORM }}-${{ env.BUILD_CONFIGURATION }}
+        path: app
+    - name: 列出产物
+      shell: pwsh
+      run: |
+        Write-Host "产物目录结构："
+        Get-ChildItem -Recurse app | ForEach-Object { $_.FullName }
+    - name: 运行主程序并截图
+      shell: pwsh
+      run: |
+        $exes = Get-ChildItem -Path app -Filter *.exe -Recurse | Where-Object { $_.Name -notmatch 'vshost' }
+        if (-not $exes) {
+          Write-Host "未找到可执行文件，退出。"
+          exit 1
+        }
+        $exe = $exes[0].FullName
+        Write-Host "准备启动： $exe"
+        Start-Process -FilePath $exe
+        Start-Sleep -Seconds 6
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName System.Drawing
+        $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+        $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+        $bitmap.Save("run_screenshot.png")
+        $graphics.Dispose(); $bitmap.Dispose()
+        Write-Host "截图完成：run_screenshot.png"
+    - name: 上传运行截图
+      uses: actions/upload-artifact@v4
+      with:
+        name: run_screenshot
+        path: run_screenshot.png
+
   report_error:
     if: always() && github.event_name == 'pull_request'
     runs-on: windows-2022
-    needs: [cuda, build_lib, build_wpf, build_cpp, build_main]
+    needs: [cuda, build_lib, build_wpf, build_cpp, build_main, run_and_screenshot]
     steps:
     - name: Download logs
       uses: actions/download-artifact@v4
@@ -213,37 +319,42 @@ jobs:
     - name: 汇总所有模块警告和错误
       shell: pwsh
       run: |
-        if (Test-Path "logs/cuda_install_failed.txt") {
-          $report = Get-Content "logs/cuda_install_failed.txt" -Raw
+        if (Test-Path "logs/cuda_install_failed") {
+          $report = Get-Content "logs/cuda_install_failed/cuda_install_failed.txt" -Raw
         } else {
-          $modules = @("build_lib","wpfui1_build","cpp_parsers_build")
-          if (Test-Path "logs/main_build.summary.txt") { $modules += "main_build" }
+          $modules = @("build_lib","wpfui1_build","cpp_parsers_build","main_build")
           $report = ""
           foreach ($m in $modules) {
-            $sfile = "logs/${m}.summary.txt"
-            if (Test-Path $sfile) {
-              $txt = Get-Content $sfile -Raw
+            $sDir = "logs/${m}_logs"
+            if (Test-Path "$sDir/${m}.summary.txt") {
+              $txt = Get-Content "$sDir/${m}.summary.txt" -Raw
               $report += "`n==== $m ====`n$txt"
+            }
+            if (Test-Path "$sDir/${m}.errors.txt") {
+              $errTxt = Get-Content "$sDir/${m}.errors.txt" -Raw
+              if ($errTxt.Trim()) {
+                $report += "`n---- ${m} 致命错误行 ----`n$errTxt"
+              }
             }
           }
           if ($report -eq "") { $report = "没有模块产生任何警告或错误。" }
         }
-        Set-Content logs/ci_error_report.txt $report
-        echo "### 汇总警告/错误" >> $GITHUB_STEP_SUMMARY
+        New-Item -ItemType Directory -Path logs/out -Force | Out-Null
+        Set-Content logs/out/ci_error_report.txt $report
+        echo "### 汇总警告/错误（含致命错误判定）" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
         echo "$report" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
     - name: 上传error report
       uses: actions/upload-artifact@v4
       with:
-        name: ci_error_report.txt
-        path: logs/ci_error_report.txt
+        name: ci_error_report
+        path: logs/out/ci_error_report.txt
 
   comment-on-pr:
-    # 只在有失败且为 PR 时尝试（内部再判断是不是 Copilot PR）
     if: failure() && github.event_name == 'pull_request'
     runs-on: windows-2022
-    needs: [cuda, build_lib, build_wpf, build_cpp, build_main, report_error]
+    needs: [cuda, build_lib, build_wpf, build_cpp, build_main, run_and_screenshot, report_error]
     steps:
     - name: Download logs
       uses: actions/download-artifact@v4
@@ -262,23 +373,23 @@ jobs:
         $runtimeActor = $env:GITHUB_ACTOR
         $prAuthor = $env:PR_AUTHOR
         Write-Host "DEBUG: runtime actor=$runtimeActor; pr author=$prAuthor"
-
         $allowed = @("github-copilot[bot]", "Copilot", "github-actions[bot]")
         $isCopilot = ($allowed -contains $prAuthor) -or ($allowed -contains $runtimeActor) -or ($prAuthor -match '(?i)copilot') -or ($runtimeActor -match '(?i)copilot')
         if (-not $isCopilot) {
           Write-Host "本 PR 作者($prAuthor) 不属于 Copilot 相关，跳过评论。"
           exit 0
         }
-
-        if (-not (Test-Path logs/ci_error_report.txt)) {
-          Write-Host "缺少 ci_error_report.txt，构造一个占位。"
-          "缺失 ci_error_report.txt" | Set-Content logs/ci_error_report.txt
+        $candidates = @(
+          "logs/ci_error_report/ci_error_report.txt",
+          "logs/out/ci_error_report.txt"
+        )
+        $errFile = $null
+        foreach ($c in $candidates) {
+          if (Test-Path $c -PathType Leaf) { $errFile = $c; break }
         }
-        $errMsg = Get-Content logs/ci_error_report.txt -Raw
-
+        $errMsg = if ($errFile) { Get-Content $errFile -Raw } else { "缺失 ci_error_report.txt" }
         $actions_url = "https://github.com/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)"
         $comment = "@copilot @$prAuthor [Actions编译报告-MSVC] `n`nPR编译失败了  `n`n关键警告和错误日志如下：  `n````  `n$errMsg`n````  `n如需完整日志请查Actions artifacts。  `n$actions_url"
-
         $headers = @{
           Authorization = "token $env:GITHUB_TOKEN"
           "User-Agent" = "github-actions-powershell"
