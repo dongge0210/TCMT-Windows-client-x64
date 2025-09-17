@@ -36,18 +36,42 @@ jobs:
       with:
         path: |
           ~/.nuget/packages
+          ~/.local/share/NuGet/v3-cache
         key: nuget-${{ runner.os }}-${{ hashFiles('**/*.sln','**/*.csproj','**/packages.config') }}
         restore-keys: |
           nuget-${{ runner.os }}-
-    - name: NuGet Restore
+    - name: NuGet Restore (详细模式)
       shell: pwsh
       run: |
-        nuget restore ${{ env.SOLUTION_FILE_PATH }} 2>&1 | Tee-Object -FilePath restore.log
+        Write-Host "开始NuGet包还原..."
+        nuget restore ${{ env.SOLUTION_FILE_PATH }} -Verbosity detailed -NonInteractive 2>&1 | Tee-Object -FilePath restore.log
+        Write-Host "NuGet还原完成"
+    - name: .NET Restore WPF项目
+      shell: pwsh
+      run: |
+        Write-Host "单独还原WPF项目..."
+        cd WPF-UI1
+        dotnet restore WPF-UI1.csproj -v diagnostic 2>&1 | Tee-Object -FilePath ../wpf_restore.log
+        Write-Host "WPF还原完成"
+    - name: .NET Restore LibreHardwareMonitor
+      shell: pwsh
+      run: |
+        Write-Host "单独还原LibreHardwareMonitor项目..."
+        cd src/third_party/LibreHardwareMonitor
+        dotnet restore LibreHardwareMonitorLib/LibreHardwareMonitorLib.csproj -v diagnostic 2>&1 | Tee-Object -FilePath ../../../lhm_restore.log
+        Write-Host "LibreHardwareMonitor还原完成"
     - name: 提取警告和错误
       shell: pwsh
       run: |
-        $summaryLines = Get-Content restore.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
-        $summary = if ($summaryLines){ $summaryLines | Out-String } else { "没有警告或错误。" }
+        $allLogs = @("restore.log", "wpf_restore.log", "lhm_restore.log")
+        $allErrors = @()
+        foreach ($log in $allLogs) {
+          if (Test-Path $log) {
+            $summaryLines = Get-Content $log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
+            if ($summaryLines) { $allErrors += $summaryLines }
+          }
+        }
+        $summary = if ($allErrors){ $allErrors | Out-String } else { "没有警告或错误。" }
         Set-Content restore.summary.txt $summary
         echo "### restore 警告/错误" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
@@ -56,12 +80,19 @@ jobs:
     - name: 扫描致命错误并决定失败
       shell: pwsh
       run: |
-        $lines = Get-Content restore.log | Select-String -Pattern "${{ env.FAIL_ERROR_REGEX }}"
-        $lines = $lines | Where-Object { $_.Line -notmatch '0 Error\(s\)' }
-        if ($lines) {
+        $allLogs = @("restore.log", "wpf_restore.log", "lhm_restore.log")
+        $fatalErrors = @()
+        foreach ($log in $allLogs) {
+          if (Test-Path $log) {
+            $lines = Get-Content $log | Select-String -Pattern "${{ env.FAIL_ERROR_REGEX }}"
+            $lines = $lines | Where-Object { $_.Line -notmatch '0 Error\(s\)' }
+            if ($lines) { $fatalErrors += $lines }
+          }
+        }
+        if ($fatalErrors) {
           Write-Host "检测到致命错误行（restore）:"
-          $lines | ForEach-Object { Write-Host $_.Line }
-          Set-Content restore.errors.txt ($lines | ForEach-Object {$_.Line} | Out-String)
+          $fatalErrors | ForEach-Object { Write-Host $_.Line }
+          Set-Content restore.errors.txt ($fatalErrors | ForEach-Object {$_.Line} | Out-String)
           exit 1
         } else {
           Write-Host "未发现致命错误(restore)。"
@@ -73,6 +104,8 @@ jobs:
         name: restore_logs
         path: |
           restore.log
+          wpf_restore.log
+          lhm_restore.log
           restore.summary.txt
           restore.errors.txt
 
@@ -125,6 +158,10 @@ jobs:
       uses: actions/setup-dotnet@v5
       with:
         dotnet-version: '8.x'
+    - name: Restore LibreHardwareMonitorLib packages
+      run: |
+        cd src/third_party/LibreHardwareMonitor
+        dotnet restore LibreHardwareMonitorLib/LibreHardwareMonitorLib.csproj
     - name: Build LibreHardwareMonitorLib
       run: |
         cd src/third_party/LibreHardwareMonitor
@@ -172,6 +209,10 @@ jobs:
       uses: actions/setup-dotnet@v5
       with:
         dotnet-version: '8.x'
+    - name: Restore WPF-UI1 packages
+      run: |
+        cd WPF-UI1
+        dotnet restore WPF-UI1.csproj
     - name: Build WPF-UI1
       run: |
         cd WPF-UI1
@@ -269,7 +310,7 @@ jobs:
   build_main:
     runs-on: windows-2022
     needs: [restore, cuda, build_lib, build_wpf, build_cpp]
-    if: ${{ needs.restore.result == 'success' && needs.cuda.result == 'success' && needs.build_lib.result == 'success' && needs.build_wpf.result == 'success' && needs.build_cpp.result == 'success' }}
+    if: always() && needs.restore.result == 'success' && needs.cuda.result == 'success'
     steps:
     - uses: actions/checkout@v5
       with:
@@ -281,9 +322,15 @@ jobs:
       uses: ilammy/msvc-dev-cmd@v1
       with:
         arch: x64
+    - name: Restore solution packages
+      shell: pwsh
+      run: |
+        Write-Host "还原整个解决方案的包..."
+        nuget restore ${{ env.SOLUTION_FILE_PATH }} -Verbosity detailed 2>&1 | Tee-Object -FilePath nuget_restore_main.log
     - name: Build main project
       shell: pwsh
       run: |
+        Write-Host "开始构建主项目..."
         msbuild ${{ env.SOLUTION_FILE_PATH }} /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ env.BUILD_PLATFORM }} /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m /verbosity:minimal 2>&1 | Tee-Object -FilePath main_build.log
     - name: 提取警告和错误
       shell: pwsh
@@ -298,6 +345,11 @@ jobs:
     - name: 扫描致命错误并决定失败
       shell: pwsh
       run: |
+        if (-not (Test-Path main_build.log)) {
+          Write-Host "main_build.log 文件不存在！"
+          Set-Content main_build.errors.txt "main_build.log 文件不存在，构建可能未执行。"
+          exit 1
+        }
         $lines = Get-Content main_build.log | Select-String -Pattern "${{ env.FAIL_ERROR_REGEX }}"
         $lines = $lines | Where-Object { $_.Line -notmatch '0 Error\(s\)' }
         if ($lines){
@@ -315,7 +367,9 @@ jobs:
           main_build.log
           main_build.summary.txt
           main_build.errors.txt
+          nuget_restore_main.log
     - name: 上传主程序产物
+      if: success()
       uses: actions/upload-artifact@v4
       with:
         name: TCMT-Windows-Client-${{ env.BUILD_PLATFORM }}-${{ env.BUILD_CONFIGURATION }}
