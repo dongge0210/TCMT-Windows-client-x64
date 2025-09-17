@@ -44,6 +44,29 @@ void Logger::Initialize(const std::string& logFilePath) {
     }
 }
 
+void Logger::InitializeWithUnifiedPath(const std::string& logFileName) {
+    // 创建统一的Logs目录结构，与WPF保持一致
+    char exePath[MAX_PATH];
+    GetModuleFileNameA(NULL, exePath, MAX_PATH);
+    
+    // 提取可执行文件目录
+    std::string exeDir = exePath;
+    size_t lastSlash = exeDir.find_last_of("\\/");
+    if (lastSlash != std::string::npos) {
+        exeDir = exeDir.substr(0, lastSlash);
+    }
+    
+    // 创建Logs目录
+    std::string logDir = exeDir + "\\Logs";
+    CreateDirectoryA(logDir.c_str(), NULL); // 如果目录已存在，会安全忽略
+    
+    // 构建完整的日志文件路径
+    std::string fullLogPath = logDir + "\\" + logFileName + ".log";
+    
+    // 调用原始的Initialize方法
+    Initialize(fullLogPath);
+}
+
 void Logger::EnableConsoleOutput(bool enable) {
     consoleOutputEnabled = enable;
 }

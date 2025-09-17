@@ -630,9 +630,9 @@ int main(int argc, char* argv[]) {
         // 初始化日志系统
         try {
             Logger::EnableConsoleOutput(true); // Enable console output for Logger
-            Logger::Initialize("system_monitor.log");
+            Logger::InitializeWithUnifiedPath("system_monitor"); // 使用统一日志路径，与WPF共享Logs目录
             Logger::SetLogLevel(LOG_DEBUG); // 设置日志等级为DEBUG，查看详细信息
-            Logger::Info("程序启动");
+            Logger::Info("程序启动 - C++核心日志系统");
         }
         catch (const std::exception& e) {
             printf("日志系统初始化失败: %s\n", e.what());

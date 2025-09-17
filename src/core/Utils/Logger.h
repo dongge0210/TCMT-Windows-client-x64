@@ -56,6 +56,7 @@ private:
 
 public:
     static void Initialize(const std::string& logFilePath);
+    static void InitializeWithUnifiedPath(const std::string& logFileName = "system_monitor"); // 统一日志路径初始化
     static void EnableConsoleOutput(bool enable); // Method to enable/disable console output
     static void SetLogLevel(LogLevel level); // 设置日志等级过滤器
     static LogLevel GetLogLevel(); // 获取当前日志等级
