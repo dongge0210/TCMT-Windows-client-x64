@@ -18,7 +18,7 @@ jobs:
   cuda:
     runs-on: windows-2022
     outputs:
-      cuda_ok: ${{ steps.check_cuda.outcome == 'success' }}
+      cuda_status: ${{ job.status }}
     steps:
     - name: Cache CUDA Toolkit
       uses: actions/cache@v4
@@ -41,11 +41,11 @@ jobs:
         } else {
           Write-Host "CUDA 12.6 安装成功。"
         }
-    - name: 上传CUDA安装log
+    - name: 记录失败信息
       if: failure()
       shell: pwsh
       run: |
-        Set-Content -Path cuda_install_failed.txt -Value "CUDA 12.6 安装失败，main编译不会继续。"
+        Set-Content -Path cuda_install_failed.txt -Value "CUDA 12.6 安装失败，main 编译不会执行。"
     - uses: actions/upload-artifact@v4
       if: failure()
       with:
@@ -59,11 +59,11 @@ jobs:
       with:
         submodules: recursive
         fetch-depth: 0
-    - name: Setup .NET Framework
+    - name: Setup .NET
       uses: actions/setup-dotnet@v5
       with:
         dotnet-version: '8.x'
-    - name: Restore NuGet packages
+    - name: Restore NuGet
       run: nuget restore ${{ env.SOLUTION_FILE_PATH }}
     - name: Build LibreHardwareMonitorLib
       run: |
@@ -75,7 +75,10 @@ jobs:
         $log = Get-Content build_lib.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
         $summary = if ($log) { $log | Out-String } else { "没有警告或错误。" }
         Set-Content build_lib.summary.txt $summary
+        echo "### build_lib 警告/错误" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
         echo "$summary" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
     - name: 上传日志和总结
       uses: actions/upload-artifact@v4
       with:
@@ -91,7 +94,7 @@ jobs:
       with:
         submodules: recursive
         fetch-depth: 0
-    - name: Setup .NET Framework
+    - name: Setup .NET
       uses: actions/setup-dotnet@v5
       with:
         dotnet-version: '8.x'
@@ -105,7 +108,10 @@ jobs:
         $log = Get-Content wpfui1_build.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
         $summary = if ($log) { $log | Out-String } else { "没有警告或错误。" }
         Set-Content wpfui1_build.summary.txt $summary
+        echo "### wpfui1_build 警告/错误" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
         echo "$summary" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
     - name: 上传日志和总结
       uses: actions/upload-artifact@v4
       with:
@@ -123,20 +129,24 @@ jobs:
         fetch-depth: 0
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
-    - name: Setup Visual Studio environment
+    - name: Setup VS 环境
       uses: ilammy/msvc-dev-cmd@v1
       with:
         arch: x64
     - name: Build CPP-parsers
       run: |
-        msbuild src/CPP-parsers/CPP-parsers/CPP-parsers.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m 2>&1 | Tee-Object -FilePath cpp_parsers_build.log
+        msbuild src/CPP-parsers/CPP-parsers/CPP-parsers.vcxproj ^
+          /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m 2>&1 | Tee-Object -FilePath cpp_parsers_build.log
     - name: 提取警告和错误
       shell: pwsh
       run: |
         $log = Get-Content cpp_parsers_build.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
         $summary = if ($log) { $log | Out-String } else { "没有警告或错误。" }
         Set-Content cpp_parsers_build.summary.txt $summary
+        echo "### cpp_parsers_build 警告/错误" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
         echo "$summary" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
     - name: 上传日志和总结
       uses: actions/upload-artifact@v4
       with:
@@ -156,20 +166,25 @@ jobs:
         fetch-depth: 0
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
-    - name: Setup Visual Studio environment
+    - name: Setup VS 环境
       uses: ilammy/msvc-dev-cmd@v1
       with:
         arch: x64
     - name: Build main project
       run: |
-        msbuild ${{ env.SOLUTION_FILE_PATH }} /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ env.BUILD_PLATFORM }} /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m 2>&1 | Tee-Object -FilePath main_build.log
+        msbuild ${{ env.SOLUTION_FILE_PATH }} ^
+          /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ env.BUILD_PLATFORM }} ^
+          /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m 2>&1 | Tee-Object -FilePath main_build.log
     - name: 提取警告和错误
       shell: pwsh
       run: |
         $log = Get-Content main_build.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
         $summary = if ($log) { $log | Out-String } else { "没有警告或错误。" }
         Set-Content main_build.summary.txt $summary
+        echo "### main_build 警告/错误" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
         echo "$summary" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
     - name: 上传日志和总结
       uses: actions/upload-artifact@v4
       with:
@@ -198,11 +213,12 @@ jobs:
     - name: 汇总所有模块警告和错误
       shell: pwsh
       run: |
-        $report = ""
         if (Test-Path "logs/cuda_install_failed.txt") {
           $report = Get-Content "logs/cuda_install_failed.txt" -Raw
         } else {
-          $modules = @("build_lib", "wpfui1_build", "cpp_parsers_build", "main_build")
+          $modules = @("build_lib","wpfui1_build","cpp_parsers_build")
+          if (Test-Path "logs/main_build.summary.txt") { $modules += "main_build" }
+          $report = ""
           foreach ($m in $modules) {
             $sfile = "logs/${m}.summary.txt"
             if (Test-Path $sfile) {
@@ -213,7 +229,10 @@ jobs:
           if ($report -eq "") { $report = "没有模块产生任何警告或错误。" }
         }
         Set-Content logs/ci_error_report.txt $report
+        echo "### 汇总警告/错误" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
         echo "$report" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
     - name: 上传error report
       uses: actions/upload-artifact@v4
       with:
@@ -221,6 +240,7 @@ jobs:
         path: logs/ci_error_report.txt
 
   comment-on-pr:
+    # 只在有失败且为 PR 时尝试（内部再判断是不是 Copilot PR）
     if: failure() && github.event_name == 'pull_request'
     runs-on: windows-2022
     needs: [cuda, build_lib, build_wpf, build_cpp, build_main, report_error]
@@ -229,7 +249,7 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         path: logs
-    - name: 评论到PR（仅Copilot Agent PR自动）
+    - name: 评论到PR（仅Copilot相关PR）
       shell: pwsh
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -237,27 +257,36 @@ jobs:
         GITHUB_RUN_ID: ${{ github.run_id }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         GITHUB_ACTOR: ${{ github.actor }}
+        PR_AUTHOR: ${{ github.event.pull_request.user.login }}
       run: |
-        # 只支持 Copilot Agent PR 自动反馈
-        $pr_author = $env:GITHUB_ACTOR
-        if ($pr_author -ne "github-copilot[bot]" -and $pr_author -ne "github-actions[bot]") {
-          Write-Host "Not a Copilot agent PR, skipping comment."
+        $runtimeActor = $env:GITHUB_ACTOR
+        $prAuthor = $env:PR_AUTHOR
+        Write-Host "DEBUG: runtime actor=$runtimeActor; pr author=$prAuthor"
+
+        $allowed = @("github-copilot[bot]", "Copilot", "github-actions[bot]")
+        $isCopilot = ($allowed -contains $prAuthor) -or ($allowed -contains $runtimeActor) -or ($prAuthor -match '(?i)copilot') -or ($runtimeActor -match '(?i)copilot')
+        if (-not $isCopilot) {
+          Write-Host "本 PR 作者($prAuthor) 不属于 Copilot 相关，跳过评论。"
           exit 0
         }
 
-        $PR_NUMBER = $env:PR_NUMBER
-        $actions_url = "https://github.com/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)"
-
+        if (-not (Test-Path logs/ci_error_report.txt)) {
+          Write-Host "缺少 ci_error_report.txt，构造一个占位。"
+          "缺失 ci_error_report.txt" | Set-Content logs/ci_error_report.txt
+        }
         $errMsg = Get-Content logs/ci_error_report.txt -Raw
 
-        $comment = "@copilot @$pr_author [Actions编译报告-MSVC] `n`nPR编译失败了  `n`n关键警告和错误日志如下：  `n````  `n$errMsg`n````  `n如需完整日志请查Actions artifacts。  `n`n$actions_url"
+        $actions_url = "https://github.com/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)"
+        $comment = "@copilot @$prAuthor [Actions编译报告-MSVC] `n`nPR编译失败了  `n`n关键警告和错误日志如下：  `n````  `n$errMsg`n````  `n如需完整日志请查Actions artifacts。  `n$actions_url"
+
         $headers = @{
           Authorization = "token $env:GITHUB_TOKEN"
           "User-Agent" = "github-actions-powershell"
           "Accept" = "application/vnd.github+json"
         }
-        $body = @{ body = $comment } | ConvertTo-Json
+        $body = @{ body = $comment } | ConvertTo-Json -Depth 4
         $repo = $env:GITHUB_REPOSITORY
-        $url = "https://api.github.com/repos/$repo/issues/$PR_NUMBER/comments"
-        Write-Host "Commenting on PR #$PR_NUMBER, url: $url"
+        $prNumber = $env:PR_NUMBER
+        $url = "https://api.github.com/repos/$repo/issues/$prNumber/comments"
+        Write-Host "POST -> $url"
         Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $body
