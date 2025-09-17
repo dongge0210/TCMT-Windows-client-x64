@@ -9,7 +9,14 @@
 警告	MSB8077	某些文件设置为 C++/CLI，但未定义"为单个文件启用 CLR 支持"属性。有关更多详细信息，请参阅"高级属性页"文档。
 以上警告请忽视，这个项目的结构没法兼容这个情况
 */
-// 首先包含Windows头文件以避免宏重定义警告
+
+// 🔧 修复Windows Socket头文件顺序问题
+// 必须在任何Windows头文件之前定义WIN32_LEAN_AND_MEAN并包含winsock2.h
+#define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
+// 然后包含其他Windows头文件
 #include <windows.h>
 #include <shellapi.h>
 #include <sddl.h>
@@ -52,6 +59,8 @@
 
 #pragma comment(lib, "kernel32.lib")
 #pragma comment(lib, "user32.lib")
+#pragma comment(lib, "ws2_32.lib")     // Windows Socket 2 库
+#pragma comment(lib, "iphlpapi.lib")   // IP Helper API 库
 
 // ====== 全局静态TPM缓存变量（恢复为文件级，供主循环使用） ======
 static bool cachedHasTpm = false;
