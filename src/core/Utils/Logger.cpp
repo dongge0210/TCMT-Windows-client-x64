@@ -47,7 +47,9 @@ void Logger::Initialize(const std::string& logFilePath) {
 void Logger::InitializeWithUnifiedPath(const std::string& logFileName) {
     // 创建统一的Logs目录结构，与WPF保持一致
     char exePath[MAX_PATH];
-    GetModuleFileNameA(NULL, exePath, MAX_PATH);
+    if (GetModuleFileNameA(NULL, exePath, MAX_PATH) == 0) {
+        throw std::runtime_error("无法获取可执行文件路径");
+    }
     
     // 提取可执行文件目录
     std::string exeDir = exePath;
@@ -58,7 +60,12 @@ void Logger::InitializeWithUnifiedPath(const std::string& logFileName) {
     
     // 创建Logs目录
     std::string logDir = exeDir + "\\Logs";
-    CreateDirectoryA(logDir.c_str(), NULL); // 如果目录已存在，会安全忽略
+    if (!CreateDirectoryA(logDir.c_str(), NULL)) {
+        DWORD error = GetLastError();
+        if (error != ERROR_ALREADY_EXISTS) {
+            throw std::runtime_error("无法创建日志目录: " + logDir);
+        }
+    }
     
     // 构建完整的日志文件路径
     std::string fullLogPath = logDir + "\\" + logFileName + ".log";
