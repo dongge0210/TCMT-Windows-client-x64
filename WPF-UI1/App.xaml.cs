@@ -16,7 +16,7 @@ namespace WPF_UI1
             ConfigureLogging();
             
             Log.Information("=== 系统硬件监视器 WPF UI 启动 ===");
-            Log.Information("WPF UI组件版本: 1.0.0 (统一日志系统)");
+            Log.Information("WPF UI组件版本: 1.0.0 (与C++共享统一日志)");
             Log.Information("运行时版本: {RuntimeVersion}", Environment.Version);
             Log.Information("操作系统: {OS}", Environment.OSVersion);
 
@@ -36,14 +36,14 @@ namespace WPF_UI1
 
         private void ConfigureLogging()
         {
-            // 使用与C++相同的统一日志目录结构
+            // 使用与C++完全相同的日志文件，实现真正的统一日志
             var logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Logs");
             if (!Directory.Exists(logDirectory))
             {
                 Directory.CreateDirectory(logDirectory);
             }
 
-            var logFilePath = Path.Combine(logDirectory, "wpf_ui.log"); // 区分WPF组件日志
+            var logFilePath = Path.Combine(logDirectory, "system_monitor.log"); // 与C++使用完全相同的日志文件
 
             Log.Logger = new LoggerConfiguration()
                 .MinimumLevel.Debug()
@@ -53,11 +53,12 @@ namespace WPF_UI1
                     logFilePath,
                     rollingInterval: RollingInterval.Day,
                     retainedFileCountLimit: 7,
-                    outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} {Level:u3}] {Message:lj}{NewLine}{Exception}")
+                    outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} {Level:u3}] {Message:lj}{NewLine}{Exception}",
+                    shared: true) // 允许多个进程共享同一日志文件
                 .CreateLogger();
 
-            Log.Information("WPF UI日志系统初始化完成，日志文件: {LogPath}", logFilePath);
-            Log.Information("统一日志目录: {LogDirectory} (与C++核心共享)", logDirectory);
+            Log.Information("WPF UI日志系统初始化完成，使用统一日志文件: {LogPath}", logFilePath);
+            Log.Information("WPF与C++核心现在共享同一日志文件和控制台输出");
         }
 
         private void OnUnhandledException(object sender, UnhandledExceptionEventArgs e)
