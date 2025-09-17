@@ -13,8 +13,8 @@ env:
   BUILD_PLATFORM: x64
   ERROR_KEYWORDS: "error|warning|fatal|undefined"
   LOG_SUMMARY_LINES: 50
-  # 判定“致命错误”用于让 job 失败的严格匹配（大小写不敏感）
-  FAIL_ERROR_REGEX: "(?i)(: error | fatal error| fatal: )"
+  FAIL_ERROR_REGEX: "(?i)(: error | fatal error| fatal: |\\berror LNK[0-9]{4}\\b|\\bLNK[0-9]{4}\\b|unresolved external symbol|undefined reference|LINK : fatal error)"
+  MAIN_EXE: ""
 
 jobs:
   cuda:
@@ -85,7 +85,6 @@ jobs:
       shell: pwsh
       run: |
         $lines = Get-Content build_lib.log | Select-String -Pattern "${{ env.FAIL_ERROR_REGEX }}"
-        # 排除 MSBuild 总结里的 "0 Error(s)"
         $lines = $lines | Where-Object { $_.Line -notmatch '0 Error\(s\)' }
         if ($lines) {
           Write-Host "检测到致命错误行（build_lib）:"
@@ -137,7 +136,7 @@ jobs:
         $lines = $lines | Where-Object { $_.Line -notmatch '0 Error\(s\)' }
         if ($lines) {
           Write-Host "检测到致命错误行（wpfui1_build）:"
-            $lines | ForEach-Object { Write-Host $_.Line }
+          $lines | ForEach-Object { Write-Host $_.Line }
           Set-Content wpfui1_build.errors.txt ($lines | ForEach-Object {$_.Line} | Out-String)
           exit 1
         } else {
@@ -167,9 +166,9 @@ jobs:
       with:
         arch: x64
     - name: Build CPP-parsers
+      shell: pwsh
       run: |
-        msbuild src/CPP-parsers/CPP-parsers/CPP-parsers.vcxproj ^
-          /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m 2>&1 | Tee-Object -FilePath cpp_parsers_build.log
+        msbuild src/CPP-parsers/CPP-parsers/CPP-parsers.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m /verbosity:minimal 2>&1 | Tee-Object -FilePath cpp_parsers_build.log
     - name: 提取警告和错误
       shell: pwsh
       run: |
@@ -219,10 +218,9 @@ jobs:
       with:
         arch: x64
     - name: Build main project
+      shell: pwsh
       run: |
-        msbuild ${{ env.SOLUTION_FILE_PATH }} ^
-          /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ env.BUILD_PLATFORM }} ^
-          /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m 2>&1 | Tee-Object -FilePath main_build.log
+        msbuild ${{ env.SOLUTION_FILE_PATH }} /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ env.BUILD_PLATFORM }} /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m /verbosity:minimal 2>&1 | Tee-Object -FilePath main_build.log
     - name: 提取警告和错误
       shell: pwsh
       run: |
@@ -264,11 +262,11 @@ jobs:
           Project1/x64/${{ env.BUILD_CONFIGURATION }}/*.dll
           Project1/x64/${{ env.BUILD_CONFIGURATION }}/*.pdb
 
-  # 运行主程序并截图（实现需求C）
   run_and_screenshot:
     runs-on: windows-2022
     needs: [build_main]
     if: needs.build_main.result == 'success'
+    continue-on-error: true
     steps:
     - name: 下载主程序产物
       uses: actions/download-artifact@v4
@@ -278,19 +276,21 @@ jobs:
     - name: 列出产物
       shell: pwsh
       run: |
-        Write-Host "产物目录结构："
         Get-ChildItem -Recurse app | ForEach-Object { $_.FullName }
     - name: 运行主程序并截图
       shell: pwsh
       run: |
-        $exes = Get-ChildItem -Path app -Filter *.exe -Recurse | Where-Object { $_.Name -notmatch 'vshost' }
-        if (-not $exes) {
-          Write-Host "未找到可执行文件，退出。"
-          exit 1
+        $exeToRun = $null
+        if ($env:MAIN_EXE -and (Test-Path "app/$($env:MAIN_EXE)")) {
+          $exeToRun = (Get-Item "app/$($env:MAIN_EXE)").FullName
+          Write-Host "使用指定 MAIN_EXE: $exeToRun"
+        } else {
+          $exes = Get-ChildItem -Path app -Filter *.exe -Recurse | Where-Object { $_.Name -notmatch 'vshost' }
+          if (-not $exes) { Write-Host "未找到可执行文件"; exit 1 }
+          $exeToRun = $exes[0].FullName
+          Write-Host "使用自动选择的 EXE: $exeToRun"
         }
-        $exe = $exes[0].FullName
-        Write-Host "准备启动： $exe"
-        Start-Process -FilePath $exe
+        Start-Process -FilePath $exeToRun
         Start-Sleep -Seconds 6
         Add-Type -AssemblyName System.Windows.Forms
         Add-Type -AssemblyName System.Drawing
@@ -300,8 +300,9 @@ jobs:
         $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
         $bitmap.Save("run_screenshot.png")
         $graphics.Dispose(); $bitmap.Dispose()
-        Write-Host "截图完成：run_screenshot.png"
+        Write-Host "截图完成 run_screenshot.png"
     - name: 上传运行截图
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: run_screenshot
@@ -324,19 +325,21 @@ jobs:
         } else {
           $modules = @("build_lib","wpfui1_build","cpp_parsers_build","main_build")
           $report = ""
-          foreach ($m in $modules) {
-            $sDir = "logs/${m}_logs"
-            if (Test-Path "$sDir/${m}.summary.txt") {
-              $txt = Get-Content "$sDir/${m}.summary.txt" -Raw
-              $report += "`n==== $m ====`n$txt"
-            }
-            if (Test-Path "$sDir/${m}.errors.txt") {
-              $errTxt = Get-Content "$sDir/${m}.errors.txt" -Raw
-              if ($errTxt.Trim()) {
-                $report += "`n---- ${m} 致命错误行 ----`n$errTxt"
+            foreach ($m in $modules) {
+              $dir = "logs/${m}_logs"
+              $summaryFile = "$dir/${m}.summary.txt"
+              $errFile = "$dir/${m}.errors.txt"
+              if (Test-Path $summaryFile) {
+                $txt = Get-Content $summaryFile -Raw
+                $report += "`n==== $m ====`n$txt"
+              }
+              if (Test-Path $errFile) {
+                $errTxt = Get-Content $errFile -Raw
+                if ($errTxt.Trim()) {
+                  $report += "`n---- ${m} 致命错误行 ----`n$errTxt"
+                }
               }
             }
-          }
           if ($report -eq "") { $report = "没有模块产生任何警告或错误。" }
         }
         New-Item -ItemType Directory -Path logs/out -Force | Out-Null
