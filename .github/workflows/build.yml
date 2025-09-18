@@ -229,7 +229,7 @@ jobs:
 
   run_and_screenshot:
     runs-on: windows-2022
-    needs: [build_lib, build_wpf]
+    needs: [build_lib, build_wpf, build_main, build_cpp]
     continue-on-error: true
     steps:
     - name: 下载主程序产物
