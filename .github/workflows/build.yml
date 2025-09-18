@@ -148,6 +148,7 @@ jobs:
 
   build_cpp:
     runs-on: windows-2022
+    needs: [restore]
     steps:
     - uses: actions/checkout@v5
       with:
@@ -229,7 +230,7 @@ jobs:
 
   run_and_screenshot:
     runs-on: windows-2022
-    needs: [build_lib, build_wpf, build_main, build_cpp]
+    needs: [build_wpf, build_main]
     continue-on-error: true
     steps:
     - name: 下载主程序产物
