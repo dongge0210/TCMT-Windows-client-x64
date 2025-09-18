@@ -183,7 +183,7 @@ jobs:
 
   build_main:
     runs-on: windows-2022
-    needs: [restore, cuda, build_cpp]
+    needs: [restore, cuda, build_cpp, build_lib]
     steps:
     - uses: actions/checkout@v5
       with:
