@@ -86,17 +86,12 @@ jobs:
   cuda:
     runs-on: windows-2022
     steps:
-    - name: Cache CUDA Toolkit
-      uses: actions/cache@v4
-      with:
-        path: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA
-        key: cuda-12.6.0
-    - name: Setup CUDA 12.6
+    - name: Setup CUDA 12.6 (local)
       id: cuda_install
       uses: Jimver/cuda-toolkit@v0.2.18
       with:
         cuda: '12.6.0'
-        method: 'network'
+        method: 'local'
     - name: Check CUDA directory
       shell: pwsh
       run: |
@@ -187,8 +182,7 @@ jobs:
 
   build_main:
     runs-on: windows-2022
-    needs: [restore, cuda, build_lib, build_wpf, build_cpp]
-    if: ${{ needs.restore.result == 'success' && needs.cuda.result == 'success' && needs.build_lib.result == 'success' && needs.build_wpf.result == 'success' && needs.build_cpp.result == 'success' }}
+    needs: [restore, cuda, build_cpp]
     steps:
     - uses: actions/checkout@v5
       with:
@@ -235,8 +229,7 @@ jobs:
 
   run_and_screenshot:
     runs-on: windows-2022
-    needs: [build_main]
-    if: needs.build_main.result == 'success'
+    needs: [build_lib, build_wpf]
     continue-on-error: true
     steps:
     - name: 下载主程序产物
@@ -279,7 +272,7 @@ jobs:
   report_error:
     if: always() && github.event_name == 'pull_request'
     runs-on: windows-2022
-    needs: [system_info, build_lib, build_wpf, build_cpp, build_main, run_and_screenshot]
+    needs: [system_info, build_lib, build_wpf, run_and_screenshot]
     steps:
     - name: Download logs
       uses: actions/download-artifact@v4
@@ -311,25 +304,6 @@ jobs:
           $report += "`n==== wpfui1_build ====`n日志缺失"
         }
 
-        # 汇总 cpp_parsers_build
-        $cppLog = Get-ChildItem -Recurse logs | Where-Object { $_.Name -eq "cpp_parsers_build.log" } | Select-Object -First 1
-        if ($cppLog) {
-          $lines = Get-Content $cppLog.FullName | Select-String -Pattern "error|warning|fatal|undefined"
-          $summary = if ($lines) { $lines | Out-String } else { "没有警告或错误。" }
-          $report += "`n==== cpp_parsers_build ====`n$summary"
-        } else {
-          $report += "`n==== cpp_parsers_build ====`n日志缺失"
-        }
-
-        # 汇总 main_build
-        $mainErr = Get-ChildItem -Recurse logs | Where-Object { $_.Name -eq "main_build.errors.txt" } | Select-Object -First 1
-        if ($mainErr) {
-          $err = Get-Content $mainErr.FullName | Out-String
-          $report += "`n==== main_build 致命错误 ====`n$err"
-        } else {
-          $report += "`n==== main_build 致命错误 ====`n日志缺失"
-        }
-
         # 系统环境
         $sysinfo = Get-ChildItem -Recurse logs | Where-Object { $_.Name -eq "system_info.txt" } | Select-Object -First 1
         if ($sysinfo) {
@@ -347,9 +321,9 @@ jobs:
         path: logs/ci_error_report.txt
 
   comment-on-pr:
-    if: failure() && github.event_name == 'pull_request'
-    runs-on: windows-2022
     needs: [report_error]
+    runs-on: windows-2022
+    if: failure() && github.event_name == 'pull_request'
     steps:
     - name: Download logs
       uses: actions/download-artifact@v4
@@ -373,15 +347,8 @@ jobs:
           Write-Host "本 PR 作者($prAuthor) 不允许自动评论，跳过。"
           exit 0
         }
-        $candidates = @(
-          "logs/ci_error_report/ci_error_report.txt",
-          "logs/out/ci_error_report.txt"
-        )
-        $errFile = $null
-        foreach ($c in $candidates) {
-          if (Test-Path $c -PathType Leaf) { $errFile = $c; break }
-        }
-        $errMsg = if ($errFile) { Get-Content $errFile -Raw } else { "缺失 ci_error_report.txt" }
+        $errFile = Get-ChildItem -Recurse logs | Where-Object { $_.Name -eq "ci_error_report.txt" } | Select-Object -First 1
+        $errMsg = if ($errFile) { Get-Content $errFile.FullName -Raw } else { "缺失 ci_error_report.txt" }
         $actions_url = "https://github.com/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)"
         $comment = "@copilot @$prAuthor [Actions编译报告-MSVC] `n`nPR编译失败了  `n`n关键警告和错误日志如下：  `n````  `n$errMsg`n````  `n如需完整日志请查Actions artifacts。  `n$actions_url"
         $headers = @{
