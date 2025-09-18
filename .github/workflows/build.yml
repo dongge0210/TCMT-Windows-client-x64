@@ -229,7 +229,7 @@ jobs:
 
   run_and_screenshot:
     runs-on: windows-2022
-    needs: [build_lib, build_wpf]
+    needs: [build_lib, build_wpf, build_main]
     continue-on-error: true
     steps:
     - name: 下载主程序产物
@@ -272,7 +272,7 @@ jobs:
   report_error:
     if: always() && github.event_name == 'pull_request'
     runs-on: windows-2022
-    needs: [system_info, build_lib, build_wpf, run_and_screenshot]
+    needs: [system_info, build_lib, build_wpf, build_main, run_and_screenshot]
     steps:
     - name: Download logs
       uses: actions/download-artifact@v4
