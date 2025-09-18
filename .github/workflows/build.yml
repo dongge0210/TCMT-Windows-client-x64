@@ -17,6 +17,55 @@ env:
   MAIN_EXE: ""
 
 jobs:
+  system_info:
+    name: System and Environment Report
+    runs-on: windows-2022
+    steps:
+    - name: Print OS Info
+      shell: pwsh
+      run: |
+        systeminfo | Out-File -FilePath system_info.txt -Append
+        echo "`n==== DISK SPACE ====" | Out-File -FilePath system_info.txt -Append
+        Get-PSDrive | Out-File -FilePath system_info.txt -Append
+        echo "`n==== ENVIRONMENT ====" | Out-File -FilePath system_info.txt -Append
+        Get-ChildItem Env: | Out-File -FilePath system_info.txt -Append
+        echo "`n==== VSWHERE ====" | Out-File -FilePath system_info.txt -Append
+        if (Test-Path "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe") {
+          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -all -prerelease -products * -format list | Out-File -FilePath system_info.txt -Append
+        }
+        echo "`n==== MSBuild Version ====" | Out-File -FilePath system_info.txt -Append
+        $msbuild = Get-Command msbuild.exe -ErrorAction SilentlyContinue
+        if ($msbuild) {
+          msbuild -version | Out-File -FilePath system_info.txt -Append
+        } else {
+          $msbuilds = Get-ChildItem -Path "C:\Program Files\Microsoft Visual Studio" -Filter msbuild.exe -Recurse -ErrorAction SilentlyContinue
+          if ($msbuilds) {
+            foreach ($mb in $msbuilds) {
+              echo "`n==== $($mb.FullName) ====" | Out-File -FilePath system_info.txt -Append
+              & "$($mb.FullName)" -version | Out-File -FilePath system_info.txt -Append
+            }
+          } else {
+            echo "msbuild.exe not found." | Out-File -FilePath system_info.txt -Append
+          }
+        }
+        echo "`n==== cl.exe Version ====" | Out-File -FilePath system_info.txt -Append
+        cl 2>&1 | Out-File -FilePath system_info.txt -Append
+        echo "`n==== dotnet --info ====" | Out-File -FilePath system_info.txt -Append
+        dotnet --info | Out-File -FilePath system_info.txt -Append
+        echo "`n==== CUDA ====" | Out-File -FilePath system_info.txt -Append
+        if (Test-Path "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA") {
+          Get-ChildItem "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA" | Out-File -FilePath system_info.txt -Append
+          if (Test-Path "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\bin\nvcc.exe") {
+            & "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\bin\nvcc.exe" --version | Out-File -FilePath system_info.txt -Append
+          }
+        }
+        echo "`n==== GPU INFO ====" | Out-File -FilePath system_info.txt -Append
+        Get-WmiObject win32_VideoController | Format-List | Out-File -FilePath system_info.txt -Append
+    - name: Upload System Info
+      uses: actions/upload-artifact@v4
+      with:
+        name: system_info
+        path: system_info.txt
   restore:
     runs-on: windows-2022
     steps:
