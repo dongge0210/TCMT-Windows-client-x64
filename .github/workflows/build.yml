@@ -21,6 +21,10 @@ jobs:
     name: System and Environment Report
     runs-on: windows-2022
     steps:
+    - name: Setup MSVC Dev Cmd
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
     - name: Print OS Info
       shell: pwsh
       run: |
@@ -34,20 +38,7 @@ jobs:
           & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -all -prerelease -products * -format list | Out-File -FilePath system_info.txt -Append
         }
         echo "`n==== MSBuild Version ====" | Out-File -FilePath system_info.txt -Append
-        $msbuild = Get-Command msbuild.exe -ErrorAction SilentlyContinue
-        if ($msbuild) {
-          msbuild -version | Out-File -FilePath system_info.txt -Append
-        } else {
-          $msbuilds = Get-ChildItem -Path "C:\Program Files\Microsoft Visual Studio" -Filter msbuild.exe -Recurse -ErrorAction SilentlyContinue
-          if ($msbuilds) {
-            foreach ($mb in $msbuilds) {
-              echo "`n==== $($mb.FullName) ====" | Out-File -FilePath system_info.txt -Append
-              & "$($mb.FullName)" -version | Out-File -FilePath system_info.txt -Append
-            }
-          } else {
-            echo "msbuild.exe not found." | Out-File -FilePath system_info.txt -Append
-          }
-        }
+        msbuild -version | Out-File -FilePath system_info.txt -Append
         echo "`n==== cl.exe Version ====" | Out-File -FilePath system_info.txt -Append
         cl 2>&1 | Out-File -FilePath system_info.txt -Append
         echo "`n==== dotnet --info ====" | Out-File -FilePath system_info.txt -Append
