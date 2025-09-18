@@ -17,14 +17,49 @@ env:
   MAIN_EXE: ""
 
 jobs:
+  system_info:
+    name: System and Environment Report
+    runs-on: windows-2022
+    steps:
+    - name: Print OS Info
+      shell: pwsh
+      run: |
+        systeminfo | Out-File -FilePath system_info.txt -Append
+        echo "`n==== DISK SPACE ====" | Out-File -FilePath system_info.txt -Append
+        Get-PSDrive | Out-File -FilePath system_info.txt -Append
+        echo "`n==== ENVIRONMENT ====" | Out-File -FilePath system_info.txt -Append
+        Get-ChildItem Env: | Out-File -FilePath system_info.txt -Append
+        echo "`n==== VSWHERE ====" | Out-File -FilePath system_info.txt -Append
+        if (Test-Path "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe") {
+          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -all -prerelease -products * -format list | Out-File -FilePath system_info.txt -Append
+        }
+        echo "`n==== MSBuild Version ====" | Out-File -FilePath system_info.txt -Append
+        msbuild -version | Out-File -FilePath system_info.txt -Append
+        echo "`n==== cl.exe Version ====" | Out-File -FilePath system_info.txt -Append
+        cl 2>&1 | Out-File -FilePath system_info.txt -Append
+        echo "`n==== dotnet --info ====" | Out-File -FilePath system_info.txt -Append
+        dotnet --info | Out-File -FilePath system_info.txt -Append
+        echo "`n==== CUDA ====" | Out-File -FilePath system_info.txt -Append
+        if (Test-Path "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA") {
+          Get-ChildItem "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA" | Out-File -FilePath system_info.txt -Append
+          if (Test-Path "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\bin\nvcc.exe") {
+            & "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\bin\nvcc.exe" --version | Out-File -FilePath system_info.txt -Append
+          }
+        }
+        echo "`n==== GPU INFO ====" | Out-File -FilePath system_info.txt -Append
+        Get-WmiObject win32_VideoController | Format-List | Out-File -FilePath system_info.txt -Append
+    - name: Upload System Info
+      uses: actions/upload-artifact@v4
+      with:
+        name: system_info
+        path: system_info.txt
   restore:
     runs-on: windows-2022
-    outputs:
-      restore_status: ${{ job.status }}
     steps:
     - name: Checkout
       uses: actions/checkout@v5
       with:
+        ref: dev
         submodules: recursive
         fetch-depth: 0
     - name: Setup .NET
@@ -36,83 +71,16 @@ jobs:
       with:
         path: |
           ~/.nuget/packages
-          ~/.local/share/NuGet/v3-cache
         key: nuget-${{ runner.os }}-${{ hashFiles('**/*.sln','**/*.csproj','**/packages.config') }}
         restore-keys: |
           nuget-${{ runner.os }}-
-    - name: NuGet Restore (详细模式)
+    - name: NuGet Restore
       shell: pwsh
       run: |
-        Write-Host "开始NuGet包还原..."
-        nuget restore ${{ env.SOLUTION_FILE_PATH }} -Verbosity detailed -NonInteractive 2>&1 | Tee-Object -FilePath restore.log
-        Write-Host "NuGet还原完成"
-    - name: .NET Restore WPF项目
-      shell: pwsh
-      run: |
-        Write-Host "单独还原WPF项目..."
-        cd WPF-UI1
-        dotnet restore WPF-UI1.csproj -v diagnostic 2>&1 | Tee-Object -FilePath ../wpf_restore.log
-        Write-Host "WPF还原完成"
-    - name: .NET Restore LibreHardwareMonitor
-      shell: pwsh
-      run: |
-        Write-Host "单独还原LibreHardwareMonitor项目..."
-        cd src/third_party/LibreHardwareMonitor
-        dotnet restore LibreHardwareMonitorLib/LibreHardwareMonitorLib.csproj -v diagnostic 2>&1 | Tee-Object -FilePath ../../../lhm_restore.log
-        Write-Host "LibreHardwareMonitor还原完成"
-    - name: 提取警告和错误
-      shell: pwsh
-      run: |
-        $allLogs = @("restore.log", "wpf_restore.log", "lhm_restore.log")
-        $allErrors = @()
-        foreach ($log in $allLogs) {
-          if (Test-Path $log) {
-            $summaryLines = Get-Content $log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
-            if ($summaryLines) { $allErrors += $summaryLines }
-          }
-        }
-        $summary = if ($allErrors){ $allErrors | Out-String } else { "没有警告或错误。" }
-        Set-Content restore.summary.txt $summary
-        echo "### restore 警告/错误" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        echo "$summary" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-    - name: 扫描致命错误并决定失败
-      shell: pwsh
-      run: |
-        $allLogs = @("restore.log", "wpf_restore.log", "lhm_restore.log")
-        $fatalErrors = @()
-        foreach ($log in $allLogs) {
-          if (Test-Path $log) {
-            $lines = Get-Content $log | Select-String -Pattern "${{ env.FAIL_ERROR_REGEX }}"
-            $lines = $lines | Where-Object { $_.Line -notmatch '0 Error\(s\)' }
-            if ($lines) { $fatalErrors += $lines }
-          }
-        }
-        if ($fatalErrors) {
-          Write-Host "检测到致命错误行（restore）:"
-          $fatalErrors | ForEach-Object { Write-Host $_.Line }
-          Set-Content restore.errors.txt ($fatalErrors | ForEach-Object {$_.Line} | Out-String)
-          exit 1
-        } else {
-          Write-Host "未发现致命错误(restore)。"
-        }
-    - name: 上传日志和总结
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: restore_logs
-        path: |
-          restore.log
-          wpf_restore.log
-          lhm_restore.log
-          restore.summary.txt
-          restore.errors.txt
+        nuget restore ${{ env.SOLUTION_FILE_PATH }}
 
   cuda:
     runs-on: windows-2022
-    outputs:
-      cuda_status: ${{ job.status }}
     steps:
     - name: Cache CUDA Toolkit
       uses: actions/cache@v4
@@ -126,7 +94,6 @@ jobs:
         cuda: '12.6.0'
         method: 'network'
     - name: Check CUDA directory
-      id: check_cuda
       shell: pwsh
       run: |
         if (-not (Test-Path "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6")) {
@@ -152,48 +119,39 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
+        ref: dev
         submodules: recursive
         fetch-depth: 0
     - name: Setup .NET
       uses: actions/setup-dotnet@v5
       with:
         dotnet-version: '8.x'
-    - name: Restore LibreHardwareMonitorLib packages
-      run: |
-        cd src/third_party/LibreHardwareMonitor
-        dotnet restore LibreHardwareMonitorLib/LibreHardwareMonitorLib.csproj
     - name: Build LibreHardwareMonitorLib
       run: |
         cd src/third_party/LibreHardwareMonitor
-        dotnet build LibreHardwareMonitorLib/LibreHardwareMonitorLib.csproj -c Release -f net472 2>&1 | Tee-Object -FilePath ..\..\..\build_lib.log
+        dotnet build LibreHardwareMonitorLib/LibreHardwareMonitorLib.csproj -c Release -f net472
     - name: 提取警告和错误
       shell: pwsh
       run: |
-        $summaryLines = Get-Content build_lib.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
+        $summaryLines = Get-Content ../../../../build_lib.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
         $summary = if ($summaryLines){ $summaryLines | Out-String } else { "没有警告或错误。" }
         Set-Content build_lib.summary.txt $summary
-        echo "### build_lib 警告/错误" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        echo "$summary" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
     - name: 扫描致命错误并决定失败
       shell: pwsh
       run: |
-        $lines = Get-Content build_lib.log | Select-String -Pattern "${{ env.FAIL_ERROR_REGEX }}"
+        $lines = Get-Content ../../../../build_lib.log | Select-String -Pattern "${{ env.FAIL_ERROR_REGEX }}"
         $lines = $lines | Where-Object { $_.Line -notmatch '0 Error\(s\)' }
         if ($lines){
-          Write-Host "检测到致命错误行（build_lib）:"
-          $lines | ForEach-Object { Write-Host $_.Line }
           Set-Content build_lib.errors.txt ($lines | ForEach-Object {$_.Line} | Out-String)
           exit 1
-        } else { Write-Host "未发现致命错误(build_lib)。" }
+        }
     - name: 上传日志和总结
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: build_lib_logs
         path: |
-          build_lib.log
+          ../../../../build_lib.log
           build_lib.summary.txt
           build_lib.errors.txt
 
@@ -203,57 +161,48 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
+        ref: dev
         submodules: recursive
         fetch-depth: 0
     - name: Setup .NET
       uses: actions/setup-dotnet@v5
       with:
         dotnet-version: '8.x'
-    - name: Restore WPF-UI1 packages
-      run: |
-        cd WPF-UI1
-        dotnet restore WPF-UI1.csproj
     - name: Build WPF-UI1
       run: |
         cd WPF-UI1
-        dotnet build WPF-UI1.csproj -c Release 2>&1 | Tee-Object -FilePath ..\wpfui1_build.log
+        dotnet build WPF-UI1.csproj -c Release
     - name: 提取警告和错误
       shell: pwsh
       run: |
-        $summaryLines = Get-Content wpfui1_build.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
+        $summaryLines = Get-Content ../wpfui1_build.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
         $summary = if ($summaryLines){ $summaryLines | Out-String } else { "没有警告或错误。" }
         Set-Content wpfui1_build.summary.txt $summary
-        echo "### wpfui1_build 警告/错误" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        echo "$summary" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
     - name: 扫描致命错误并决定失败
       shell: pwsh
       run: |
-        $lines = Get-Content wpfui1_build.log | Select-String -Pattern "${{ env.FAIL_ERROR_REGEX }}"
+        $lines = Get-Content ../wpfui1_build.log | Select-String -Pattern "${{ env.FAIL_ERROR_REGEX }}"
         $lines = $lines | Where-Object { $_.Line -notmatch '0 Error\(s\)' }
         if ($lines){
-          Write-Host "检测到致命错误行（wpfui1_build）:"
-          $lines | ForEach-Object { Write-Host $_.Line }
           Set-Content wpfui1_build.errors.txt ($lines | ForEach-Object {$_.Line} | Out-String)
           exit 1
-        } else { Write-Host "未发现致命错误(wpfui1_build)。" }
+        }
     - name: 上传日志和总结
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: wpfui1_build_logs
         path: |
-          wpfui1_build.log
+          ../wpfui1_build.log
           wpfui1_build.summary.txt
           wpfui1_build.errors.txt
 
   build_cpp:
     runs-on: windows-2022
-    # 不依赖 restore，可并行
     steps:
     - uses: actions/checkout@v5
       with:
+        ref: dev
         submodules: recursive
         fetch-depth: 0
     - name: Cache C++ build outputs
@@ -282,21 +231,15 @@ jobs:
         $summaryLines = Get-Content cpp_parsers_build.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
         $summary = if ($summaryLines){ $summaryLines | Out-String } else { "没有警告或错误。" }
         Set-Content cpp_parsers_build.summary.txt $summary
-        echo "### cpp_parsers_build 警告/错误" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        echo "$summary" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
     - name: 扫描致命错误并决定失败
       shell: pwsh
       run: |
         $lines = Get-Content cpp_parsers_build.log | Select-String -Pattern "${{ env.FAIL_ERROR_REGEX }}"
         $lines = $lines | Where-Object { $_.Line -notmatch '0 Error\(s\)' }
         if ($lines){
-          Write-Host "检测到致命错误行（cpp_parsers_build）:"
-          $lines | ForEach-Object { Write-Host $_.Line }
           Set-Content cpp_parsers_build.errors.txt ($lines | ForEach-Object {$_.Line} | Out-String)
           exit 1
-        } else { Write-Host "未发现致命错误(cpp_parsers_build)。" }
+        }
     - name: 上传日志和总结
       if: always()
       uses: actions/upload-artifact@v4
@@ -310,10 +253,11 @@ jobs:
   build_main:
     runs-on: windows-2022
     needs: [restore, cuda, build_lib, build_wpf, build_cpp]
-    if: always() && needs.restore.result == 'success' && needs.cuda.result == 'success'
+    if: ${{ needs.restore.result == 'success' && needs.cuda.result == 'success' && needs.build_lib.result == 'success' && needs.build_wpf.result == 'success' && needs.build_cpp.result == 'success' }}
     steps:
     - uses: actions/checkout@v5
       with:
+        ref: dev
         submodules: recursive
         fetch-depth: 0
     - name: Setup MSBuild
@@ -322,15 +266,9 @@ jobs:
       uses: ilammy/msvc-dev-cmd@v1
       with:
         arch: x64
-    - name: Restore solution packages
-      shell: pwsh
-      run: |
-        Write-Host "还原整个解决方案的包..."
-        nuget restore ${{ env.SOLUTION_FILE_PATH }} -Verbosity detailed 2>&1 | Tee-Object -FilePath nuget_restore_main.log
     - name: Build main project
       shell: pwsh
       run: |
-        Write-Host "开始构建主项目..."
         msbuild ${{ env.SOLUTION_FILE_PATH }} /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ env.BUILD_PLATFORM }} /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m /verbosity:minimal 2>&1 | Tee-Object -FilePath main_build.log
     - name: 提取警告和错误
       shell: pwsh
@@ -338,26 +276,15 @@ jobs:
         $summaryLines = Get-Content main_build.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
         $summary = if ($summaryLines){ $summaryLines | Out-String } else { "没有警告或错误。" }
         Set-Content main_build.summary.txt $summary
-        echo "### main_build 警告/错误" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        echo "$summary" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
     - name: 扫描致命错误并决定失败
       shell: pwsh
       run: |
-        if (-not (Test-Path main_build.log)) {
-          Write-Host "main_build.log 文件不存在！"
-          Set-Content main_build.errors.txt "main_build.log 文件不存在，构建可能未执行。"
-          exit 1
-        }
         $lines = Get-Content main_build.log | Select-String -Pattern "${{ env.FAIL_ERROR_REGEX }}"
         $lines = $lines | Where-Object { $_.Line -notmatch '0 Error\(s\)' }
         if ($lines){
-          Write-Host "检测到致命错误行（main_build）:"
-          $lines | ForEach-Object { Write-Host $_.Line }
           Set-Content main_build.errors.txt ($lines | ForEach-Object {$_.Line} | Out-String)
           exit 1
-        } else { Write-Host "未发现致命错误(main_build)。" }
+        }
     - name: 上传日志和总结
       if: always()
       uses: actions/upload-artifact@v4
@@ -367,9 +294,7 @@ jobs:
           main_build.log
           main_build.summary.txt
           main_build.errors.txt
-          nuget_restore_main.log
     - name: 上传主程序产物
-      if: success()
       uses: actions/upload-artifact@v4
       with:
         name: TCMT-Windows-Client-${{ env.BUILD_PLATFORM }}-${{ env.BUILD_CONFIGURATION }}
@@ -399,12 +324,10 @@ jobs:
         $exeToRun = $null
         if ($env:MAIN_EXE -and (Test-Path "app/$($env:MAIN_EXE)")) {
           $exeToRun = (Get-Item "app/$($env:MAIN_EXE)").FullName
-          Write-Host "使用指定 MAIN_EXE: $exeToRun"
         } else {
           $exes = Get-ChildItem -Path app -Filter *.exe -Recurse | Where-Object { $_.Name -notmatch 'vshost' }
           if (-not $exes) { Write-Host "未找到可执行文件"; exit 1 }
           $exeToRun = $exes[0].FullName
-          Write-Host "使用自动选择的 EXE: $exeToRun"
         }
         Start-Process -FilePath $exeToRun
         Start-Sleep -Seconds 6
@@ -416,7 +339,6 @@ jobs:
         $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
         $bitmap.Save("run_screenshot.png")
         $graphics.Dispose(); $bitmap.Dispose()
-        Write-Host "截图完成 run_screenshot.png"
     - name: 上传运行截图
       if: always()
       uses: actions/upload-artifact@v4
@@ -462,10 +384,6 @@ jobs:
         }
         New-Item -ItemType Directory -Path logs/out -Force | Out-Null
         Set-Content logs/out/ci_error_report.txt $report
-        echo "### 汇总警告/错误（含致命错误判定）" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        echo "$report" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
     - name: 上传error report
       uses: actions/upload-artifact@v4
       with:
@@ -481,7 +399,7 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         path: logs
-    - name: 评论到PR（仅Copilot相关PR）
+    - name: 评论到PR（仅copilot和dongge0210）
       shell: pwsh
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -493,11 +411,10 @@ jobs:
       run: |
         $runtimeActor = $env:GITHUB_ACTOR
         $prAuthor = $env:PR_AUTHOR
-        Write-Host "DEBUG: runtime actor=$runtimeActor; pr author=$prAuthor"
-        $allowed = @("github-copilot[bot]", "Copilot", "github-actions[bot]")
-        $isCopilot = ($allowed -contains $prAuthor) -or ($allowed -contains $runtimeActor) -or ($prAuthor -match '(?i)copilot') -or ($runtimeActor -match '(?i)copilot')
-        if (-not $isCopilot) {
-          Write-Host "本 PR 作者($prAuthor) 不属于 Copilot 相关，跳过评论。"
+        $allowed = @("github-copilot[bot]", "Copilot", "dongge0210")
+        $isAllowed = ($allowed -contains $prAuthor) -or ($allowed -contains $runtimeActor)
+        if (-not $isAllowed) {
+          Write-Host "本 PR 作者($prAuthor) 不允许自动评论，跳过。"
           exit 0
         }
         $candidates = @(
@@ -520,5 +437,4 @@ jobs:
         $repo = $env:GITHUB_REPOSITORY
         $prNumber = $env:PR_NUMBER
         $url = "https://api.github.com/repos/$repo/issues/$prNumber/comments"
-        Write-Host "POST -> $url"
         Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $body
