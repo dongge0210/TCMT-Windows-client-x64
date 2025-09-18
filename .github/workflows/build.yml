@@ -229,7 +229,7 @@ jobs:
 
   run_and_screenshot:
     runs-on: windows-2022
-    needs: [build_lib, build_wpf, build_main]
+    needs: [build_lib, build_wpf]
     continue-on-error: true
     steps:
     - name: 下载主程序产物
@@ -272,7 +272,7 @@ jobs:
   report_error:
     if: always() && github.event_name == 'pull_request'
     runs-on: windows-2022
-    needs: [system_info, build_lib, build_wpf, build_main, run_and_screenshot]
+    needs: [system_info, build_lib, build_wpf, build_cpp, build_main, run_and_screenshot]
     steps:
     - name: Download logs
       uses: actions/download-artifact@v4
@@ -304,11 +304,35 @@ jobs:
           $report += "`n==== wpfui1_build ====`n日志缺失"
         }
 
-        # 系统环境
+        # 汇总 cpp_parsers_build
+        $cppLog = Get-ChildItem -Recurse logs | Where-Object { $_.Name -eq "cpp_parsers_build.log" } | Select-Object -First 1
+        if ($cppLog) {
+          $lines = Get-Content $cppLog.FullName | Select-String -Pattern "error|warning|fatal|undefined"
+          $summary = if ($lines) { $lines | Out-String } else { "没有警告或错误。" }
+          $report += "`n==== cpp_parsers_build ====`n$summary"
+        } else {
+          $report += "`n==== cpp_parsers_build ====`n日志缺失"
+        }
+
+        # 汇总 main_build
+        $mainErr = Get-ChildItem -Recurse logs | Where-Object { $_.Name -eq "main_build.errors.txt" } | Select-Object -First 1
+        if ($mainErr) {
+          $err = Get-Content $mainErr.FullName | Out-String
+          $report += "`n==== main_build 致命错误 ====`n$err"
+        } else {
+          $report += "`n==== main_build 致命错误 ====`n日志缺失"
+        }
+
+        # 系统环境（整理输出关键信息）
         $sysinfo = Get-ChildItem -Recurse logs | Where-Object { $_.Name -eq "system_info.txt" } | Select-Object -First 1
         if ($sysinfo) {
-          $envtxt = Get-Content $sysinfo.FullName | Select-Object -First 100 | Out-String
-          $report += "`n==== 系统环境信息(前100行) ====`n$envtxt"
+          $lines = Get-Content $sysinfo.FullName
+          $os   = ($lines | Select-String -Pattern "^OS Name:").Line
+          $ver  = ($lines | Select-String -Pattern "^OS Version:").Line
+          $cpu  = ($lines | Select-String -Pattern "^Processor\(s\):").Line
+          $mem  = ($lines | Select-String -Pattern "^Total Physical Memory:").Line
+          $gpu  = ($lines | Select-String -Pattern "^Name\s+:").Line
+          $report += "`n==== 系统环境简要 ====`n$os`n$ver`n$cpu`n$mem`n$gpu"
         } else {
           $report += "`n==== 系统环境信息 ====`n缺失"
         }
@@ -347,10 +371,15 @@ jobs:
           Write-Host "本 PR 作者($prAuthor) 不允许自动评论，跳过。"
           exit 0
         }
+        if ($prAuthor -eq "github-copilot[bot]" -or $prAuthor -eq "Copilot") {
+          $mentionActor = "@dongge0210"
+        } else {
+          $mentionActor = "@$prAuthor"
+        }
         $errFile = Get-ChildItem -Recurse logs | Where-Object { $_.Name -eq "ci_error_report.txt" } | Select-Object -First 1
         $errMsg = if ($errFile) { Get-Content $errFile.FullName -Raw } else { "缺失 ci_error_report.txt" }
         $actions_url = "https://github.com/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)"
-        $comment = "@copilot @$prAuthor [Actions编译报告-MSVC] `n`nPR编译失败了  `n`n关键警告和错误日志如下：  `n````  `n$errMsg`n````  `n如需完整日志请查Actions artifacts。  `n$actions_url"
+        $comment = "@copilot $mentionActor [Actions编译报告-MSVC] `n`nPR编译失败了  `n`n关键警告和错误日志如下：  `n````  `n$errMsg`n````  `n如需完整日志请查Actions artifacts。  `n$actions_url"
         $headers = @{
           Authorization = "token $env:GITHUB_TOKEN"
           "User-Agent" = "github-actions-powershell"
