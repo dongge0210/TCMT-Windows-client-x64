@@ -161,9 +161,9 @@ struct SystemInfo {
     uint32_t tpmSpecVersion = 0;    // 规范版本
     uint32_t tpmTbsVersion = 0;     // TBS版本
     std::string tpmErrorMessage;    // 错误信息
-    std::string tmpDetectionMethod; // 检测方法
-    bool tmpWmiDetectionWorked = false; // WMI检测是否成功
-    bool tmpTbsDetectionWorked = false; // TBS检测是否成功
+    std::string tpmDetectionMethod; // 检测方法
+    bool tpmWmiDetectionWorked = false; // WMI检测是否成功
+    bool tpmTbsDetectionWorked = false; // TBS检测是否成功
     SYSTEMTIME lastUpdate;
 };
 

@@ -1,5 +1,9 @@
 #pragma once
 
+// Ensure MSVC treats narrow string literals as UTF-8 in files including this header
+#pragma execution_character_set("utf-8")
+
+
 // Common C++ Standard Library includes
 #include <string>
 #include <fstream>

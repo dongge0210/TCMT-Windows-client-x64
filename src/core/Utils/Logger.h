@@ -1,4 +1,8 @@
 #pragma once
+
+// Force MSVC to treat narrow string literals as UTF-8 in translation units including this header
+#pragma execution_character_set("utf-8")
+
 #include <string>
 #include <fstream>
 #include <mutex>

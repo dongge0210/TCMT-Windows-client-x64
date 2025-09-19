@@ -11,6 +11,10 @@
     <AssemblyTitle>系统硬件监视器</AssemblyTitle>
     <AssemblyDescription>实时硬件监控工具</AssemblyDescription>
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <!-- Force UTF-8 encoding for C# sources to avoid mojibake -->
+    <CodePage>65001</CodePage>
+    <!-- Ensure console uses UTF-8 -->
+    <ConsoleOutputEncoding>utf-8</ConsoleOutputEncoding>
   </PropertyGroup>
 
   <ItemGroup>

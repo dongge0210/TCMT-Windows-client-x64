@@ -1,10 +1,10 @@
 using System.Collections.ObjectModel;
-using System.ComponentModel; // ����
-using System.Runtime.CompilerServices; // ����
+using System.ComponentModel; // 注释
+using System.Runtime.CompilerServices; // 注释
 
 namespace WPF_UI1.Models
 {
-    // ��ӦC++�е�SystemInfo�ṹ
+    // 对应C++的SystemInfo结构
     public class SystemInfo
     {
         public string CpuName { get; set; } = string.Empty;
@@ -17,35 +17,35 @@ namespace WPF_UI1.Models
         public double EfficiencyCoreFreq { get; set; }
         public bool HyperThreading { get; set; }
         public bool Virtualization { get; set; }
-        // �ڴ���Ϣ
+        // 内存信息
         public ulong TotalMemory { get; set; }
         public ulong UsedMemory { get; set; }
         public ulong AvailableMemory { get; set; }
-        // GPU��Ϣ
+        // GPU信息
         public List<GpuData> Gpus { get; set; } = new();
         public string GpuName { get; set; } = string.Empty;
         public string GpuBrand { get; set; } = string.Empty;
         public ulong GpuMemory { get; set; }
         public double GpuCoreFreq { get; set; }
         public bool GpuIsVirtual { get; set; }
-        // ������Ϣ
+        // 网卡信息
         public List<NetworkAdapterData> Adapters { get; set; } = new();
         public string NetworkAdapterName { get; set; } = string.Empty;
         public string NetworkAdapterMac { get; set; } = string.Empty;
         public string NetworkAdapterIp { get; set; } = string.Empty;
         public string NetworkAdapterType { get; set; } = string.Empty;
         public ulong NetworkAdapterSpeed { get; set; }
-        // �߼�������Ϣ�����������ţ�
+        // 逻辑磁盘信息（含分区）
         public List<DiskData> Disks { get; set; } = new();
-        // ����������Ϣ��SMART���ܣ�
+        // 物理磁盘信息（SMART能力）
         public List<PhysicalDiskSmartData> PhysicalDisks { get; set; } = new();
-        // �¶���Ϣ
+        // 温度信息
         public List<TemperatureData> Temperatures { get; set; } = new();
         public double CpuTemperature { get; set; }
         public double GpuTemperature { get; set; }
-        public double CpuUsageSampleIntervalMs { get; set; } // ������CPUʹ���ʲ������
+        public double CpuUsageSampleIntervalMs { get; set; } // 最近一次CPU使用率采样间隔
         public DateTime LastUpdate { get; set; }
-        // TPM ��Ϣ��������
+        // TPM 信息（显示用）
         public bool HasTpm { get; set; }
         public string TpmManufacturer { get; set; } = string.Empty;
         public string TpmManufacturerId { get; set; } = string.Empty;
@@ -106,7 +106,7 @@ namespace WPF_UI1.Models
         public ulong Speed { get => _speed; set => SetProperty(ref _speed, value); }
     }
 
-    // �߼�������������
+    // 逻辑磁盘展示结构
     public class DiskData : NotifyBase
     {
         private char _letter;
@@ -125,7 +125,7 @@ namespace WPF_UI1.Models
         public int PhysicalDiskIndex { get => _physicalDiskIndex; set => SetProperty(ref _physicalDiskIndex, value); }
     }
 
-    // SMART����
+    // SMART 属性
     public class SmartAttributeData
     {
         public byte Id { get; set; }
@@ -140,7 +140,7 @@ namespace WPF_UI1.Models
         public string Units { get; set; } = string.Empty;
     }
 
-    // �������̣��ۺ϶���߼�����
+    // 物理磁盘（聚合对象+分区列表）
     public class PhysicalDiskSmartData
     {
         public string Model { get; set; } = string.Empty;
@@ -172,13 +172,13 @@ namespace WPF_UI1.Models
         public double Temperature { get; set; }
     }
 
-    // WPF�����װ���������� + ���·���
+    // WPF 物理磁盘视图模型 + 展示字段
     public class PhysicalDiskView : NotifyBase
     {
         private PhysicalDiskSmartData _disk;
         public PhysicalDiskSmartData Disk { get => _disk; set => SetProperty(ref _disk, value); }
         public ObservableCollection<DiskData> Partitions { get; } = new();
-        public string LettersDisplay => Partitions.Count == 0 ? "�޷���" : string.Join(", ", Partitions.Select(p => p.Letter + ":"));
-        public string DisplayName => Disk == null ? "δ֪����" : $"{Disk.Model} ({LettersDisplay})";
+        public string LettersDisplay => Partitions.Count == 0 ? "无分区" : string.Join(", ", Partitions.Select(p => p.Letter + ":"));
+        public string DisplayName => Disk == null ? "未知磁盘" : $"{Disk.Model} ({LettersDisplay})";
     }
 }

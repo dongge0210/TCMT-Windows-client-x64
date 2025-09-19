@@ -14,8 +14,8 @@ namespace WPF_UI1.Services
         private readonly object _lock = new();
         private bool _disposed = false;
 
-        // 注意：C++端 CreateFileMapping 使用 sizeof(SharedMemoryBlock) (~>120KB+)
-        // 此处不再使用固定 64KB，而是动态计算结构体大小
+        // 注意：C++ 的 CreateFileMapping 使用 sizeof(SharedMemoryBlock) (~>120KB+)
+        // 这里不要硬编码 64KB，使用托管结构的尺寸
         private const string SHARED_MEMORY_NAME = "SystemMonitorSharedMemory";
         private const string GLOBAL_SHARED_MEMORY_NAME = "Global\\SystemMonitorSharedMemory";
         private const string LOCAL_SHARED_MEMORY_NAME = "Local\\SystemMonitorSharedMemory";
@@ -23,8 +23,8 @@ namespace WPF_UI1.Services
         public bool IsInitialized { get; private set; }
         public string LastError { get; private set; } = string.Empty;
 
-        // 与C++结构严格匹配（#pragma pack(1) 且 bool 为1字节）
-        // 统一指定 Pack=1, 并对每个bool加 MarshalAs(UnmanagedType.I1)
+        // 与 C++ 结构严格匹配（#pragma pack(1) 且 bool 为 1 字节）
+        // 统一指定 Pack=1，并为每个 bool 使用 MarshalAs(UnmanagedType.I1)
         [StructLayout(LayoutKind.Sequential, Pack = 1)]
         public struct TpmDataStruct
         {
@@ -69,13 +69,13 @@ namespace WPF_UI1.Services
             [MarshalAs(UnmanagedType.ByValArray, SizeConst = 8)] public SharedDiskDataStruct[] disks;
             [MarshalAs(UnmanagedType.ByValArray, SizeConst = 8)] public PhysicalDiskSmartDataStruct[] physicalDisks;
             [MarshalAs(UnmanagedType.ByValArray, SizeConst = 10)] public TemperatureDataStruct[] temperatures;
-            public TpmDataStruct tpm;          // 与C++端顺序一致
+            public TpmDataStruct tpm;          // 与 C++ 顺序一致
             public int adapterCount;
             public int tempCount;
             public int gpuCount;
             public int diskCount;
             public int physicalDiskCount;
-            [MarshalAs(UnmanagedType.I1)] public bool hasTpm;  // 在 C++ 里 tpm 后、计数字段后再有 hasTpm（保持顺序）
+            [MarshalAs(UnmanagedType.I1)] public bool hasTpm;  // 在 C++ 中 tpm 后、计数字段后面紧接 hasTpm，顺序一致
             public SYSTEMTIME lastUpdate;
             [MarshalAs(UnmanagedType.ByValArray, SizeConst = 40)] public byte[] lockData;
         }
@@ -118,7 +118,7 @@ namespace WPF_UI1.Services
             public double temperature;
         }
 
-        // ------------- SMART 相关子结构（用于保持偏移一致）-------------
+        // ------------- SMART 相关结构（对齐和偏移一致）-------------
         [StructLayout(LayoutKind.Sequential, Pack = 1)]
         public struct SmartAttributeDataStruct
         {
@@ -196,7 +196,7 @@ namespace WPF_UI1.Services
                         {
                             Log.Debug($"尝试打开共享内存: {name}");
                             _mmf = MemoryMappedFile.OpenExisting(name, MemoryMappedFileRights.Read);
-                            // 视图长度使用真实结构体大小
+                            // 视图大小使用实际结构的尺寸
                             _accessor = _mmf.CreateViewAccessor(0, structSize, MemoryMappedFileAccess.Read);
                             IsInitialized = true;
                             Log.Information($"? 成功连接到共享内存: {name}, Size={structSize} bytes");
@@ -214,13 +214,13 @@ namespace WPF_UI1.Services
                         }
                     }
 
-                    LastError = "无法找到共享内存，请确保C++主程序正在运行";
+                    LastError = "无法找到共享内存，请确认 C++ 核心服务已运行";
                     Log.Error(LastError);
                     return false;
                 }
                 catch (Exception ex)
                 {
-                    LastError = $"初始化共享内存时发生错误: {ex.Message}";
+                    LastError = $"初始化共享内存时发生异常: {ex.Message}";
                     Log.Error(ex, LastError);
                     return false;
                 }
@@ -243,7 +243,7 @@ namespace WPF_UI1.Services
                 }
                 catch (Exception ex)
                 {
-                    LastError = $"读取共享内存数据时发生错误: {ex.Message}";
+                    LastError = $"读取共享内存数据时发生异常: {ex.Message}";
                     Log.Error(ex, LastError);
                     Dispose();
                     IsInitialized = false;
@@ -274,7 +274,7 @@ namespace WPF_UI1.Services
             }
         }
 
-        // 简化读取保留（结构匹配后通常不再触发）
+        // 简化读取（结构不匹配时的降级方案）
         private SystemInfo ReadSimplifiedSystemInfo()
         {
             var systemInfo = new SystemInfo
@@ -334,7 +334,7 @@ namespace WPF_UI1.Services
                     systemInfo.GpuIsVirtual = fg.IsVirtual;
                 }
 
-                // 网络
+                // 网卡
                 systemInfo.Adapters.Clear();
                 if (sharedData.adapters != null)
                 {
@@ -345,7 +345,7 @@ namespace WPF_UI1.Services
                         {
                             Name = SafeWideCharArrayToString(a.name) ?? "未知网卡",
                             Mac = SafeWideCharArrayToString(a.mac) ?? "00-00-00-00-00-00",
-                            IpAddress = SafeWideCharArrayToString(a.ipAddress) ?? "未分配",
+                            IpAddress = SafeWideCharArrayToString(a.ipAddress) ?? "未获取",
                             AdapterType = SafeWideCharArrayToString(a.adapterType) ?? "未知类型",
                             Speed = a.speed
                         });
@@ -376,7 +376,7 @@ namespace WPF_UI1.Services
                             TotalSize = d.totalSize,
                             UsedSpace = d.usedSpace,
                             FreeSpace = d.freeSpace,
-                            PhysicalDiskIndex = -1 // 初始为未关联
+                            PhysicalDiskIndex = -1 // 初始为未映射
                         });
                     }
                 }
@@ -411,7 +411,7 @@ namespace WPF_UI1.Services
                             TotalBytesRead = pd.totalBytesRead
                         };
 
-                        // 关联逻辑驱动器字母
+                        // 追加逻辑驱动器字母
                         if (pd.logicalDriveLetters != null && pd.logicalDriveLetters.Length > 0)
                         {
                             for (int b = 0; b < Math.Min(pd.logicalDriveLetters.Length, pd.logicalDriveCount); b++)
@@ -455,7 +455,7 @@ namespace WPF_UI1.Services
                     }
                 }
 
-                // 建立逻辑盘 -> 物理盘索引映射
+                // 逻辑盘 -> 物理盘映射
                 if (systemInfo.PhysicalDisks.Count > 0 && systemInfo.Disks.Count > 0)
                 {
                     for (int pi = 0; pi < systemInfo.PhysicalDisks.Count; pi++)
@@ -474,7 +474,7 @@ namespace WPF_UI1.Services
                     }
                 }
 
-                // 温度传感器
+                // 温度数组
                 systemInfo.Temperatures.Clear();
                 if (sharedData.temperatures != null)
                 {
@@ -488,7 +488,7 @@ namespace WPF_UI1.Services
                         });
                     }
                 }
-                // TPM 信息（完整）
+                // TPM 信息（字段）
                 systemInfo.HasTpm = sharedData.hasTpm;
                 if (sharedData.hasTpm)
                 {
@@ -509,12 +509,12 @@ namespace WPF_UI1.Services
                     systemInfo.TpmErrorMessage = SafeWideCharArrayToString(tpm.errorMessage) ?? string.Empty;
                 }
                 systemInfo.LastUpdate = DateTime.Now;
-                Log.Debug($"解析共享内存成功: CPU={systemInfo.CpuName}, GPU数={systemInfo.Gpus.Count}, TPM={systemInfo.HasTpm}");
+                Log.Debug($"读取共享内存成功: CPU={systemInfo.CpuName}, GPU数={systemInfo.Gpus.Count}, TPM={systemInfo.HasTpm}");
                 return systemInfo;
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "转换共享内存数据失败，回退简化模式");
+                Log.Error(ex, "转换共享内存数据失败，进入降级模式");
                 return ReadSimplifiedSystemInfo();
             }
         }
