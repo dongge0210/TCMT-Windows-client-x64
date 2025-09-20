@@ -12,171 +12,213 @@ env:
   BUILD_CONFIGURATION: Release
   BUILD_PLATFORM: x64
   ERROR_KEYWORDS: "error|warning|fatal|undefined"
-  LOG_SUMMARY_LINES: 50
+  FAIL_ERROR_REGEX: "(?i)(: error | fatal error| fatal: |\\berror LNK[0-9]{4}\\b|\\bLNK[0-9]{4}\\b|unresolved external symbol|undefined reference|LINK : fatal error)"
+  MAIN_EXE: ""
 
 jobs:
-  cuda:
+  system_info:
+    name: System and Environment Report
     runs-on: windows-2022
-    outputs:
-      cuda_ok: ${{ steps.check_cuda.outcome == 'success' }}
     steps:
-    - name: Cache CUDA Toolkit
+    - name: Setup MSVC Dev Cmd
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
+    - name: Print system info
+      shell: pwsh
+      run: |
+        systeminfo | Out-File -FilePath system_info.txt -Append
+        echo "`n==== DISK SPACE ====" | Out-File -FilePath system_info.txt -Append
+        Get-PSDrive | Out-File -FilePath system_info.txt -Append
+        echo "`n==== ENVIRONMENT ====" | Out-File -FilePath system_info.txt -Append
+        Get-ChildItem Env: | Out-File -FilePath system_info.txt -Append
+        echo "`n==== VSWHERE ====" | Out-File -FilePath system_info.txt -Append
+        if (Test-Path "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe") {
+          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -all -prerelease -products * -format list | Out-File -FilePath system_info.txt -Append
+        }
+        echo "`n==== MSBuild Version ====" | Out-File -FilePath system_info.txt -Append
+        msbuild -version | Out-File -FilePath system_info.txt -Append
+        echo "`n==== cl.exe Version ====" | Out-File -FilePath system_info.txt -Append
+        cl 2>&1 | Out-File -FilePath system_info.txt -Append
+        echo "`n==== dotnet --info ====" | Out-File -FilePath system_info.txt -Append
+        dotnet --info | Out-File -FilePath system_info.txt -Append
+        echo "`n==== CUDA ====" | Out-File -FilePath system_info.txt -Append
+        if (Test-Path "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA") {
+          Get-ChildItem "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA" | Out-File -FilePath system_info.txt -Append
+          if (Test-Path "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\bin\nvcc.exe") {
+            & "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\bin\nvcc.exe" --version | Out-File -FilePath system_info.txt -Append
+          }
+        }
+        echo "`n==== GPU INFO ====" | Out-File -FilePath system_info.txt -Append
+        Get-WmiObject win32_VideoController | Format-List | Out-File -FilePath system_info.txt -Append
+    - name: Upload System Info
+      uses: actions/upload-artifact@v4
+      with:
+        name: system_info
+        path: system_info.txt
+
+  restore:
+    runs-on: windows-2022
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v5
+      with:
+        ref: dev
+        submodules: recursive
+        fetch-depth: 0
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: '8.x'
+    - name: Cache NuGet packages
       uses: actions/cache@v4
       with:
-        path: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA
-        key: cuda-12.6.0
-    - name: Setup CUDA 12.6
+        path: |
+          ~/.nuget/packages
+        key: nuget-${{ runner.os }}-${{ hashFiles('**/*.sln','**/*.csproj','**/packages.config') }}
+        restore-keys: |
+          nuget-${{ runner.os }}-
+    - name: NuGet Restore
+      shell: pwsh
+      run: |
+        nuget restore ${{ env.SOLUTION_FILE_PATH }}
+
+  cuda:
+    runs-on: windows-2022
+    steps:
+    - name: Setup CUDA 12.6 (local)
       id: cuda_install
       uses: Jimver/cuda-toolkit@v0.2.18
       with:
         cuda: '12.6.0'
-        method: 'network'
+        method: 'local'
     - name: Check CUDA directory
-      id: check_cuda
       shell: pwsh
       run: |
         if (-not (Test-Path "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6")) {
           Write-Host "CUDA 12.6 安装失败！"
           exit 1
-        } else {
-          Write-Host "CUDA 12.6 安装成功。"
         }
-    - name: 上传CUDA安装log
-      if: failure()
-      shell: pwsh
-      run: |
-        Set-Content -Path cuda_install_failed.txt -Value "CUDA 12.6 安装失败，main编译不会继续。"
-    - uses: actions/upload-artifact@v4
-      if: failure()
-      with:
-        name: cuda_install_failed.txt
-        path: cuda_install_failed.txt
 
   build_lib:
     runs-on: windows-2022
+    needs: [restore]
     steps:
     - uses: actions/checkout@v5
       with:
+        ref: dev
         submodules: recursive
         fetch-depth: 0
-    - name: Setup .NET Framework
+    - name: Setup .NET
       uses: actions/setup-dotnet@v5
       with:
         dotnet-version: '8.x'
-    - name: Restore NuGet packages
-      run: nuget restore ${{ env.SOLUTION_FILE_PATH }}
     - name: Build LibreHardwareMonitorLib
       run: |
         cd src/third_party/LibreHardwareMonitor
-        dotnet build LibreHardwareMonitorLib/LibreHardwareMonitorLib.csproj -c Release -f net472 2>&1 | Tee-Object -FilePath ..\..\..\build_lib.log
-    - name: 提取警告和错误
-      shell: pwsh
-      run: |
-        $log = Get-Content build_lib.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
-        $summary = if ($log) { $log | Out-String } else { "没有警告或错误。" }
-        Set-Content build_lib.summary.txt $summary
-        echo "$summary" >> $GITHUB_STEP_SUMMARY
-    - name: 上传日志和总结
+        dotnet build LibreHardwareMonitorLib/LibreHardwareMonitorLib.csproj -c Release -f net472 2>&1 | Tee-Object -FilePath build_lib.log
+    - name: 上传日志
       uses: actions/upload-artifact@v4
       with:
         name: build_lib_logs
-        path: |
-          build_lib.log
-          build_lib.summary.txt
+        path: src/third_party/LibreHardwareMonitor/build_lib.log
 
   build_wpf:
     runs-on: windows-2022
+    needs: [restore]
     steps:
     - uses: actions/checkout@v5
       with:
+        ref: dev
         submodules: recursive
         fetch-depth: 0
-    - name: Setup .NET Framework
+    - name: Setup .NET
       uses: actions/setup-dotnet@v5
       with:
         dotnet-version: '8.x'
     - name: Build WPF-UI1
       run: |
         cd WPF-UI1
-        dotnet build WPF-UI1.csproj -c Release 2>&1 | Tee-Object -FilePath ..\wpfui1_build.log
-    - name: 提取警告和错误
-      shell: pwsh
-      run: |
-        $log = Get-Content wpfui1_build.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
-        $summary = if ($log) { $log | Out-String } else { "没有警告或错误。" }
-        Set-Content wpfui1_build.summary.txt $summary
-        echo "$summary" >> $GITHUB_STEP_SUMMARY
-    - name: 上传日志和总结
+        dotnet build WPF-UI1.csproj -c Release 2>&1 | Tee-Object -FilePath wpfui1_build.log
+    - name: 上传日志
       uses: actions/upload-artifact@v4
       with:
         name: wpfui1_build_logs
-        path: |
-          wpfui1_build.log
-          wpfui1_build.summary.txt
+        path: WPF-UI1/wpfui1_build.log
 
   build_cpp:
     runs-on: windows-2022
+    needs: [restore]
     steps:
     - uses: actions/checkout@v5
       with:
+        ref: dev
         submodules: recursive
         fetch-depth: 0
+    - name: Cache C++ build outputs
+      uses: actions/cache@v4
+      with:
+        path: |
+          src/CPP-parsers/CPP-parsers/x64/Release/
+          src/CPP-parsers/CPP-parsers/x64/Debug/
+          src/CPP-parsers/CPP-parsers/obj/
+        key: cpp-build-${{ runner.os }}-${{ github.sha }}
+        restore-keys: |
+          cpp-build-${{ runner.os }}-
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
-    - name: Setup Visual Studio environment
+    - name: Setup VS 环境
       uses: ilammy/msvc-dev-cmd@v1
       with:
         arch: x64
     - name: Build CPP-parsers
-      run: |
-        msbuild src/CPP-parsers/CPP-parsers/CPP-parsers.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m 2>&1 | Tee-Object -FilePath cpp_parsers_build.log
-    - name: 提取警告和错误
       shell: pwsh
       run: |
-        $log = Get-Content cpp_parsers_build.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
-        $summary = if ($log) { $log | Out-String } else { "没有警告或错误。" }
-        Set-Content cpp_parsers_build.summary.txt $summary
-        echo "$summary" >> $GITHUB_STEP_SUMMARY
-    - name: 上传日志和总结
+        msbuild src/CPP-parsers/CPP-parsers/CPP-parsers.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m /verbosity:minimal 2>&1 | Tee-Object -FilePath cpp_parsers_build.log
+    - name: 上传日志
       uses: actions/upload-artifact@v4
       with:
         name: cpp_parsers_build_logs
-        path: |
-          cpp_parsers_build.log
-          cpp_parsers_build.summary.txt
+        path: cpp_parsers_build.log
 
   build_main:
     runs-on: windows-2022
-    needs: [cuda, build_lib, build_wpf, build_cpp]
-    if: needs.cuda.result == 'success'
+    needs: [restore, cuda, build_cpp, build_lib]
     steps:
     - uses: actions/checkout@v5
       with:
+        ref: dev
         submodules: recursive
         fetch-depth: 0
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
-    - name: Setup Visual Studio environment
+    - name: Setup VS 环境
       uses: ilammy/msvc-dev-cmd@v1
       with:
         arch: x64
     - name: Build main project
-      run: |
-        msbuild ${{ env.SOLUTION_FILE_PATH }} /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ env.BUILD_PLATFORM }} /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m 2>&1 | Tee-Object -FilePath main_build.log
-    - name: 提取警告和错误
       shell: pwsh
       run: |
-        $log = Get-Content main_build.log | Select-String -Pattern "${{ env.ERROR_KEYWORDS }}"
-        $summary = if ($log) { $log | Out-String } else { "没有警告或错误。" }
-        Set-Content main_build.summary.txt $summary
-        echo "$summary" >> $GITHUB_STEP_SUMMARY
-    - name: 上传日志和总结
+        msbuild ${{ env.SOLUTION_FILE_PATH }} /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ env.BUILD_PLATFORM }} /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m /verbosity:minimal 2>&1 | Tee-Object -FilePath main_build.log
+    - name: 扫描致命错误并决定失败
+      shell: pwsh
+      run: |
+        $lines = Get-Content main_build.log | Select-String -Pattern "${{ env.FAIL_ERROR_REGEX }}"
+        $lines = $lines | Where-Object { $_.Line -notmatch '0 Error\(s\)' }
+        if ($lines){
+          Set-Content main_build.errors.txt ($lines | ForEach-Object {$_.Line} | Out-String)
+          exit 1
+        } else {
+          Set-Content main_build.errors.txt "未发现致命错误(main_build)。"
+        }
+    - name: 上传日志和错误
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: main_build_logs
         path: |
           main_build.log
-          main_build.summary.txt
+          main_build.errors.txt
     - name: 上传主程序产物
       uses: actions/upload-artifact@v4
       with:
@@ -186,50 +228,133 @@ jobs:
           Project1/x64/${{ env.BUILD_CONFIGURATION }}/*.dll
           Project1/x64/${{ env.BUILD_CONFIGURATION }}/*.pdb
 
+  run_and_screenshot:
+    runs-on: windows-2022
+    needs: [build_wpf, build_main]
+    continue-on-error: true
+    steps:
+    - name: 下载主程序产物
+      uses: actions/download-artifact@v4
+      with:
+        name: TCMT-Windows-Client-${{ env.BUILD_PLATFORM }}-${{ env.BUILD_CONFIGURATION }}
+        path: app
+    - name: 列出产物
+      shell: pwsh
+      run: |
+        Get-ChildItem -Recurse app | ForEach-Object { $_.FullName }
+    - name: 运行主程序并截图
+      shell: pwsh
+      run: |
+        $exeToRun = $null
+        if ($env:MAIN_EXE -and (Test-Path "app/$($env:MAIN_EXE)")) {
+          $exeToRun = (Get-Item "app/$($env:MAIN_EXE)").FullName
+        } else {
+          $exes = Get-ChildItem -Path app -Filter *.exe -Recurse | Where-Object { $_.Name -notmatch 'vshost' }
+          if (-not $exes) { Write-Host "未找到可执行文件"; exit 1 }
+          $exeToRun = $exes[0].FullName
+        }
+        Start-Process -FilePath $exeToRun
+        Start-Sleep -Seconds 6
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName System.Drawing
+        $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+        $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+        $bitmap.Save("run_screenshot.png")
+        $graphics.Dispose(); $bitmap.Dispose()
+    - name: 上传运行截图
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: run_screenshot
+        path: run_screenshot.png
+
   report_error:
     if: always() && github.event_name == 'pull_request'
     runs-on: windows-2022
-    needs: [cuda, build_lib, build_wpf, build_cpp, build_main]
+    needs: [system_info, build_lib, build_wpf, build_cpp, build_main, run_and_screenshot]
     steps:
     - name: Download logs
       uses: actions/download-artifact@v4
       with:
         path: logs
-    - name: 汇总所有模块警告和错误
+
+    - name: 汇总所有模块警告和错误及环境
       shell: pwsh
       run: |
         $report = ""
-        if (Test-Path "logs/cuda_install_failed.txt") {
-          $report = Get-Content "logs/cuda_install_failed.txt" -Raw
+
+        # 汇总 build_lib
+        $libLog = Get-ChildItem -Recurse logs | Where-Object { $_.Name -eq "build_lib.log" } | Select-Object -First 1
+        if ($libLog) {
+          $lines = Get-Content $libLog.FullName | Select-String -Pattern "error|warning|fatal|undefined"
+          $summary = if ($lines) { $lines | Out-String } else { "没有警告或错误。" }
+          $report += "`n==== build_lib ====`n$summary"
         } else {
-          $modules = @("build_lib", "wpfui1_build", "cpp_parsers_build", "main_build")
-          foreach ($m in $modules) {
-            $sfile = "logs/${m}.summary.txt"
-            if (Test-Path $sfile) {
-              $txt = Get-Content $sfile -Raw
-              $report += "`n==== $m ====`n$txt"
-            }
-          }
-          if ($report -eq "") { $report = "没有模块产生任何警告或错误。" }
+          $report += "`n==== build_lib ====`n日志缺失"
         }
+
+        # 汇总 wpfui1_build
+        $wpfLog = Get-ChildItem -Recurse logs | Where-Object { $_.Name -eq "wpfui1_build.log" } | Select-Object -First 1
+        if ($wpfLog) {
+          $lines = Get-Content $wpfLog.FullName | Select-String -Pattern "error|warning|fatal|undefined"
+          $summary = if ($lines) { $lines | Out-String } else { "没有警告或错误。" }
+          $report += "`n==== wpfui1_build ====`n$summary"
+        } else {
+          $report += "`n==== wpfui1_build ====`n日志缺失"
+        }
+
+        # 汇总 cpp_parsers_build
+        $cppLog = Get-ChildItem -Recurse logs | Where-Object { $_.Name -eq "cpp_parsers_build.log" } | Select-Object -First 1
+        if ($cppLog) {
+          $lines = Get-Content $cppLog.FullName | Select-String -Pattern "error|warning|fatal|undefined"
+          $summary = if ($lines) { $lines | Out-String } else { "没有警告或错误。" }
+          $report += "`n==== cpp_parsers_build ====`n$summary"
+        } else {
+          $report += "`n==== cpp_parsers_build ====`n日志缺失"
+        }
+
+        # 汇总 main_build
+        $mainErr = Get-ChildItem -Recurse logs | Where-Object { $_.Name -eq "main_build.errors.txt" } | Select-Object -First 1
+        if ($mainErr) {
+          $err = Get-Content $mainErr.FullName | Out-String
+          $report += "`n==== main_build 致命错误 ====`n$err"
+        } else {
+          $report += "`n==== main_build 致命错误 ====`n日志缺失"
+        }
+
+        # 系统环境（整理输出关键信息）
+        $sysinfo = Get-ChildItem -Recurse logs | Where-Object { $_.Name -eq "system_info.txt" } | Select-Object -First 1
+        if ($sysinfo) {
+          $lines = Get-Content $sysinfo.FullName
+          $os   = ($lines | Select-String -Pattern "^OS Name:").Line
+          $ver  = ($lines | Select-String -Pattern "^OS Version:").Line
+          $cpu  = ($lines | Select-String -Pattern "^Processor\(s\):").Line
+          $mem  = ($lines | Select-String -Pattern "^Total Physical Memory:").Line
+          $gpu  = ($lines | Select-String -Pattern "^Name\s+:").Line
+          $report += "`n==== 系统环境简要 ====`n$os`n$ver`n$cpu`n$mem`n$gpu"
+        } else {
+          $report += "`n==== 系统环境信息 ====`n缺失"
+        }
+
         Set-Content logs/ci_error_report.txt $report
-        echo "$report" >> $GITHUB_STEP_SUMMARY
     - name: 上传error report
       uses: actions/upload-artifact@v4
       with:
-        name: ci_error_report.txt
+        name: ci_error_report
         path: logs/ci_error_report.txt
 
   comment-on-pr:
-    if: failure() && github.event_name == 'pull_request'
+    needs: [report_error]
     runs-on: windows-2022
-    needs: [cuda, build_lib, build_wpf, build_cpp, build_main, report_error]
+    if: failure() && github.event_name == 'pull_request'
     steps:
     - name: Download logs
       uses: actions/download-artifact@v4
       with:
         path: logs
-    - name: 评论到PR（仅Copilot Agent PR自动）
+    - name: 评论到PR（仅copilot和dongge0210）
       shell: pwsh
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -237,27 +362,32 @@ jobs:
         GITHUB_RUN_ID: ${{ github.run_id }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         GITHUB_ACTOR: ${{ github.actor }}
+        PR_AUTHOR: ${{ github.event.pull_request.user.login }}
       run: |
-        # 只支持 Copilot Agent PR 自动反馈
-        $pr_author = $env:GITHUB_ACTOR
-        if ($pr_author -ne "github-copilot[bot]" -and $pr_author -ne "github-actions[bot]") {
-          Write-Host "Not a Copilot agent PR, skipping comment."
+        $runtimeActor = $env:GITHUB_ACTOR
+        $prAuthor = $env:PR_AUTHOR
+        $allowed = @("github-copilot[bot]", "Copilot", "dongge0210")
+        $isAllowed = ($allowed -contains $prAuthor) -or ($allowed -contains $runtimeActor)
+        if (-not $isAllowed) {
+          Write-Host "本 PR 作者($prAuthor) 不允许自动评论，跳过。"
           exit 0
         }
-
-        $PR_NUMBER = $env:PR_NUMBER
+        if ($prAuthor -eq "github-copilot[bot]" -or $prAuthor -eq "Copilot") {
+          $mentionActor = "@dongge0210"
+        } else {
+          $mentionActor = "@$prAuthor"
+        }
+        $errFile = Get-ChildItem -Recurse logs | Where-Object { $_.Name -eq "ci_error_report.txt" } | Select-Object -First 1
+        $errMsg = if ($errFile) { Get-Content $errFile.FullName -Raw } else { "缺失 ci_error_report.txt" }
         $actions_url = "https://github.com/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)"
-
-        $errMsg = Get-Content logs/ci_error_report.txt -Raw
-
-        $comment = "@copilot @$pr_author [Actions编译报告-MSVC] `n`nPR编译失败了  `n`n关键警告和错误日志如下：  `n````  `n$errMsg`n````  `n如需完整日志请查Actions artifacts。  `n`n$actions_url"
+        $comment = "@copilot $mentionActor [Actions编译报告-MSVC] `n`nPR编译失败了  `n`n关键警告和错误日志如下：  `n````  `n$errMsg`n````  `n如需完整日志请查Actions artifacts。  `n$actions_url"
         $headers = @{
           Authorization = "token $env:GITHUB_TOKEN"
           "User-Agent" = "github-actions-powershell"
           "Accept" = "application/vnd.github+json"
         }
-        $body = @{ body = $comment } | ConvertTo-Json
+        $body = @{ body = $comment } | ConvertTo-Json -Depth 4
         $repo = $env:GITHUB_REPOSITORY
-        $url = "https://api.github.com/repos/$repo/issues/$PR_NUMBER/comments"
-        Write-Host "Commenting on PR #$PR_NUMBER, url: $url"
+        $prNumber = $env:PR_NUMBER
+        $url = "https://api.github.com/repos/$repo/issues/$prNumber/comments"
         Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $body
