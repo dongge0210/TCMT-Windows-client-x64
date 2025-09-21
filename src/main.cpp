@@ -1120,7 +1120,12 @@ int main(int argc, char* argv[]) {
                             Logger::Debug("收集到 " + std::to_string(disks.size()) + " 个磁盘条目");
                             for (size_t i = 0; i < disks.size(); ++i) {
                                 const auto& disk = disks[i];
-                                Logger::Debug("逻辑磁盘 " + std::to_string(i) + ": 标签=" + disk.label + ", 文件系统=" + disk.fileSystem);
+                                // 避免混合编码：将 UTF-8 字段转换为宽字串并用宽日志输出
+                                std::wstring labelW = WinUtils::Utf8ToWstring(disk.label);
+                                std::wstring fsW = WinUtils::Utf8ToWstring(disk.fileSystem);
+                                std::wstringstream wss;
+                                wss << L"逻辑磁盘 " << i << L": 标签=" << labelW << L", 文件系统=" << fsW;
+                                Logger::Debug(wss.str());
                             }
                         }
                     }
@@ -1427,6 +1432,8 @@ char GetKeyPress() {
     }
     return 0;
 }
+
+
 
 
 

@@ -5,7 +5,9 @@
 #include "../Utils/WmiManager.h"
 #include <wbemidl.h>
 #include <comdef.h>
+#include <shellapi.h> // SHGetFileInfoW fallback display name
 #pragma comment(lib, "wbemuuid.lib")
+#pragma comment(lib, "Shell32.lib")
 
 DiskInfo::DiskInfo() { QueryDrives(); }
 
@@ -28,15 +30,41 @@ void DiskInfo::QueryDrives() {
         wchar_t volumeName[MAX_PATH + 1] = {0};
         wchar_t fileSystemName[MAX_PATH + 1] = {0};
         DWORD fsFlags = 0;
-        if (!GetVolumeInformationW(rootPath.c_str(), volumeName, MAX_PATH, nullptr, nullptr, &fsFlags, fileSystemName, MAX_PATH)) {
+        BOOL gotInfo = GetVolumeInformationW(rootPath.c_str(), volumeName, MAX_PATH, nullptr, nullptr, &fsFlags, fileSystemName, MAX_PATH);
+        if (!gotInfo) {
             info.label = L""; // 空表示未命名或获取失败
             info.fileSystem = L"未知";
             Logger::Warn(L"GetVolumeInformation 失败: " + rootPath);
         } else {
             info.label = volumeName;
-            if (info.label.empty()) info.label = L"未命名"; // 兜底
             info.fileSystem = fileSystemName;
         }
+        // 若卷标仍为空，尝试通过卷 GUID 路径再次获取（更稳健）
+        if (info.label.empty()) {
+            wchar_t volumeGuidPath[MAX_PATH + 1] = {0};
+            if (GetVolumeNameForVolumeMountPointW(rootPath.c_str(), volumeGuidPath, MAX_PATH)) {
+                wchar_t volumeName2[MAX_PATH + 1] = {0};
+                wchar_t fileSystemName2[MAX_PATH + 1] = {0};
+                DWORD fsFlags2 = 0;
+                if (GetVolumeInformationW(volumeGuidPath, volumeName2, MAX_PATH, nullptr, nullptr, &fsFlags2, fileSystemName2, MAX_PATH)) {
+                    if (volumeName2[0] != L'\0') info.label = volumeName2;
+                    if (fileSystemName2[0] != L'\0') info.fileSystem = fileSystemName2;
+                }
+            }
+        }
+        // 若仍为空，使用 Shell 友好显示名作为兜底（本地磁盘等）
+        if (info.label.empty()) {
+            SHFILEINFOW sfi{};
+            if (SHGetFileInfoW(rootPath.c_str(), FILE_ATTRIBUTE_DIRECTORY, &sfi, sizeof(sfi), SHGFI_DISPLAYNAME | SHGFI_USEFILEATTRIBUTES)) {
+                if (sfi.szDisplayName[0] != L'\0') {
+                    info.label = sfi.szDisplayName; // 例如：本地磁盘 (C:)
+                }
+            }
+        }
+        // 最后兜底
+        if (info.label.empty()) info.label = L"未命名";
+        if (info.fileSystem.empty()) info.fileSystem = L"未知";
+
         drives.push_back(std::move(info));
     }
     std::sort(drives.begin(), drives.end(), [](const DriveInfo& a,const DriveInfo& b){return a.letter<b.letter;});

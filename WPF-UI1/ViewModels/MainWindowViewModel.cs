@@ -11,7 +11,7 @@ using SkiaSharp;
 using WPF_UI1.Models;
 using WPF_UI1.Services;
 using Serilog;
-using System.Linq; // 新增: 用于 FirstOrDefault / SequenceEqual
+using System.Linq;
 
 namespace WPF_UI1.ViewModels
 {
@@ -22,6 +22,9 @@ namespace WPF_UI1.ViewModels
         private const int MAX_CHART_POINTS = 60;
         private int _consecutiveErrors = 0;
         private const int MAX_CONSECUTIVE_ERRORS = 5;
+
+        // 记住每个物理磁盘最后选择的分区字母
+        private readonly Dictionary<string, char> _lastPartitionByPhysical = new();
 
         [ObservableProperty]
         private bool isConnected;
@@ -104,7 +107,6 @@ namespace WPF_UI1.ViewModels
         [ObservableProperty]
         private DiskData? selectedDisk;
 
-        // 新增：物理磁盘分组
         [ObservableProperty]
         private ObservableCollection<PhysicalDiskView> physicalDisks = new();
 
@@ -126,21 +128,46 @@ namespace WPF_UI1.ViewModels
             
             InitializeCharts();
             
-            // 设置更新定时器
             _updateTimer = new DispatcherTimer
             {
-                Interval = TimeSpan.FromMilliseconds(500) // 稍微降低频率以减少CPU占用
+                Interval = TimeSpan.FromMilliseconds(500)
             };
             _updateTimer.Tick += UpdateTimer_Tick;
             _updateTimer.Start();
 
-            // 初次尝试连接
             TryConnect();
+        }
+
+        partial void OnSelectedDiskChanged(DiskData? value)
+        {
+            var serial = SelectedPhysicalDisk?.Disk?.SerialNumber;
+            if (!string.IsNullOrEmpty(serial) && value != null)
+            {
+                _lastPartitionByPhysical[serial] = value.Letter;
+            }
+        }
+
+        partial void OnSelectedPhysicalDiskChanged(PhysicalDiskView? value)
+        {
+            if (value == null) return;
+            var serial = value.Disk?.SerialNumber ?? string.Empty;
+            if (!string.IsNullOrEmpty(serial) && _lastPartitionByPhysical.TryGetValue(serial, out var letter))
+            {
+                var part = value.Partitions.FirstOrDefault(p => char.ToUpperInvariant(p.Letter) == char.ToUpperInvariant(letter));
+                if (part != null)
+                {
+                    SelectedDisk = part;
+                    return;
+                }
+            }
+            if (value.Partitions.Count > 0)
+            {
+                SelectedDisk = value.Partitions[0];
+            }
         }
 
         private void InitializeCharts()
         {
-            // CPU温度图表
             CpuTemperatureSeries.Add(new LineSeries<double>
             {
                 Values = _cpuTempData,
@@ -150,7 +177,6 @@ namespace WPF_UI1.ViewModels
                 GeometrySize = 0 // 隐藏数据点
             });
 
-            // GPU温度图表
             GpuTemperatureSeries.Add(new LineSeries<double>
             {
                 Values = _gpuTempData,
@@ -276,7 +302,11 @@ namespace WPF_UI1.ViewModels
         {
             try
             {
-                // 更新CPU信息 - 添加数据验证
+                // 记住当前物理磁盘和分区选择
+                string? previousPhysicalSerial = SelectedPhysicalDisk?.Disk?.SerialNumber;
+                char? previousPartitionLetter = SelectedDisk?.Letter;
+
+                // CPU
                 CpuName = ValidateAndSetString(systemInfo.CpuName, "未知处理器");
                 PhysicalCores = ValidateAndSetInt(systemInfo.PhysicalCores, "物理核心");
                 LogicalCores = ValidateAndSetInt(systemInfo.LogicalCores, "逻辑核心");
