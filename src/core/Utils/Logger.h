@@ -4,6 +4,7 @@
 #include <mutex>
 #include <algorithm> // Added for std::transform
 #include <windows.h> // For console color support
+#include "WinUtils.h" // for UTF-16/UTF-8 conversion helpers
 
 // 日志等级枚举
 enum LogLevel {
@@ -53,6 +54,8 @@ private:
     static std::wstring ConvertToWideString(const std::string& utf8Str); // Helper for UTF-8 to wide string conversion
     static void SetConsoleColor(ConsoleColor color); // 设置控制台颜色
     static void ResetConsoleColor(); // 重置控制台颜色
+    // 将可能为 ANSI/本地代码页 的字符串规范化为 UTF-8 编码
+    static std::string NormalizeToUTF8(const std::string& input);
 
 public:
     static void Initialize(const std::string& logFilePath);
@@ -69,4 +72,13 @@ public:
     static void Error(const std::string& message);   // 错误信息 (橙色)
     static void Critical(const std::string& message); // 严重错误 (红色)
     static void Fatal(const std::string& message);   // 致命错误 (深红色)
+
+    // 便捷重载：直接传 wide 字符串（用于从 WinAPI/WMI 返回的 UTF-16 字符串）
+    static void Trace(const std::wstring& message) { Trace(WinUtils::WstringToUtf8(message)); }
+    static void Debug(const std::wstring& message) { Debug(WinUtils::WstringToUtf8(message)); }
+    static void Info(const std::wstring& message)  { Info(WinUtils::WstringToUtf8(message)); }
+    static void Warn(const std::wstring& message)  { Warn(WinUtils::WstringToUtf8(message)); }
+    static void Error(const std::wstring& message) { Error(WinUtils::WstringToUtf8(message)); }
+    static void Critical(const std::wstring& message) { Critical(WinUtils::WstringToUtf8(message)); }
+    static void Fatal(const std::wstring& message) { Fatal(WinUtils::WstringToUtf8(message)); }
 };

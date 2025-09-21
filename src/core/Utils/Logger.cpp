@@ -93,6 +93,63 @@ std::wstring Logger::ConvertToWideString(const std::string& utf8Str) {
     return wideStr;
 }
 
+static bool IsValidUTF8(const std::string& s) {
+    const unsigned char* bytes = reinterpret_cast<const unsigned char*>(s.data());
+    size_t len = s.size();
+    size_t i = 0;
+    while (i < len) {
+        unsigned char c = bytes[i];
+        if (c <= 0x7F) {
+            i += 1;
+        } else if ((c >> 5) == 0x6) {
+            if (i + 1 >= len) return false;
+            if ((bytes[i + 1] & 0xC0) != 0x80) return false;
+            i += 2;
+        } else if ((c >> 4) == 0xE) {
+            if (i + 2 >= len) return false;
+            if ((bytes[i + 1] & 0xC0) != 0x80 || (bytes[i + 2] & 0xC0) != 0x80) return false;
+            i += 3;
+        } else if ((c >> 3) == 0x1E) {
+            if (i + 3 >= len) return false;
+            if ((bytes[i + 1] & 0xC0) != 0x80 || (bytes[i + 2] & 0xC0) != 0x80 || (bytes[i + 3] & 0xC0) != 0x80) return false;
+            i += 4;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string Logger::NormalizeToUTF8(const std::string& input) {
+    if (input.empty()) return input;
+    // 如果已经是有效 UTF-8，直接返回
+    if (IsValidUTF8(input)) {
+        return input;
+    }
+    // 否则，按本地 ANSI 代码页解码为宽字符串，再转为 UTF-8
+    // Step 1: ANSI -> Wide
+    int wideLen = MultiByteToWideChar(CP_ACP, MB_ERR_INVALID_CHARS, input.data(), static_cast<int>(input.size()), nullptr, 0);
+    if (wideLen <= 0) {
+        // 回退：不使用 MB_ERR_INVALID_CHARS 再试一次
+        wideLen = MultiByteToWideChar(CP_ACP, 0, input.data(), static_cast<int>(input.size()), nullptr, 0);
+        if (wideLen <= 0) {
+            // 转换失败，返回原文，避免崩溃
+            return input;
+        }
+    }
+    std::wstring wide(static_cast<size_t>(wideLen), L'\0');
+    MultiByteToWideChar(CP_ACP, 0, input.data(), static_cast<int>(input.size()), wide.data(), wideLen);
+
+    // Step 2: Wide -> UTF-8
+    int utf8Len = WideCharToMultiByte(CP_UTF8, 0, wide.data(), wideLen, nullptr, 0, nullptr, nullptr);
+    if (utf8Len <= 0) {
+        return input; // 回退
+    }
+    std::string utf8(static_cast<size_t>(utf8Len), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wide.data(), wideLen, utf8.data(), utf8Len, nullptr, nullptr);
+    return utf8;
+}
+
 void Logger::WriteLog(const std::string& level, const std::string& message, LogLevel msgLevel, ConsoleColor color) {
     // 检查日志等级过滤
     if (msgLevel < currentLogLevel) {
@@ -107,6 +164,10 @@ void Logger::WriteLog(const std::string& level, const std::string& message, LogL
     if (message.length() > MAX_LOG_LENGTH) {
         throw std::invalid_argument("日志消息过长");
     }
+
+    // 规范化消息为 UTF-8，避免中文乱码（源字符串若为 ANSI/本地代码页，会被转换到 UTF-8）
+    const std::string normalizedMessage = NormalizeToUTF8(message);
+
     if (logFile.is_open()) {
         if (!logFile.good()) {
             throw std::runtime_error("日志文件流状态无效");
@@ -121,7 +182,7 @@ void Logger::WriteLog(const std::string& level, const std::string& message, LogL
         std::stringstream ss;
         ss << "[" << std::put_time(&timeinfo, "%Y-%m-%d %H:%M:%S") << "]"
            << "[" << level << "] "
-           << message
+           << normalizedMessage
            << std::endl;
         std::string logEntry = ss.str();
         try {
@@ -157,10 +218,10 @@ void Logger::WriteLog(const std::string& level, const std::string& message, LogL
                 }
                 ResetConsoleColor();
                 WriteConsoleW(hConsole, L" ", 1, &written, NULL);
-                int msgWideLength = MultiByteToWideChar(CP_UTF8, 0, message.c_str(), -1, nullptr, 0);
+                int msgWideLength = MultiByteToWideChar(CP_UTF8, 0, normalizedMessage.c_str(), -1, nullptr, 0);
                 if (msgWideLength > 0) {
                     std::vector<wchar_t> msgWideText(static_cast<size_t>(msgWideLength));
-                    if (MultiByteToWideChar(CP_UTF8, 0, message.c_str(), -1, msgWideText.data(), msgWideLength)) {
+                    if (MultiByteToWideChar(CP_UTF8, 0, normalizedMessage.c_str(), -1, msgWideText.data(), msgWideLength)) {
                         WriteConsoleW(hConsole, msgWideText.data(), static_cast<DWORD>(msgWideLength - 1), &written, NULL);
                     }
                 }

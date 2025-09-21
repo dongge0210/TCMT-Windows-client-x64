@@ -47,33 +47,44 @@
 #include "core/disk/DiskInfo.h"
 #include "core/DataStruct/DataStruct.h"
 #include "core/DataStruct/SharedMemoryManager.h"  // Include the new shared memory manager
-#include "core/temperature/TemperatureWrapper.h"  // 使用TemperatureWrapper而不是直接调用LibreHardwareMonitorBridge
+#include "core/temperature/TemperatureWrapper.h"  // Use TemperatureWrapper instead of directly calling LibreHardwareMonitorBridge
 
 #pragma comment(lib, "kernel32.lib")
 #pragma comment(lib, "user32.lib")
 
-// 全局变量
+// Global variables
 std::atomic<bool> g_shouldExit{false};
 static std::atomic<bool> g_monitoringStarted{false};
 static std::atomic<bool> g_comInitialized{false};
 
-// 线程安全的控制台输出互斥锁
+// Thread-safe console output mutex
 static std::mutex g_consoleMutex;
 
-// 函数声明
+// Cache for static system information (fetched only once)
+static std::atomic<bool> systemInfoCached{false};
+static std::string cachedOsVersion;
+static std::string cachedCpuName;
+static uint32_t cachedPhysicalCores = 0;
+static uint32_t cachedLogicalCores = 0;
+static uint32_t cachedPerformanceCores = 0;
+static uint32_t cachedEfficiencyCores = 0;
+static bool cachedHyperThreading = false;
+static bool cachedVirtualization = false;
+
+// Function declarations
 bool CheckForKeyPress();
 char GetKeyPress();
 void SafeExit(int exitCode);
 
-// 结构化异常处理函数
+// Structured exception handling function
 void SEHTranslator(unsigned int u, EXCEPTION_POINTERS* pExp);
 std::string GetSEHExceptionName(DWORD exceptionCode);
 
-// 线程安全的控制台输出函数
+// Thread-safe console output functions
 void SafeConsoleOutput(const std::string& message);
 void SafeConsoleOutput(const std::string& message, int color);
 
-// 信号处理函数 - 简化版本
+// Signal handler function - simplified version
 BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType) {
     switch (dwCtrlType) {
     case CTRL_C_EVENT:
@@ -81,45 +92,45 @@ BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType) {
     case CTRL_CLOSE_EVENT:
     case CTRL_LOGOFF_EVENT:
     case CTRL_SHUTDOWN_EVENT:
-        Logger::Info("接收到系统关闭信号，正在安全退出...");
+        Logger::Info("Received system shutdown signal, exiting safely...");
         g_shouldExit = true;
-        SafeConsoleOutput("正在退出程序...\n", 14);
+        SafeConsoleOutput("Exiting program...\n", 14);
         return TRUE;
     }
     return FALSE;
 }
 
-// 线程安全的控制台输出函数实现
+// Thread-safe console output function implementation
 void SafeConsoleOutput(const std::string& message) {
     std::lock_guard<std::mutex> lock(g_consoleMutex);
     try {
-        // 统一使用UTF-8编码输出，确保中文显示正确
+        // Use UTF-8 encoding for output to ensure correct display of Chinese characters
         HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
         if (hConsole != INVALID_HANDLE_VALUE) {
-            // 确保输入字符串不为空
+            // Ensure input string is not empty
             if (message.empty()) {
                 return;
             }
             
-            // 将UTF-8字符串转换为UTF-16 (Wide Character)
+            // Convert UTF-8 string to UTF-16 (Wide Character)
             int wideLength = MultiByteToWideChar(CP_UTF8, 0, message.c_str(), -1, nullptr, 0);
             if (wideLength > 0) {
                 std::vector<wchar_t> wideMessage(wideLength);
                 if (MultiByteToWideChar(CP_UTF8, 0, message.c_str(), -1, wideMessage.data(), wideLength)) {
-                    // 使用WriteConsoleW直接输出Unicode文本
+                    // Use WriteConsoleW to output Unicode text directly
                     DWORD written;
                     WriteConsoleW(hConsole, wideMessage.data(), static_cast<DWORD>(wideLength - 1), &written, NULL);
                     return;
                 }
             }
             
-            // 如果UTF-8转换失败，回退到ASCII输出
+            // Fallback to ASCII output if UTF-8 conversion fails
             DWORD written;
             WriteConsoleA(hConsole, message.c_str(), static_cast<DWORD>(message.length()), &written, NULL);
         }
     }
     catch (...) {
-        // 忽略控制台输出错误，避免递归异常
+        // Ignore console output errors to avoid recursive exceptions
     }
 }
 
@@ -128,159 +139,159 @@ void SafeConsoleOutput(const std::string& message, int color) {
     try {
         HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
         if (hConsole != INVALID_HANDLE_VALUE) {
-            // 保存原始颜色
+            // Save original color
             CONSOLE_SCREEN_BUFFER_INFO csbi;
             GetConsoleScreenBufferInfo(hConsole, &csbi);
             WORD originalColor = csbi.wAttributes;
             
-            // 设置新颜色
+            // Set new color
             SetConsoleTextAttribute(hConsole, color);
             
-            // 确保输入字符串不为空
+            // Ensure input string is not empty
             if (!message.empty()) {
-                // 将UTF-8字符串转换为UTF-16 (Wide Character)
+                // Convert UTF-8 string to UTF-16 (Wide Character)
                 int wideLength = MultiByteToWideChar(CP_UTF8, 0, message.c_str(), -1, nullptr, 0);
                 if (wideLength > 0) {
                     std::vector<wchar_t> wideMessage(wideLength);
                     if (MultiByteToWideChar(CP_UTF8, 0, message.c_str(), -1, wideMessage.data(), wideLength)) {
-                        // 使用WriteConsoleW直接输出Unicode文本
+                        // Use WriteConsoleW to output Unicode text directly
                         DWORD written;
                         WriteConsoleW(hConsole, wideMessage.data(), static_cast<DWORD>(wideLength - 1), &written, NULL);
                     } else {
-                        // 如果转换失败，回退到ASCII输出
+                        // Fallback to ASCII output if conversion fails
                         DWORD written;
                         WriteConsoleA(hConsole, message.c_str(), static_cast<DWORD>(message.length()), &written, NULL);
                     }
                 }
             }
             
-            // 恢复原始颜色
+            // Restore original color
             SetConsoleTextAttribute(hConsole, originalColor);
         }
     }
     catch (...) {
-        // 忽略控制台输出错误，避免递归异常
+        // Ignore console output errors to avoid recursive exceptions
     }
 }
 
-// 结构化异常处理实现
+// Structured exception handling implementation
 std::string GetSEHExceptionName(DWORD exceptionCode) {
     switch (exceptionCode) {
-        case EXCEPTION_ACCESS_VIOLATION: return "访问冲突";
-        case EXCEPTION_ARRAY_BOUNDS_EXCEEDED: return "数组越界";
-        case EXCEPTION_BREAKPOINT: return "断点异常";
-        case EXCEPTION_DATATYPE_MISALIGNMENT: return "数据类型对齐错误";
-        case EXCEPTION_FLT_DENORMAL_OPERAND: return "浮点数非正规操作数";
-        case EXCEPTION_FLT_DIVIDE_BY_ZERO: return "浮点数除零";
-        case EXCEPTION_FLT_INEXACT_RESULT: return "浮点数结果不精确";
-        case EXCEPTION_FLT_INVALID_OPERATION: return "浮点数无效操作";
-        case EXCEPTION_FLT_OVERFLOW: return "浮点数溢出";
-        case EXCEPTION_FLT_STACK_CHECK: return "浮点数栈检查";
-        case EXCEPTION_FLT_UNDERFLOW: return "浮点数下溢";
-        case EXCEPTION_ILLEGAL_INSTRUCTION: return "非法指令";
-        case EXCEPTION_IN_PAGE_ERROR: return "页面错误";
-        case EXCEPTION_INT_DIVIDE_BY_ZERO: return "整数除零";
-        case EXCEPTION_INT_OVERFLOW: return "整数溢出";
-        case EXCEPTION_INVALID_DISPOSITION: return "无效处置";
-        case EXCEPTION_NONCONTINUABLE_EXCEPTION: return "不可继续异常";
-        case EXCEPTION_PRIV_INSTRUCTION: return "特权指令";
-        case EXCEPTION_SINGLE_STEP: return "单步异常";
-        case EXCEPTION_STACK_OVERFLOW: return "栈溢出";
-        default: return "未知系统异常 (0x" + std::to_string(exceptionCode) + ")";
+        case EXCEPTION_ACCESS_VIOLATION: return "Access Violation";
+        case EXCEPTION_ARRAY_BOUNDS_EXCEEDED: return "Array Bounds Exceeded";
+        case EXCEPTION_BREAKPOINT: return "Breakpoint";
+        case EXCEPTION_DATATYPE_MISALIGNMENT: return "Datatype Misalignment";
+        case EXCEPTION_FLT_DENORMAL_OPERAND: return "Floating-Point Denormal Operand";
+        case EXCEPTION_FLT_DIVIDE_BY_ZERO: return "Floating-Point Divide by Zero";
+        case EXCEPTION_FLT_INEXACT_RESULT: return "Floating-Point Inexact Result";
+        case EXCEPTION_FLT_INVALID_OPERATION: return "Floating-Point Invalid Operation";
+        case EXCEPTION_FLT_OVERFLOW: return "Floating-Point Overflow";
+        case EXCEPTION_FLT_STACK_CHECK: return "Floating-Point Stack Check";
+        case EXCEPTION_FLT_UNDERFLOW: return "Floating-Point Underflow";
+        case EXCEPTION_ILLEGAL_INSTRUCTION: return "Illegal Instruction";
+        case EXCEPTION_IN_PAGE_ERROR: return "In Page Error";
+        case EXCEPTION_INT_DIVIDE_BY_ZERO: return "Integer Divide by Zero";
+        case EXCEPTION_INT_OVERFLOW: return "Integer Overflow";
+        case EXCEPTION_INVALID_DISPOSITION: return "Invalid Disposition";
+        case EXCEPTION_NONCONTINUABLE_EXCEPTION: return "Non-continuable Exception";
+        case EXCEPTION_PRIV_INSTRUCTION: return "Privileged Instruction";
+        case EXCEPTION_SINGLE_STEP: return "Single Step";
+        case EXCEPTION_STACK_OVERFLOW: return "Stack Overflow";
+        default: return "Unknown System Exception (0x" + std::to_string(exceptionCode) + ")";
     }
 }
 
 void SEHTranslator(unsigned int u, EXCEPTION_POINTERS* pExp) {
     std::string exceptionName = GetSEHExceptionName(u);
     std::stringstream ss;
-    ss << "系统级异常: " << exceptionName << " (0x" << std::hex << u << ")";
+    ss << "System-level exception: " << exceptionName << " (0x" << std::hex << u << ")";
     if (pExp && pExp->ExceptionRecord) {
-        ss << " 地址: 0x" << std::hex << pExp->ExceptionRecord->ExceptionAddress;
+        ss << " Address: 0x" << std::hex << pExp->ExceptionRecord->ExceptionAddress;
     }
     
-    // 尝试安全记录日志
+    // Try to log safely
     try {
         if (Logger::IsInitialized()) {
             Logger::Fatal(ss.str());
         } else {
-            // 如果日志系统未初始化，直接输出到控制台
+            // If logger is not initialized, output directly to console
             SafeConsoleOutput("FATAL: " + ss.str() + "\n");
         }
     } catch (...) {
-        // 最后的防线，直接输出
+        // Last resort, direct output
         SafeConsoleOutput("FATAL: " + ss.str() + "\n");
     }
     
     throw std::runtime_error(ss.str());
 }
 
-// 安全退出函数
+// Safe exit function
 void SafeExit(int exitCode) {
     try {
-        Logger::Info("开始程序清理流程");
+        Logger::Info("Starting program cleanup process");
         
-        // 设置退出标志
+        // Set exit flag
         g_shouldExit = true;
         
-        // 清理硬件监控桥接
+        // Cleanup hardware monitor bridge
         try {
             TemperatureWrapper::Cleanup();
-            Logger::Debug("硬件监控桥接清理完成");
+            Logger::Debug("Hardware monitor bridge cleanup complete");
         }
         catch (const std::exception& e) {
-            Logger::Error("清理硬件监控桥接时发生错误: " + std::string(e.what()));
+            Logger::Error("Error during hardware monitor bridge cleanup: " + std::string(e.what()));
         }
         
-        // 清理共享内存
+        // Cleanup shared memory
         try {
             SharedMemoryManager::CleanupSharedMemory();
-            Logger::Debug("共享内存清理完成");
+            Logger::Debug("Shared memory cleanup complete");
         }
         catch (const std::exception& e) {
-            Logger::Error("清理共享内存时发生错误: " + std::string(e.what()));
+            Logger::Error("Error during shared memory cleanup: " + std::string(e.what()));
         }
         
-        // 清理COM
+        // Cleanup COM
         if (g_comInitialized.load()) {
             try {
                 CoUninitialize();
                 g_comInitialized = false;
-                Logger::Debug("COM清理完成");
+                Logger::Debug("COM cleanup complete");
             }
             catch (...) {
-                Logger::Error("清理COM时发生未知错误");
+                Logger::Error("Unknown error during COM cleanup");
             }
         }
         
-        Logger::Info("程序清理完成，退出码: " + std::to_string(exitCode));
+        Logger::Info("Program cleanup complete, exit code: " + std::to_string(exitCode));
         
-        // 给日志系统一点时间完成写入
+        // Give the logger some time to finish writing
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     catch (...) {
-        // 最后的异常处理，避免在清理过程中崩溃
+        // Final exception handler to avoid crashing during cleanup
     }
     
     exit(exitCode);
 }
 
-//辅助函数
-// 硬件名称翻译
+//Helper functions
+// Hardware name translation
 std::string TranslateHardwareName(const std::string& name) {
-    if (name.find("CPU Package") != std::string::npos) return "CPU温度";
-    if (name.find("GPU Core") != std::string::npos) return "GPU温度";
+    if (name.find("CPU Package") != std::string::npos) return "CPU Temperature";
+    if (name.find("GPU Core") != std::string::npos) return "GPU Temperature";
     return name;
 }
 
-// 品牌判断
+// Brand detection
 std::string GetGpuBrand(const std::wstring& name) {
-    if (name.find(L"NVIDIA") != std::wstring::npos) return "NVIDIA";
-    if (name.find(L"AMD") != std::wstring::npos) return "AMD";
-    if (name.find(L"Intel") != std::wstring::npos) return "Intel";
-    return "未知";
+    if (name.find(L"NVIDIA") != std::string::npos) return "NVIDIA";
+    if (name.find(L"AMD") != std::string::npos) return "AMD";
+    if (name.find(L"Intel") != std::string::npos) return "Intel";
+    return "Unknown";
 }
 
-// 网络速度单位
+// Network speed unit
 std::string FormatNetworkSpeed(double speedBps) {
     std::stringstream ss;
     ss << std::fixed << std::setprecision(1);
@@ -300,52 +311,52 @@ std::string FormatNetworkSpeed(double speedBps) {
     return ss.str();
 }
 
-// 时间格式化 - 增强异常处理
+// Time formatting - with enhanced exception handling
 std::string FormatDateTime(const std::chrono::system_clock::time_point& tp) {
     try {
         auto time = std::chrono::system_clock::to_time_t(tp);
         struct tm timeinfo;
-        if (localtime_s(&timeinfo, &time) == 0) {  // 检查返回值
+        if (localtime_s(&timeinfo, &time) == 0) {  // Check return value
             std::stringstream ss;
             ss << std::put_time(&timeinfo, "%Y-%m-%d %H:%M:%S");
             std::string result = ss.str();
             
-            // 验证结果的合理性
-            if (result.length() >= 19 && result.length() <= 25) {  // 基本长度检查
+            // Validate result reasonableness
+            if (result.length() >= 19 && result.length() <= 25) {  // Basic length check
                 return result;
             } else {
-                Logger::Warn("时间格式化结果长度异常: " + std::to_string(result.length()));
+                Logger::Warn("Abnormal length of formatted time result: " + std::to_string(result.length()));
             }
         } else {
-            Logger::Error("localtime_s 调用失败");
+            Logger::Error("localtime_s call failed");
         }
     }
     catch (const std::exception& e) {
-        Logger::Error("时间格式化过程中发生异常: " + std::string(e.what()));
+        Logger::Error("Exception occurred during time formatting: " + std::string(e.what()));
     }
     catch (...) {
-        Logger::Error("时间格式化过程中发生未知异常");
+        Logger::Error("Unknown exception occurred during time formatting");
     }
-    return "时间格式化失败";
+    return "Time formatting failed";
 }
 
 std::string FormatFrequency(double value) {
     try {
-        // 参数验证
+        // Parameter validation
         if (std::isnan(value) || std::isinf(value)) {
-            Logger::Warn("频率值无效: " + std::to_string(value));
+            Logger::Warn("Invalid frequency value: " + std::to_string(value));
             return "N/A";
         }
         
         if (value < 0) {
-            Logger::Warn("频率值为负数: " + std::to_string(value));
+            Logger::Warn("Negative frequency value: " + std::to_string(value));
             return "N/A";
         }
         
-        // 合理性检查 - 频率通常不会超过10GHz
+        // Reasonableness check - frequency usually doesn't exceed 10GHz
         if (value > 10000) {
-            Logger::Warn("频率值异常: " + std::to_string(value) + "MHz");
-            return "异常值";
+            Logger::Warn("Abnormal frequency value: " + std::to_string(value) + "MHz");
+            return "Abnormal Value";
         }
         
         std::stringstream ss;
@@ -360,29 +371,29 @@ std::string FormatFrequency(double value) {
         return ss.str();
     }
     catch (const std::exception& e) {
-        Logger::Error("格式化频率时发生异常: " + std::string(e.what()));
-        return "格式化失败";
+        Logger::Error("Exception occurred while formatting frequency: " + std::string(e.what()));
+        return "Formatting failed";
     }
     catch (...) {
-        Logger::Error("格式化频率时发生未知异常");
-        return "格式化失败";
+        Logger::Error("Unknown exception occurred while formatting frequency");
+        return "Formatting failed";
     }
 }
 
 std::string FormatPercentage(double value) {
     try {
-        // 参数验证
+        // Parameter validation
         if (std::isnan(value) || std::isinf(value)) {
-            Logger::Warn("百分比值无效: " + std::to_string(value));
+            Logger::Warn("Invalid percentage value: " + std::to_string(value));
             return "N/A";
         }
         
-        // 合理性检查 - 百分比通常在0-100之间，允许一些余量
+        // Reasonableness check - percentage is usually between 0-100, with some tolerance
         if (value < -1.0 || value > 105.0) {
-            Logger::Warn("百分比值异常: " + std::to_string(value));
+            Logger::Warn("Abnormal percentage value: " + std::to_string(value));
         }
         
-        // 限制在合理范围内
+        // Clamp to a reasonable range
         if (value < 0) value = 0;
         if (value > 100) value = 100;
         
@@ -391,41 +402,41 @@ std::string FormatPercentage(double value) {
         return ss.str();
     }
     catch (const std::exception& e) {
-        Logger::Error("格式化百分比时发生异常: " + std::string(e.what()));
-        return "格式化失败";
+        Logger::Error("Exception occurred while formatting percentage: " + std::string(e.what()));
+        return "Formatting failed";
     }
     catch (...) {
-        Logger::Error("格式化百分比时发生未知异常");
-        return "格式化失败";
+        Logger::Error("Unknown exception occurred while formatting percentage");
+        return "Formatting failed";
     }
 }
 
 std::string FormatTemperature(double value) {
     try {
-        // 参数验证
+        // Parameter validation
         if (std::isnan(value) || std::isinf(value)) {
-            Logger::Warn("温度值无效: " + std::to_string(value));
+            Logger::Warn("Invalid temperature value: " + std::to_string(value));
             return "N/A";
         }
         
-        // 合理性检查 - 温度通常在-50°C到150°C之间
+        // Reasonableness check - temperature is usually between -50°C and 150°C
         if (value < -50.0 || value > 150.0) {
-            Logger::Warn("温度值异常: " + std::to_string(value) + "°C");
-            if (value < -50.0) return "过低";
-            if (value > 150.0) return "过高";
+            Logger::Warn("Abnormal temperature value: " + std::to_string(value) + "°C");
+            if (value < -50.0) return "Too Low";
+            if (value > 150.0) return "Too High";
         }
         
         std::stringstream ss;
-        ss << static_cast<int>(value) << "°C";  // 显示整数温度
+        ss << static_cast<int>(value) << "°C";  // Display integer temperature
         return ss.str();
     }
     catch (const std::exception& e) {
-        Logger::Error("格式化温度时发生异常: " + std::string(e.what()));
-        return "格式化失败";
+        Logger::Error("Exception occurred while formatting temperature: " + std::string(e.what()));
+        return "Formatting failed";
     }
     catch (...) {
-        Logger::Error("格式化温度时发生未知异常");
-        return "格式化失败";
+        Logger::Error("Unknown exception occurred while formatting temperature");
+        return "Formatting failed";
     }
 }
 
@@ -436,9 +447,9 @@ std::string FormatSize(uint64_t bytes, bool useBinary = true) {
         const double gb = mb * kb;
         const double tb = gb * kb;
 
-        // 参数验证 - 检查是否为最大值（通常表示错误）
+        // Parameter validation - check for max value (usually indicates an error)
         if (bytes == UINT64_MAX) {
-            Logger::Warn("字节数为最大值，可能表示错误状态");
+            Logger::Warn("Byte count is at max value, may indicate an error state");
             return "N/A";
         }
 
@@ -454,12 +465,12 @@ std::string FormatSize(uint64_t bytes, bool useBinary = true) {
         return ss.str();
     }
     catch (const std::exception& e) {
-        Logger::Error("格式化大小时发生异常: " + std::string(e.what()));
-        return "格式化失败";
+        Logger::Error("Exception occurred while formatting size: " + std::string(e.what()));
+        return "Formatting failed";
     }
     catch (...) {
-        Logger::Error("格式化大小时发生未知异常");
-        return "格式化失败";
+        Logger::Error("Unknown exception occurred while formatting size");
+        return "Formatting failed";
     }
 }
 
@@ -472,12 +483,12 @@ std::string FormatDiskUsage(uint64_t used, uint64_t total) {
 }
 
 static void PrintSectionHeader(const std::string& title) {
-    SafeConsoleOutput("\n=== " + title + " ===\n", 14); // 黄色
+    SafeConsoleOutput("\n=== " + title + " ===\n", 14); // Yellow
 }
 
 static void PrintInfoItem(const std::string& label, const std::string& value, int indent = 2) {
     std::string line = std::string(indent, ' ') + label;
-    // 格式化为固定宽度
+    // Format to a fixed width
     if (line.length() < 27) {
         line += std::string(27 - line.length(), ' ');
     }
@@ -505,8 +516,8 @@ class ThreadSafeGpuCache {
 private:
     mutable std::mutex mtx_;
     bool initialized_ = false;
-    std::string cachedGpuName_ = "未检测到GPU";
-    std::string cachedGpuBrand_ = "未知";
+    std::string cachedGpuName_ = "GPU not detected";
+    std::string cachedGpuBrand_ = "Unknown";
     uint64_t cachedGpuMemory_ = 0;
     uint32_t cachedGpuCoreFreq_ = 0;
     bool cachedGpuIsVirtual_ = false;
@@ -517,22 +528,22 @@ public:
         if (initialized_) return;
         
         try {
-            Logger::Info("正在初始化GPU信息");
+            Logger::Info("Initializing GPU information");
             
             GpuInfo gpuInfo(wmiManager);
             const auto& gpus = gpuInfo.GetGpuData();
             
-            // 记录所有检测到的GPU
+            // Log all detected GPUs
             for (const auto& gpu : gpus) {
                 std::string gpuName = WinUtils::WstringToString(gpu.name);
-                Logger::Info("检测到GPU: " + gpuName + 
-                           " (虚拟: " + (gpu.isVirtual ? "是" : "否") + 
-                           ", NVIDIA: " + (gpuName.find("NVIDIA") != std::string::npos ? "是" : "否") + 
-                           ", 集成: " + (gpuName.find("Intel") != std::string::npos ||
-                                       gpuName.find("AMD") != std::string::npos ? "是" : "否") + ")");
+                Logger::Info("Detected GPU: " + gpuName + 
+                           " (Virtual: " + (gpu.isVirtual ? "Yes" : "No") + 
+                           ", NVIDIA: " + (gpuName.find("NVIDIA") != std::string::npos ? "Yes" : "No") + 
+                           ", Integrated: " + (gpuName.find("Intel") != std::string::npos ||
+                                       gpuName.find("AMD") != std::string::npos ? "Yes" : "No") + ")");
             }
             
-            // 优先选择非虚拟GPU
+            // Prioritize non-virtual GPUs
             const GpuInfo::GpuData* selectedGpu = nullptr;
             for (const auto& gpu : gpus) {
                 if (!gpu.isVirtual) {
@@ -541,7 +552,7 @@ public:
                 }
             }
             
-            // 如果没有非虚拟GPU，选择第一个GPU
+            // If no non-virtual GPU, select the first one
             if (!selectedGpu && !gpus.empty()) {
                 selectedGpu = &gpus[0];
             }
@@ -553,19 +564,19 @@ public:
                 cachedGpuCoreFreq_ = static_cast<uint32_t>(selectedGpu->coreClock);
                 cachedGpuIsVirtual_ = selectedGpu->isVirtual;
                 
-                Logger::Info("选择主GPU: " + cachedGpuName_ + 
-                           " (虚拟: " + (cachedGpuIsVirtual_ ? "是" : "否") + ")");
+                Logger::Info("Selected main GPU: " + cachedGpuName_ + 
+                           " (Virtual: " + (cachedGpuIsVirtual_ ? "Yes" : "No") + ")");
             } else {
-                Logger::Warn("未检测到任何GPU");
+                Logger::Warn("No GPU detected");
             }
             
             initialized_ = true;
-            Logger::Info("GPU信息初始化完成，后续循环将使用缓存信息");
+            Logger::Info("GPU information initialization complete, subsequent loops will use cached info");
         }
         catch (const std::exception& e) {
-            Logger::Error("GPU信息初始化失败: " + std::string(e.what()));
-            // 保持默认值
-            initialized_ = true; // 标记为已初始化以避免重复尝试
+            Logger::Error("GPU information initialization failed: " + std::string(e.what()));
+            // Keep default values
+            initialized_ = true; // Mark as initialized to avoid retrying
         }
     }
     
@@ -583,7 +594,7 @@ public:
         std::lock_guard<std::mutex> lock(mtx_);
         return initialized_;
     }
-}; // 添加缺少的分号
+}; // Added missing semicolon
 
 // 主函数 - 控制台模式
 int main(int argc, char* argv[]) {
@@ -597,11 +608,11 @@ int main(int argc, char* argv[]) {
     });
     
     // 设置控制台编码为UTF-8，确保中文显示正确
-    SetConsoleCP(65001);
-    SetConsoleOutputCP(65001);
+    SetConsoleCP(CP_UTF8);
+    SetConsoleOutputCP(CP_UTF8);
     
     // 设置本地化支持UTF-8
-    setlocale(LC_ALL, "en_US.UTF-8");
+    setlocale(LC_ALL, "C.UTF-8");
     
     // 设置控制台信号处理器
     SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
@@ -732,17 +743,6 @@ int main(int argc, char* argv[]) {
         // 初始化循环计数器，减少频繁的日志记录
         int loopCounter = 1; // 从1开始计数，更符合人类习惯
         bool isFirstRun = true; // 首次运行标志
-        
-        // 缓存静态系统信息（只在首次获取）
-        static std::atomic<bool> systemInfoCached{false};
-        static std::string cachedOsVersion;
-        static std::string cachedCpuName;
-        static uint32_t cachedPhysicalCores = 0;
-        static uint32_t cachedLogicalCores = 0;
-        static uint32_t cachedPerformanceCores = 0;
-        static uint32_t cachedEfficiencyCores = 0;
-        static bool cachedHyperThreading = false;
-        static bool cachedVirtualization = false;
         
         // 创建CPU对象一次，重复使用（避免重复初始化性能计数器）- 增强异常处理
         std::unique_ptr<CpuInfo> cpuInfo;
@@ -916,7 +916,7 @@ int main(int argc, char* argv[]) {
 
                     // 修复GPU数组填充 - 添加数据验证和清理
                     sysInfo.gpus.clear();
-                    if (!cachedGpuName.empty() && cachedGpuName != "未检测到GPU") {
+                    if (!cachedGpuName.empty() && cachedGpuName != "GPU not detected") {
                         GPUData gpu;
                         
                         // 初始化GPU结构体以避免垃圾数据
@@ -1120,13 +1120,40 @@ int main(int argc, char* argv[]) {
                             Logger::Debug("收集到 " + std::to_string(disks.size()) + " 个磁盘条目");
                             for (size_t i = 0; i < disks.size(); ++i) {
                                 const auto& disk = disks[i];
-                                Logger::Debug("磁盘 " + std::to_string(i) + ": 标签=" + disk.label + ", 文件系统=" + disk.fileSystem);
+                                Logger::Debug("逻辑磁盘 " + std::to_string(i) + ": 标签=" + disk.label + ", 文件系统=" + disk.fileSystem);
                             }
                         }
                     }
                     // 采集物理磁盘并建立逻辑盘映射
                     if (wmiManager) {
                         DiskInfo::CollectPhysicalDisks(*wmiManager, sysInfo.disks, sysInfo);
+                        if (isFirstRun) {
+                            try {
+                                Logger::Debug("收集到 " + std::to_string(sysInfo.physicalDisks.size()) + " 个物理磁盘");
+                                for (size_t i = 0; i < sysInfo.physicalDisks.size(); ++i) {
+                                    const auto& pd = sysInfo.physicalDisks[i];
+                                    // 拼接盘符
+                                    std::wstring letters;
+                                    for (int k = 0; k < pd.logicalDriveCount; ++k) {
+                                        if (k) letters += L" ";
+                                        letters += static_cast<wchar_t>(pd.logicalDriveLetters[k]);
+                                        letters += L":";
+                                    }
+                                    // 容量（格式化为字符串后转 wstring）
+                                    std::wstring capW = WinUtils::StringToWstring(FormatSize(pd.capacity));
+                                    std::wstringstream wss;
+                                    wss << L"物理磁盘 " << i
+                                        << L": 型号=" << pd.model
+                                        << L", 接口=" << pd.interfaceType
+                                        << L", 类型=" << pd.diskType
+                                        << L", 容量=" << capW
+                                        << L", 盘符=[" << letters << L"]";
+                                    Logger::Debug(wss.str());
+                                }
+                            } catch (...) {
+                                // 忽略日志拼接异常
+                            }
+                        }
                     }
                 }
                 catch (const std::bad_alloc& e) {
@@ -1185,10 +1212,9 @@ int main(int argc, char* argv[]) {
                     }
                     
                     // 网络速度验证
-                    if (sysInfo.networkAdapterSpeed > 1000000000000ULL) { // 大于1TB/s可能异常
+                    if (sysInfo.networkAdapterSpeed > 1000000000000ULL) // 大于1TB/s可能异常
                         Logger::Warn("网络适配器速度异常: " + std::to_string(sysInfo.networkAdapterSpeed));
                         sysInfo.networkAdapterSpeed = 0;
-                    }
                 }
                 catch (const std::exception& e) {
                     Logger::Error("数据验证过程中发生异常: " + std::string(e.what()));
@@ -1401,5 +1427,6 @@ char GetKeyPress() {
     }
     return 0;
 }
+
 
 
