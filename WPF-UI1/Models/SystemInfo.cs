@@ -15,6 +15,9 @@ namespace WPF_UI1.Models
         public int EfficiencyCores { get; set; }
         public double PerformanceCoreFreq { get; set; }
         public double EfficiencyCoreFreq { get; set; }
+        // 新增：CPU 基准/即时频率（MHz）
+        public double CpuBaseFrequencyMHz { get; set; }
+        public double CpuCurrentFrequencyMHz { get; set; }
         public bool HyperThreading { get; set; }
         public bool Virtualization { get; set; }
         // 内存信息

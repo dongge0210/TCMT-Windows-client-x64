@@ -100,6 +100,8 @@ struct SystemInfo {
     int efficiencyCores;
     double performanceCoreFreq;
     double efficiencyCoreFreq;
+    double cpuBaseFrequencyMHz = 0.0; // 新增：CPU 基准频率（MHz）
+    double cpuCurrentFrequencyMHz = 0.0; // 新增：CPU 即时频率（MHz）
     bool hyperThreading;
     bool virtualization;
     uint64_t totalMemory;
@@ -137,6 +139,8 @@ struct SharedMemoryBlock {
     int efficiencyCores;      // 能效核心数
     double pCoreFreq;         // 性能核心频率（GHz）
     double eCoreFreq;         // 能效核心频率（GHz）
+    double cpuBaseFrequencyMHz; // 新增：CPU 基准频率（MHz）
+    double cpuCurrentFrequencyMHz; // 新增：CPU 即时频率（MHz）
     bool hyperThreading;      // 超线程是否启用
     bool virtualization;      // 虚拟化是否启用
     uint64_t totalMemory;     // 总内存（字节）

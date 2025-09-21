@@ -37,6 +37,9 @@ namespace WPF_UI1.Services
             public int efficiencyCores;
             public double pCoreFreq;
             public double eCoreFreq;
+            // 新增：CPU 基准/即时频率（MHz）
+            public double cpuBaseFrequencyMHz;
+            public double cpuCurrentFrequencyMHz;
             [MarshalAs(UnmanagedType.I1)] public bool hyperThreading;
             [MarshalAs(UnmanagedType.I1)] public bool virtualization;
             public ulong totalMemory;
@@ -284,6 +287,9 @@ namespace WPF_UI1.Services
                 systemInfo.CpuUsage = sharedData.cpuUsage;
                 systemInfo.PerformanceCoreFreq = sharedData.pCoreFreq;
                 systemInfo.EfficiencyCoreFreq = sharedData.eCoreFreq;
+                // 新增：CPU 基准/即时频率
+                systemInfo.CpuBaseFrequencyMHz = sharedData.cpuBaseFrequencyMHz;
+                systemInfo.CpuCurrentFrequencyMHz = sharedData.cpuCurrentFrequencyMHz;
                 systemInfo.HyperThreading = sharedData.hyperThreading;
                 systemInfo.Virtualization = sharedData.virtualization;
                 systemInfo.TotalMemory = sharedData.totalMemory;

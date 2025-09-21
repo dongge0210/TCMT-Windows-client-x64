@@ -868,6 +868,9 @@ int main(int argc, char* argv[]) {
                         sysInfo.cpuUsage = cpuInfo->GetUsage();
                         sysInfo.performanceCoreFreq = cpuInfo->GetLargeCoreSpeed();
                         sysInfo.efficiencyCoreFreq = cpuInfo->GetSmallCoreSpeed() * 0.8;
+                        // 新增：CPU 基准/即时频率（MHz）
+                        sysInfo.cpuBaseFrequencyMHz = cpuInfo->GetBaseFrequencyMHz();
+                        sysInfo.cpuCurrentFrequencyMHz = cpuInfo->GetCurrentFrequencyMHz();
                         sysInfo.cpuUsageSampleIntervalMs = cpuInfo->GetLastSampleIntervalMs();
                     }
                 }
@@ -1432,6 +1435,10 @@ char GetKeyPress() {
     }
     return 0;
 }
+
+
+
+
 
 
 

@@ -38,6 +38,7 @@
 // Fix the include path case sensitivity
 #include "../Utils/WinUtils.h"
 #include "../Utils/Logger.h"
+#include "../Utils/WmiManager.h"
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -286,6 +287,9 @@ void SharedMemoryManager::WriteToSharedMemory(const SystemInfo& systemInfo) {
         pBuffer->efficiencyCores = systemInfo.efficiencyCores;
         pBuffer->pCoreFreq = systemInfo.performanceCoreFreq;
         pBuffer->eCoreFreq = systemInfo.efficiencyCoreFreq;
+        // 新增：CPU 基准/即时频率（MHz）
+        pBuffer->cpuBaseFrequencyMHz = systemInfo.cpuBaseFrequencyMHz;
+        pBuffer->cpuCurrentFrequencyMHz = systemInfo.cpuCurrentFrequencyMHz;
         pBuffer->hyperThreading = systemInfo.hyperThreading;
         pBuffer->virtualization = systemInfo.virtualization;
 

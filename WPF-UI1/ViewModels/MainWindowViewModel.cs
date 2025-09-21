@@ -65,6 +65,13 @@ namespace WPF_UI1.ViewModels
 
         [ObservableProperty]
         private double cpuTemperature;
+
+        // 新增：CPU 基准/即时频率（MHz）
+        [ObservableProperty]
+        private double cpuBaseFrequencyMHz;
+
+        [ObservableProperty]
+        private double cpuCurrentFrequencyMHz;
         #endregion
 
         #region Memory Properties
@@ -316,6 +323,9 @@ namespace WPF_UI1.ViewModels
                 HyperThreading = systemInfo.HyperThreading;
                 Virtualization = systemInfo.Virtualization;
                 CpuTemperature = ValidateAndSetDouble(systemInfo.CpuTemperature, "CPU温度");
+                // 新增：频率
+                CpuBaseFrequencyMHz = ValidateAndSetDouble(systemInfo.CpuBaseFrequencyMHz, "CPU基准频率");
+                CpuCurrentFrequencyMHz = ValidateAndSetDouble(systemInfo.CpuCurrentFrequencyMHz, "CPU即时频率");
 
                 // 更新内存信息 - 添加数据验证
                 TotalMemory = systemInfo.TotalMemory > 0 ? FormatBytes(systemInfo.TotalMemory) : "未检测到";
@@ -398,7 +408,7 @@ namespace WPF_UI1.ViewModels
         {
             try
             {
-                // 先建立 物理磁盘序列号 -> 现有View 映射，便于增量更新
+                // 先建立 物理磁盘序列号 -> 现有View 显映射，便于增量更新
                 var map = PhysicalDisks.ToDictionary(p => p.Disk.SerialNumber, p => p);
 
                 // 标记仍存在的

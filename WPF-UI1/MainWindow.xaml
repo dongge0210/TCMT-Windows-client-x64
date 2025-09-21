@@ -133,6 +133,8 @@
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
                                 </Grid.RowDefinitions>
 
                                 <TextBlock Grid.Row="0" Grid.Column="0" Text="名称:" Margin="0,5"/>
@@ -157,21 +159,35 @@
                                     </TextBlock.Text>
                                 </TextBlock>
 
-                                <TextBlock Grid.Row="6" Grid.Column="0" Text="超线程:" Margin="0,5"/>
-                                <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding HyperThreading, Converter={StaticResource BooleanToYesNoConverter}}" Margin="10,5"/>
+                                <TextBlock Grid.Row="6" Grid.Column="0" Text="CPU基准频率:" Margin="0,5"/>
+                                <TextBlock Grid.Row="6" Grid.Column="1" Margin="10,5">
+                                    <TextBlock.Text>
+                                        <Binding Path="CpuBaseFrequencyMHz" StringFormat="{}{0:F0} MHz"/>
+                                    </TextBlock.Text>
+                                </TextBlock>
 
-                                <TextBlock Grid.Row="7" Grid.Column="0" Text="虚拟化:" Margin="0,5"/>
-                                <TextBlock Grid.Row="7" Grid.Column="1" Text="{Binding Virtualization, Converter={StaticResource BooleanToSupportConverter}}" Margin="10,5"/>
+                                <TextBlock Grid.Row="7" Grid.Column="0" Text="CPU即时频率:" Margin="0,5"/>
+                                <TextBlock Grid.Row="7" Grid.Column="1" Margin="10,5">
+                                    <TextBlock.Text>
+                                        <Binding Path="CpuCurrentFrequencyMHz" StringFormat="{}{0:F0} MHz"/>
+                                    </TextBlock.Text>
+                                </TextBlock>
 
-                                <TextBlock Grid.Row="8" Grid.Column="0" Text="CPU温度:" Margin="0,5"/>
-                                <TextBlock Grid.Row="8" Grid.Column="1" Margin="10,5">
+                                <TextBlock Grid.Row="8" Grid.Column="0" Text="超线程:" Margin="0,5"/>
+                                <TextBlock Grid.Row="8" Grid.Column="1" Text="{Binding HyperThreading, Converter={StaticResource BooleanToYesNoConverter}}" Margin="10,5"/>
+
+                                <TextBlock Grid.Row="9" Grid.Column="0" Text="虚拟化:" Margin="0,5"/>
+                                <TextBlock Grid.Row="9" Grid.Column="1" Text="{Binding Virtualization, Converter={StaticResource BooleanToSupportConverter}}" Margin="10,5"/>
+
+                                <TextBlock Grid.Row="10" Grid.Column="0" Text="CPU温度:" Margin="0,5"/>
+                                <TextBlock Grid.Row="10" Grid.Column="1" Margin="10,5">
                                     <TextBlock.Text>
                                         <Binding Path="CpuTemperature" StringFormat="{}{0:F1}℃"/>
                                     </TextBlock.Text>
                                 </TextBlock>
 
-                                <TextBlock Grid.Row="9" Grid.Column="0" Text="采样间隔:" Margin="0,5"/>
-                                <TextBlock Grid.Row="9" Grid.Column="1" Margin="10,5">
+                                <TextBlock Grid.Row="11" Grid.Column="0" Text="采样间隔:" Margin="0,5"/>
+                                <TextBlock Grid.Row="11" Grid.Column="1" Margin="10,5">
                                     <TextBlock.Text>
                                         <Binding Path="CpuUsageSampleIntervalMs" StringFormat="{}{0:F0} ms"/>
                                     </TextBlock.Text>

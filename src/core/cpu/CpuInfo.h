@@ -24,13 +24,20 @@ public:
     // 新增：获取最近一次 CPU 使用率采样间隔（毫秒）
     double GetLastSampleIntervalMs() const { return lastSampleIntervalMs; }
 
+    // 新增：CPU 基准/即时频率（MHz）
+    double GetBaseFrequencyMHz() const;     
+    double GetCurrentFrequencyMHz() const;  
+
 private:
     void DetectCores();
     void InitializeCounter();
+    void InitializeFrequencyCounter();
     void CleanupCounter();
+    void CleanupFrequencyCounter();
     void UpdateCoreSpeeds();             // 新增：更新核心频率
     std::string GetNameFromRegistry();
     double updateUsage();
+    double updateInstantFrequencyMHz();
 
     // 基本信息
     std::string cpuName;
@@ -49,8 +56,15 @@ private:
     DWORD prevSampleTick = 0;            // 上一次之前的 Tick
     double lastSampleIntervalMs = 0.0;   // 最近一次采样间隔(毫秒)
 
-    // PDH 计数器相关
-    PDH_HQUERY queryHandle;
-    PDH_HCOUNTER counterHandle;
+    // PDH 计数器相关（使用率）
+    PDH_HQUERY queryHandle{};
+    PDH_HCOUNTER counterHandle{};
     bool counterInitialized;
+
+    // PDH 计数器相关（频率 MHz）
+    PDH_HQUERY freqQueryHandle{};
+    PDH_HCOUNTER freqCounterHandle{};
+    bool freqCounterInitialized = false;
+    DWORD lastFreqTick = 0;
+    double cachedInstantMHz = 0.0;
 };
