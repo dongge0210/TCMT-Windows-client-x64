@@ -1,4 +1,6 @@
 name: Sync to Gitee and GitLab
+permissions:
+  contents: read
 
 on:
   push:
@@ -34,6 +36,3 @@ jobs:
       - name: Push to GitLab
         run: |
           git push gitlab T1-F-P --force
-
-      - name: generate-breakout-game-from-github-contribution-graph
-        uses: cyprieng/github-breakout@v1.2.1

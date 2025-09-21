@@ -1,0 +1,15 @@
+name: Games
+
+on: [push]
+
+jobs:
+  breakout:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 生成打砖块游戏
+        uses: cyprieng/github-breakout@v1.2.1
+        with:
+          github_username: dongge0210
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          output_path: breakout.html
