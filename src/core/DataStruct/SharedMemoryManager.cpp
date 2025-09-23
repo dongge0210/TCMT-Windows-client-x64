@@ -417,6 +417,32 @@ void SharedMemoryManager::WriteToSharedMemory(const SystemInfo& systemInfo) {
         pBuffer->gpuTemperature = systemInfo.gpuTemperature;
         pBuffer->cpuUsageSampleIntervalMs = systemInfo.cpuUsageSampleIntervalMs;
 
+        // TPM信息
+        pBuffer->hasTpm = systemInfo.hasTpm;
+        if (systemInfo.hasTpm) {
+            SafeCopyWideString(pBuffer->tpm.manufacturerName, 128, WinUtils::StringToWstring(systemInfo.tpmManufacturer));
+            SafeCopyWideString(pBuffer->tpm.manufacturerId, 32, WinUtils::StringToWstring(systemInfo.tpmManufacturerId));
+            SafeCopyWideString(pBuffer->tpm.version, 32, WinUtils::StringToWstring(systemInfo.tpmVersion));
+            SafeCopyWideString(pBuffer->tpm.firmwareVersion, 32, WinUtils::StringToWstring(systemInfo.tpmFirmwareVersion));
+            SafeCopyWideString(pBuffer->tpm.status, 64, WinUtils::StringToWstring(systemInfo.tpmStatus));
+            SafeCopyWideString(pBuffer->tpm.errorMessage, 256, WinUtils::StringToWstring(systemInfo.tpmErrorMessage));
+            SafeCopyWideString(pBuffer->tpm.detectionMethod, 64, WinUtils::StringToWstring(systemInfo.tpmDetectionMethod));
+            pBuffer->tpm.wmiDetectionWorked = systemInfo.tpmWmiDetectionWorked;
+            pBuffer->tpm.tbsDetectionWorked = systemInfo.tpmTbsDetectionWorked;
+            pBuffer->tpm.isEnabled = systemInfo.tpmEnabled;
+            pBuffer->tpm.isReady = systemInfo.tpmReady;
+            pBuffer->tpm.isActivated = systemInfo.tpmIsActivated;
+            pBuffer->tpm.isOwned = systemInfo.tpmIsOwned;
+            pBuffer->tpm.tbsAvailable = systemInfo.tpmTbsAvailable;
+            pBuffer->tpm.physicalPresenceRequired = systemInfo.tpmPhysicalPresenceRequired;
+            pBuffer->tpm.specVersion = systemInfo.tpmSpecVersion;
+            pBuffer->tpm.tbsVersion = systemInfo.tpmTbsVersion;
+        } else {
+            memset(&pBuffer->tpm, 0, sizeof(pBuffer->tpm));
+        }
+
+        GetSystemTime(&pBuffer->lastUpdate);
+        Logger::Trace("成功写入系统/磁盘/SMART 信息到共享内存");
     } catch (const std::exception& e) {
         lastError = std::string("WriteToSharedMemory 中的异常: ") + e.what();
         Logger::Error(lastError);

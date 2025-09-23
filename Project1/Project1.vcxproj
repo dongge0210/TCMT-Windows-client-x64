@@ -177,6 +177,24 @@ _WINSOCK_DEPRECATED_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefiniti
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="..\src\core\cpu\CpuInfo.h" />
+    <ClInclude Include="..\src\core\DataStruct\DataStruct.h" />
+    <ClInclude Include="..\src\core\DataStruct\SharedMemoryManager.h" />
+    <ClInclude Include="..\src\core\disk\DiskInfo.h" />
+    <ClInclude Include="..\src\core\gpu\GpuInfo.h" />
+    <ClInclude Include="..\src\core\memory\MemoryInfo.h" />
+    <ClInclude Include="..\src\core\network\NetworkAdapter.h" />
+    <ClInclude Include="..\src\core\os\OSInfo.h" />
+    <ClInclude Include="..\src\core\tpm\TpmInfo.h" />
+    <ClInclude Include="..\src\core\temperature\TemperatureWrapper.h" />
+    <ClInclude Include="..\src\core\Utils\LibreHardwareMonitorBridge.h" />
+    <ClInclude Include="..\src\core\Utils\Logger.h" />
+    <ClInclude Include="..\src\core\Utils\stdafx.h" />
+    <ClInclude Include="..\src\core\Utils\TimeUtils.h" />
+    <ClInclude Include="..\src\core\Utils\WinUtils.h" />
+    <ClInclude Include="..\src\core\Utils\WMIManager.h" />
+  </ItemGroup>
+  <ItemGroup>
     <ClCompile Include="..\src\core\cpu\CpuInfo.cpp" />
     <ClCompile Include="..\src\core\DataStruct\SharedMemoryManager.cpp" />
     <ClCompile Include="..\src\core\disk\DiskInfo.cpp" />
@@ -184,6 +202,7 @@ _WINSOCK_DEPRECATED_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefiniti
     <ClCompile Include="..\src\core\memory\MemoryInfo.cpp" />
     <ClCompile Include="..\src\core\network\NetworkAdapter.cpp" />
     <ClCompile Include="..\src\core\os\OSInfo.cpp" />
+    <ClCompile Include="..\src\core\tpm\TpmInfo.cpp" />
     <ClCompile Include="..\src\core\temperature\TemperatureWrapper.cpp">
       <CompileAsManaged Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</CompileAsManaged>
       <CompileAsManaged Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</CompileAsManaged>
