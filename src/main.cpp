@@ -40,7 +40,6 @@
 #include "core/memory/MemoryInfo.h"
 #include "core/network/NetworkAdapter.h"
 #include "core/os/OSInfo.h"
-#include "core/tpm/TpmInfo.h"  // 新增：TPM信息检测
 #include "core/utils/Logger.h"
 #include "core/utils/TimeUtils.h"
 #include "core/utils/WinUtils.h"
@@ -49,6 +48,7 @@
 #include "core/DataStruct/DataStruct.h"
 #include "core/DataStruct/SharedMemoryManager.h"  // Include the new shared memory manager
 #include "core/temperature/TemperatureWrapper.h"  // Use TemperatureWrapper instead of directly calling LibreHardwareMonitorBridge
+#include "core/tpm/TpmInfo.h"  // TPM detection (TBS primary, WMI fallback)
 
 #pragma comment(lib, "kernel32.lib")
 #pragma comment(lib, "user32.lib")
@@ -237,7 +237,7 @@ void SafeExit(int exitCode) {
         // Cleanup hardware monitor bridge
         try {
             TemperatureWrapper::Cleanup();
-            Logger::Debug("Hardware monitor bridge cleanup complete");
+            // removed noisy TemperatureWrapper debug log
         }
         catch (const std::exception& e) {
             Logger::Error("Error during hardware monitor bridge cleanup: " + std::string(e.what()));
@@ -732,7 +732,7 @@ int main(int argc, char* argv[]) {
         // 初始化硬件监控桥接
         try {
             TemperatureWrapper::Initialize();
-            Logger::Debug("硬件监控桥接初始化成功");
+            // Logger::Debug("硬件监控桥接初始化成功"); // remove noisy debug
         }
         catch (const std::exception& e) {
             Logger::Error("硬件监控桥接初始化失败: " + std::string(e.what()));
@@ -770,10 +770,6 @@ int main(int argc, char* argv[]) {
         
         // 线程安全的GPU缓存
         ThreadSafeGpuCache gpuCache;
-        
-        // TPM 重试计数
-        static int tpmRetryCounter = 0; // TPM 重试计数
-        static const int TPM_MAX_RETRY = 10; // 最多重试次数（初始化后前10轮）
         
         while (!g_shouldExit.load()) {
             // TPM缓存静态局部变量（首次进入循环时初始化一次）
@@ -846,78 +842,6 @@ int main(int argc, char* argv[]) {
                             cachedVirtualization = cpuInfo->IsVirtualizationEnabled();
                         }
                         
-                        // TPM信息检测（静态信息，只在初始化时获取）
-                        if (!tpmCacheInitialized) {
-                            try {
-                                Logger::Info("正在检测TPM信息");
-                                TpmInfo tpmInfo(*wmiManager);
-                                const auto& tpmData = tpmInfo.GetTpmData();
-                                if (tpmInfo.HasTpm()) {
-                                    ::cachedHasTpm = true;
-                                    ::cachedTpmManufacturer = WinUtils::WstringToString(tpmData.manufacturerName);
-                                    ::cachedTpmManufacturerId = WinUtils::WstringToString(tpmData.manufacturerId);
-                                    ::cachedTpmVersion = WinUtils::WstringToString(tpmData.version);
-                                    ::cachedTpmFirmwareVersion = WinUtils::WstringToString(tpmData.firmwareVersion);
-                                    ::cachedTpmStatus = WinUtils::WstringToString(tpmData.status);
-                                    ::cachedTpmEnabled = tpmData.isEnabled;
-                                    ::cachedTpmIsActivated = tpmData.isActivated;
-                                    ::cachedTpmIsOwned = tpmData.isOwned;
-                                    ::cachedTpmReady = tpmData.isReady;
-                                    ::cachedTpmTbsAvailable = tpmData.tbsAvailable;
-                                    ::cachedTpmPhysicalPresenceRequired = tpmData.physicalPresenceRequired;
-                                    ::cachedTpmSpecVersion = tpmData.specVersion;
-                                    ::cachedTpmTbsVersion = tpmData.tbsVersion;
-                                    ::cachedTpmErrorMessage = WinUtils::WstringToString(tpmData.errorMessage);
-                                    Logger::Info("TPM检测成功: " + ::cachedTpmManufacturer + " v" + ::cachedTpmVersion +
-                                                 " (状态: " + ::cachedTpmStatus + ")");
-                                } else {
-                                    ::cachedTmpDetectionMethod = WinUtils::WstringToString(tpmData.detectionMethod);
-                                    ::cachedTmpWmiDetectionWorked = tpmData.wmiDetectionWorked;
-                                    ::cachedTmpTbsDetectionWorked = tpmData.tbsDetectionWorked;
-                                    // 未检测到TPM，缓存错误/状态信息
-                                    ::cachedHasTpm = false;
-                                    ::cachedTpmManufacturer = "未检测到TPM";
-                                    ::cachedTpmManufacturerId = "";
-                                    ::cachedTpmVersion = "-";
-                                    ::cachedTpmFirmwareVersion = "";
-                                    ::cachedTpmStatus = "未检测到";
-                                    ::cachedTpmEnabled = false;
-                                    ::cachedTpmIsActivated = false;
-                                    ::cachedTpmIsOwned = false;
-                                    ::cachedTpmReady = false;
-                                    ::cachedTpmTbsAvailable = tpmData.tbsAvailable;
-                                    ::cachedTpmPhysicalPresenceRequired = tpmData.physicalPresenceRequired;
-                                    ::cachedTpmSpecVersion = tpmData.specVersion;
-                                    ::cachedTpmTbsVersion = tpmData.tbsVersion;
-                                    ::cachedTpmErrorMessage = WinUtils::WstringToString(tpmData.errorMessage);
-                                    if (::cachedTpmErrorMessage.empty()) {
-                                        ::cachedTpmErrorMessage = "未检测到TPM (WMI/TBS)";
-                                    }
-                                    Logger::Info("未检测到TPM或TPM不可用");
-                                }
-                                tpmCacheInitialized = true;
-                            }
-                            catch (const std::exception& e) {
-                                Logger::Error("TPM检测失败: " + std::string(e.what()));
-                                ::cachedHasTpm = false;
-                                ::cachedTpmManufacturer = "未知";
-                                ::cachedTpmManufacturerId = "";
-                                ::cachedTpmVersion = "未知";
-                                ::cachedTpmFirmwareVersion = "";
-                                ::cachedTpmStatus = "检测失败";
-                                ::cachedTpmEnabled = false;
-                                ::cachedTpmIsActivated = false;
-                                ::cachedTpmIsOwned = false;
-                                ::cachedTpmReady = false;
-                                ::cachedTpmTbsAvailable = false;
-                                ::cachedTpmPhysicalPresenceRequired = false;
-                                ::cachedTpmSpecVersion = 0;
-                                ::cachedTpmTbsVersion = 0;
-                                ::cachedTpmErrorMessage = e.what();
-                                tpmCacheInitialized = true;
-                            }
-                        }
-                        
                         systemInfoCached = true;
                         Logger::Info("系统信息初始化完成");
                     }
@@ -939,62 +863,6 @@ int main(int argc, char* argv[]) {
                 sysInfo.efficiencyCores = cachedEfficiencyCores;
                 sysInfo.hyperThreading = cachedHyperThreading;
                 sysInfo.virtualization = cachedVirtualization;
-                
-                // 使用缓存的TPM信息
-                sysInfo.hasTpm = ::cachedHasTpm;
-                sysInfo.tpmManufacturer = ::cachedTpmManufacturer;
-                sysInfo.tpmManufacturerId = ::cachedTpmManufacturerId;
-                sysInfo.tpmVersion = ::cachedTpmVersion;
-                sysInfo.tpmFirmwareVersion = ::cachedTpmFirmwareVersion;
-                sysInfo.tpmStatus = ::cachedTpmStatus;
-                sysInfo.tpmEnabled = ::cachedTpmEnabled;
-                sysInfo.tpmIsActivated = ::cachedTpmIsActivated;
-                sysInfo.tpmIsOwned = ::cachedTpmIsOwned;
-                sysInfo.tpmReady = ::cachedTpmReady;
-                sysInfo.tpmTbsAvailable = ::cachedTpmTbsAvailable;
-                sysInfo.tpmPhysicalPresenceRequired = ::cachedTpmPhysicalPresenceRequired;
-                sysInfo.tpmSpecVersion = ::cachedTpmSpecVersion;
-                sysInfo.tpmTbsVersion = ::cachedTpmTbsVersion;
-                sysInfo.tpmErrorMessage = ::cachedTpmErrorMessage;
-                sysInfo.tmpDetectionMethod = ::cachedTmpDetectionMethod;
-                sysInfo.tmpWmiDetectionWorked = ::cachedTmpWmiDetectionWorked;
-                sysInfo.tmpTbsDetectionWorked = ::cachedTmpTbsDetectionWorked;
-
-                // 如首次检测失败，尝试有限次数重试（避免一次临时失败导致一直显示未检测）
-                if (!::cachedHasTpm && tpmCacheInitialized && tpmRetryCounter < TPM_MAX_RETRY) {
-                    tpmRetryCounter++;
-                    try {
-                        TpmInfo tpmInfo(*wmiManager);
-                        const auto& tpmData = tpmInfo.GetTpmData();
-                        if (tpmInfo.HasTpm()) {
-                            ::cachedHasTpm = true;
-                            ::cachedTpmManufacturer = WinUtils::WstringToString(tpmData.manufacturerName);
-                            ::cachedTpmManufacturerId = WinUtils::WstringToString(tpmData.manufacturerId);
-                            ::cachedTpmVersion = WinUtils::WstringToString(tpmData.version);
-                            ::cachedTpmFirmwareVersion = WinUtils::WstringToString(tpmData.firmwareVersion);
-                            ::cachedTpmStatus = WinUtils::WstringToString(tpmData.status);
-                            ::cachedTpmEnabled = tpmData.isEnabled;
-                            ::cachedTpmIsActivated = tpmData.isActivated;
-                            ::cachedTpmIsOwned = tpmData.isOwned;
-                            ::cachedTpmReady = tpmData.isReady;
-                            ::cachedTpmTbsAvailable = tpmData.tbsAvailable;
-                            ::cachedTpmPhysicalPresenceRequired = tpmData.physicalPresenceRequired;
-                            ::cachedTpmSpecVersion = tpmData.specVersion;
-                            ::cachedTpmTbsVersion = tpmData.tbsVersion;
-                            ::cachedTpmErrorMessage = WinUtils::WstringToString(tpmData.errorMessage);
-                            Logger::Info("TPM重试第" + std::to_string(tpmRetryCounter) + "次成功");
-                        } else if (tpmRetryCounter == TPM_MAX_RETRY) {
-                            ::cachedTpmErrorMessage = WinUtils::WstringToString(tpmData.errorMessage);
-                            if (::cachedTpmErrorMessage.empty()) ::cachedTpmErrorMessage = "多次重试仍未检测到TPM";
-                            Logger::Warn("TPM多次重试仍未检测到，将停止重试");
-                        }
-                    } catch (const std::exception& e) {
-                        if (tpmRetryCounter == TPM_MAX_RETRY) {
-                            ::cachedTpmErrorMessage = e.what();
-                            Logger::Warn(std::string("TPM重试仍失败：") + e.what());
-                        }
-                    }
-                }
 
                 // 动态CPU信息（每次循环都需要获取）
                 try {
@@ -1214,14 +1082,6 @@ int main(int argc, char* argv[]) {
                             sysInfo.temperatures.push_back(temp);
                         }
                     }
-                    if (isFirstRun) {
-                        Logger::Debug("收集到 " + std::to_string(temperatures.size()) + " 个温度读数");
-                        // 添加详细的温度传感器信息输出
-                        for (const auto& temp : sysInfo.temperatures) {
-                            Logger::Debug("温度传感器: " + temp.first + " = " + std::to_string(temp.second) + "°C");
-                        }
-                        Logger::Debug("CPU温度: " + std::to_string(sysInfo.cpuTemperature) + ", GPU温度: " + std::to_string(sysInfo.gpuTemperature));
-                    }
                 }
                 catch (const std::bad_alloc& e) {
                     Logger::Error("获取温度数据失败 - 内存不足: " + std::string(e.what()));
@@ -1244,75 +1104,58 @@ int main(int argc, char* argv[]) {
                     sysInfo.gpuTemperature = 0;
                 }
 
-                // 添加磁盘信息采集（每次循环都获取以确保数据实时性）
+                // 采集TPM信息（TBS优先，WMI补充），并添加Debug日志
                 try {
-                    DiskInfo diskInfo;
-                    auto disks = diskInfo.GetDisks();
-                    if (disks.size() > 8) {
-                        Logger::Error("磁盘数量超过最大允许值（8）。跳过磁盘数据更新。");
-                        sysInfo.disks.clear();
-                    } else {
-                        sysInfo.disks = disks;
-                        if (isFirstRun) {
-                            Logger::Debug("收集到 " + std::to_string(disks.size()) + " 个磁盘条目");
-                            for (size_t i = 0; i < disks.size(); ++i) {
-                                const auto& disk = disks[i];
-                                // 避免混合编码：将 UTF-8 字段转换为宽字串并用宽日志输出
-                                std::wstring labelW = WinUtils::Utf8ToWstring(disk.label);
-                                std::wstring fsW = WinUtils::Utf8ToWstring(disk.fileSystem);
-                                std::wstringstream wss;
-                                wss << L"逻辑磁盘 " << i << L": 标签=" << labelW << L", 文件系统=" << fsW;
-                                Logger::Debug(wss.str());
-                            }
-                        }
+                    TpmInfo tpm(*wmiManager);
+                    const auto& td = tpm.GetTpmData();
+
+                    sysInfo.hasTpm = tpm.HasTpm();
+                    sysInfo.tpmManufacturer = WinUtils::WstringToString(td.manufacturerName);
+                    sysInfo.tpmManufacturerId = WinUtils::WstringToString(td.manufacturerId);
+                    sysInfo.tpmVersion = WinUtils::WstringToString(td.version);
+                    sysInfo.tpmFirmwareVersion = WinUtils::WstringToString(td.firmwareVersion);
+                    sysInfo.tpmStatus = WinUtils::WstringToString(td.status);
+                    sysInfo.tpmEnabled = td.isEnabled;
+                    sysInfo.tpmIsActivated = td.isActivated;
+                    sysInfo.tpmIsOwned = td.isOwned;
+                    sysInfo.tpmReady = td.isReady;
+                    sysInfo.tpmTbsAvailable = td.tbsAvailable;
+                    sysInfo.tpmPhysicalPresenceRequired = td.physicalPresenceRequired;
+                    sysInfo.tpmSpecVersion = td.specVersion;
+                    sysInfo.tpmTbsVersion = td.tbsVersion;
+                    sysInfo.tpmErrorMessage = WinUtils::WstringToString(td.errorMessage);
+                    sysInfo.tmpDetectionMethod = WinUtils::WstringToString(td.detectionMethod);
+                    sysInfo.tmpWmiDetectionWorked = td.wmiDetectionWorked;
+                    sysInfo.tmpTbsDetectionWorked = td.tbsDetectionWorked;
+
+                    if (isFirstRun) {
+                        std::stringstream ss;
+                        ss << "TPM: hasTpm=" << (sysInfo.hasTpm ? "true" : "false")
+                           << ", method=" << sysInfo.tmpDetectionMethod
+                           << ", manufacturer=" << sysInfo.tpmManufacturer
+                           << ", mfrId=" << sysInfo.tpmManufacturerId
+                           << ", version=" << sysInfo.tpmVersion
+                           << ", fw=" << sysInfo.tpmFirmwareVersion
+                           << ", status=" << sysInfo.tpmStatus
+                           << ", enabled=" << (sysInfo.tpmEnabled ? "true" : "false")
+                           << ", activated=" << (sysInfo.tpmIsActivated ? "true" : "false")
+                           << ", owned=" << (sysInfo.tpmIsOwned ? "true" : "false")
+                           << ", ready=" << (sysInfo.tpmReady ? "true" : "false")
+                           << ", tbsAvail=" << (sysInfo.tpmTbsAvailable ? "true" : "false")
+                           << ", tbsVer=" << sysInfo.tpmTbsVersion
+                           << ", spec=" << sysInfo.tpmSpecVersion
+                           << ", physPresence=" << (sysInfo.tpmPhysicalPresenceRequired ? "true" : "false")
+                           << ", error=" << sysInfo.tpmErrorMessage;
+                        Logger::Debug(ss.str());
                     }
-                    // 采集物理磁盘并建立逻辑盘映射
-                    if (wmiManager) {
-                        DiskInfo::CollectPhysicalDisks(*wmiManager, sysInfo.disks, sysInfo);
-                        if (isFirstRun) {
-                            try {
-                                Logger::Debug("收集到 " + std::to_string(sysInfo.physicalDisks.size()) + " 个物理磁盘");
-                                for (size_t i = 0; i < sysInfo.physicalDisks.size(); ++i) {
-                                    const auto& pd = sysInfo.physicalDisks[i];
-                                    // 拼接盘符
-                                    std::wstring letters;
-                                    for (int k = 0; k < pd.logicalDriveCount; ++k) {
-                                        if (k) letters += L" ";
-                                        letters += static_cast<wchar_t>(pd.logicalDriveLetters[k]);
-                                        letters += L":";
-                                    }
-                                    // 容量（格式化为字符串后转 wstring）
-                                    std::wstring capW = WinUtils::StringToWstring(FormatSize(pd.capacity));
-                                    std::wstringstream wss;
-                                    wss << L"物理磁盘 " << i
-                                        << L": 型号=" << pd.model
-                                        << L", 接口=" << pd.interfaceType
-                                        << L", 类型=" << pd.diskType
-                                        << L", 容量=" << capW
-                                        << L", 盘符=[" << letters << L"]";
-                                    Logger::Debug(wss.str());
-                                }
-                            } catch (...) {
-                                // 忽略日志拼接异常
-                            }
-                        }
-                    }
-                }
-                catch (const std::bad_alloc& e) {
-                    Logger::Error("获取磁盘/物理磁盘数据失败 - 内存不足: " + std::string(e.what()));
-                    sysInfo.disks.clear();
-                    sysInfo.physicalDisks.clear();
                 }
                 catch (const std::exception& e) {
-                    Logger::Error("获取磁盘/物理磁盘数据失败: " + std::string(e.what()));
-                    sysInfo.disks.clear();
-                    sysInfo.physicalDisks.clear();
+                    Logger::Error("TPM 信息采集失败: " + std::string(e.what()));
                 }
                 catch (...) {
-                    Logger::Error("获取磁盘/物理磁盘数据失败 - 未知异常");
-                    sysInfo.disks.clear();
-                    sysInfo.physicalDisks.clear();
+                    Logger::Error("TPM 信息采集失败 - 未知异常");
                 }
+
 
                 // 写入共享内存前验证数据 - 增强数据验证
                 try {
@@ -1567,12 +1410,3 @@ char GetKeyPress() {
     }
     return 0;
 }
-
-
-
-
-
-
-
-
-

@@ -426,9 +426,10 @@ void SharedMemoryManager::WriteToSharedMemory(const SystemInfo& systemInfo) {
             SafeCopyWideString(pBuffer->tpm.firmwareVersion, 32, WinUtils::StringToWstring(systemInfo.tpmFirmwareVersion));
             SafeCopyWideString(pBuffer->tpm.status, 64, WinUtils::StringToWstring(systemInfo.tpmStatus));
             SafeCopyWideString(pBuffer->tpm.errorMessage, 256, WinUtils::StringToWstring(systemInfo.tpmErrorMessage));
-            SafeCopyWideString(pBuffer->tpm.detectionMethod, 64, WinUtils::StringToWstring(systemInfo.tpmDetectionMethod));
-            pBuffer->tpm.wmiDetectionWorked = systemInfo.tpmWmiDetectionWorked;
-            pBuffer->tpm.tbsDetectionWorked = systemInfo.tpmTbsDetectionWorked;
+            // 使用 SystemInfo 的 tmp* 字段（检测方法与标记）
+            SafeCopyWideString(pBuffer->tpm.detectionMethod, 64, WinUtils::StringToWstring(systemInfo.tmpDetectionMethod));
+            pBuffer->tpm.wmiDetectionWorked = systemInfo.tmpWmiDetectionWorked;
+            pBuffer->tpm.tbsDetectionWorked = systemInfo.tmpTbsDetectionWorked;
             pBuffer->tpm.isEnabled = systemInfo.tpmEnabled;
             pBuffer->tpm.isReady = systemInfo.tpmReady;
             pBuffer->tpm.isActivated = systemInfo.tpmIsActivated;

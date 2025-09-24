@@ -46,7 +46,7 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
@@ -132,7 +132,7 @@ _WINSOCK_DEPRECATED_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefiniti
       <CompileAsManaged>false</CompileAsManaged>
       <CompileAsWinRT>false</CompileAsWinRT>
       <MultiProcessorCompilation>false</MultiProcessorCompilation>
-      <AdditionalIncludeDirectories>GeneratedFiles\$(ConfigurationName);GeneratedFiles;$(ProjectDir)../src/core/Utils;$(WindowsSDK_MetadataPath);$(ProjectDir)../src/core;$(ProjectDir)../src;$(ProjectDir)src;$(CUDA_PATH)\include;$(SolutionDir)src\third_party\LibreHardwareMonitor\LibreHardwareMonitorLib\obj\Debug\net8.0;E:\Qt\6.9.0\msvc2022_64\include;E:\Qt\6.9.0\msvc2022_64\include\QtWidgets;$(ProjectDir)\GeneratedFiles;E:\Qt\6.9.0\msvc2022_64\include\QtCharts;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>GeneratedFiles\$(ConfigurationName);GeneratedFiles;$(ProjectDir)../src/core/Utils;$(WindowsSDK_MetadataPath);$(ProjectDir)../src/core;$(ProjectDir)../src;$(ProjectDir)src;$(CUDA_PATH)\include;$(SolutionDir)src\third_party\LibreHardwareMonitor\LibreHardwareMonitorLib\obj\Debug\net8.0;$(ProjectDir)\GeneratedFiles;F:\Win_x64-10.lastest-sysMonitor\src\third_party\tpm2-tss\src\tss2-fapi;F:\Win_x64-10.lastest-sysMonitor\src\third_party\tpm2-tss\src\tss2-fapi\api;F:\Win_x64-10.lastest-sysMonitor\src\third_party\tpm2-tss\include\tss2;F:\Win_x64-10.lastest-sysMonitor\src\third_party\tpm2-tss\src\tss2-esys\api;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalUsingDirectories>$(WindowsSDK_MetadataPath);$(FrameworkPathOverride);$(DOTNET_ReferenceAssemblyPath_472);C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.7.2;%(AdditionalUsingDirectories)</AdditionalUsingDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
@@ -185,8 +185,8 @@ _WINSOCK_DEPRECATED_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefiniti
     <ClInclude Include="..\src\core\memory\MemoryInfo.h" />
     <ClInclude Include="..\src\core\network\NetworkAdapter.h" />
     <ClInclude Include="..\src\core\os\OSInfo.h" />
-    <ClInclude Include="..\src\core\tpm\TpmInfo.h" />
     <ClInclude Include="..\src\core\temperature\TemperatureWrapper.h" />
+    <ClInclude Include="..\src\core\tpm\TpmInfo.h" />
     <ClInclude Include="..\src\core\Utils\LibreHardwareMonitorBridge.h" />
     <ClInclude Include="..\src\core\Utils\Logger.h" />
     <ClInclude Include="..\src\core\Utils\stdafx.h" />
@@ -202,7 +202,6 @@ _WINSOCK_DEPRECATED_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefiniti
     <ClCompile Include="..\src\core\memory\MemoryInfo.cpp" />
     <ClCompile Include="..\src\core\network\NetworkAdapter.cpp" />
     <ClCompile Include="..\src\core\os\OSInfo.cpp" />
-    <ClCompile Include="..\src\core\tpm\TpmInfo.cpp" />
     <ClCompile Include="..\src\core\temperature\TemperatureWrapper.cpp">
       <CompileAsManaged Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</CompileAsManaged>
       <CompileAsManaged Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</CompileAsManaged>
@@ -215,6 +214,7 @@ _WINSOCK_DEPRECATED_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefiniti
       <CompileAsManaged Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</CompileAsManaged>
       <CompileAsManaged Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</CompileAsManaged>
     </ClCompile>
+    <ClCompile Include="..\src\core\tpm\TpmInfo.cpp" />
     <ClCompile Include="..\src\core\Utils\LibreHardwareMonitorBridge.cpp">
       <CompileAsManaged Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</CompileAsManaged>
       <CompileAsManaged Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</CompileAsManaged>
