@@ -196,6 +196,13 @@ jobs:
       uses: ilammy/msvc-dev-cmd@v1
       with:
         arch: x64
+    # === 关键新增：显式恢复（兼容传统 & 现代项目） ===
+    - name: Restore solution (nuget + dotnet)
+      shell: pwsh
+      run: |
+        nuget restore ${{ env.SOLUTION_FILE_PATH }}
+        dotnet restore ${{ env.SOLUTION_FILE_PATH }}
+    # 若你只想用 dotnet，可改成仅 dotnet restore
     - name: Build main project
       shell: pwsh
       run: |
@@ -285,7 +292,6 @@ jobs:
       run: |
         $report = ""
 
-        # 汇总 build_lib
         $libLog = Get-ChildItem -Recurse logs | Where-Object { $_.Name -eq "build_lib.log" } | Select-Object -First 1
         if ($libLog) {
           $lines = Get-Content $libLog.FullName | Select-String -Pattern "error|warning|fatal|undefined"
@@ -295,7 +301,6 @@ jobs:
           $report += "`n==== build_lib ====`n日志缺失"
         }
 
-        # 汇总 wpfui1_build
         $wpfLog = Get-ChildItem -Recurse logs | Where-Object { $_.Name -eq "wpfui1_build.log" } | Select-Object -First 1
         if ($wpfLog) {
           $lines = Get-Content $wpfLog.FullName | Select-String -Pattern "error|warning|fatal|undefined"
@@ -305,7 +310,6 @@ jobs:
           $report += "`n==== wpfui1_build ====`n日志缺失"
         }
 
-        # 汇总 cpp_parsers_build
         $cppLog = Get-ChildItem -Recurse logs | Where-Object { $_.Name -eq "cpp_parsers_build.log" } | Select-Object -First 1
         if ($cppLog) {
           $lines = Get-Content $cppLog.FullName | Select-String -Pattern "error|warning|fatal|undefined"
@@ -315,7 +319,6 @@ jobs:
           $report += "`n==== cpp_parsers_build ====`n日志缺失"
         }
 
-        # 汇总 main_build
         $mainErr = Get-ChildItem -Recurse logs | Where-Object { $_.Name -eq "main_build.errors.txt" } | Select-Object -First 1
         if ($mainErr) {
           $err = Get-Content $mainErr.FullName | Out-String
@@ -324,7 +327,6 @@ jobs:
           $report += "`n==== main_build 致命错误 ====`n日志缺失"
         }
 
-        # 系统环境（整理输出关键信息）
         $sysinfo = Get-ChildItem -Recurse logs | Where-Object { $_.Name -eq "system_info.txt" } | Select-Object -First 1
         if ($sysinfo) {
           $lines = Get-Content $sysinfo.FullName
@@ -380,7 +382,7 @@ jobs:
         $errFile = Get-ChildItem -Recurse logs | Where-Object { $_.Name -eq "ci_error_report.txt" } | Select-Object -First 1
         $errMsg = if ($errFile) { Get-Content $errFile.FullName -Raw } else { "缺失 ci_error_report.txt" }
         $actions_url = "https://github.com/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)"
-        $comment = "@copilot $mentionActor [Actions编译报告-MSVC] `n`nPR编译失败了  `n`n关键警告和错误日志如下：  `n````  `n$errMsg`n````  `n如需完整日志请查Actions artifacts。  `n$actions_url"
+        $comment = "@copilot $mentionActor [Actions编译报告-MSVC] `n`nPR编译失败了  `n`n关键警告和错误日志如下：  `n````  `n$errMsg`n````  `n详见: $actions_url"
         $headers = @{
           Authorization = "token $env:GITHUB_TOKEN"
           "User-Agent" = "github-actions-powershell"
