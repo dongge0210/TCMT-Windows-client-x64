@@ -187,11 +187,7 @@
                                 </TextBlock>
 
                                 <TextBlock Grid.Row="11" Grid.Column="0" Text="采样间隔:" Margin="0,5"/>
-                                <TextBlock Grid.Row="11" Grid.Column="1" Margin="10,5">
-                                    <TextBlock.Text>
-                                        <Binding Path="CpuUsageSampleIntervalMs" StringFormat="{}{0:F0} ms"/>
-                                    </TextBlock.Text>
-                                </TextBlock>
+                                <TextBlock Grid.Row="11" Grid.Column="1" Margin="10,5" Text="{Binding CpuUsageSampleIntervalMs, StringFormat={}{0:F0} ms}"/>
                             </Grid>
                         </Expander>
                     </materialDesign:Card>
@@ -580,17 +576,9 @@
                             <TextBlock Grid.Row="6" Grid.Column="2" Text="需物理存在:" Margin="30,5,0,5"/>
                             <TextBlock Grid.Row="6" Grid.Column="3" Text="{Binding TpmPhysicalPresenceRequired, Converter={StaticResource BooleanToYesNoConverter}}" Margin="10,5"/>
                             <TextBlock Grid.Row="7" Grid.Column="0" Text="规范版本:" Margin="0,5"/>
-                            <TextBlock Grid.Row="7" Grid.Column="1" Margin="10,5">
-                                <TextBlock.Text>
-                                    <Binding Path="TpmSpecVersion" StringFormat="{}{0}"/>
-                                </TextBlock.Text>
-                            </TextBlock>
+                            <TextBlock Grid.Row="7" Grid.Column="1" Text="{Binding TpmSpecVersion}" Margin="10,5"/>
                             <TextBlock Grid.Row="7" Grid.Column="2" Text="TBS版本:" Margin="30,5,0,5"/>
-                            <TextBlock Grid.Row="7" Grid.Column="3" Margin="10,5">
-                                <TextBlock.Text>
-                                    <Binding Path="TpmTbsVersion" StringFormat="{}{0}"/>
-                                </TextBlock.Text>
-                            </TextBlock>
+                            <TextBlock Grid.Row="7" Grid.Column="3" Text="{Binding TpmTbsVersion}" Margin="10,5"/>
                             <TextBlock Grid.Row="8" Grid.Column="0" Text="检测方法:" Margin="0,5"/>
                             <TextBlock Grid.Row="8" Grid.Column="1" Grid.ColumnSpan="3" Text="{Binding TpmDetectionMethod}" Margin="10,5" FontWeight="Bold"/>
                             <TextBlock Grid.Row="9" Grid.Column="0" Text="错误信息:" Margin="0,5"/>

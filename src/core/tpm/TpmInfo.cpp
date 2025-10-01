@@ -1,19 +1,63 @@
+// file: src/core/tpm/TpmInfo.cpp
 #include "TpmInfo.h"
 #include "../Utils/Logger.h"
 #include "../Utils/WmiManager.h"
 #include "../Utils/WinUtils.h"
+
+#define WIN32_LEAN_AND_MEAN
 #include <tbs.h>
 #include <wbemidl.h>
 #include <comutil.h>
 #include <string>
+#include <cwchar>
 
 #pragma comment(lib, "tbs.lib")
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "oleaut32.lib")
 #pragma comment(lib, "wbemuuid.lib")
 
+namespace {
+    struct TbsContextGuard {
+        TBS_HCONTEXT ctx{ 0 };
+        ~TbsContextGuard() {
+            if (ctx) {
+                Tbsip_Context_Close(ctx);
+                ctx = 0;
+            }
+        }
+    };
+
+    std::wstring MapTbsError(TBS_RESULT r) {
+        switch (r) {
+        case TBS_E_TPM_NOT_FOUND:        return L"TPM not found";
+        case TBS_E_SERVICE_NOT_RUNNING:  return L"TBS service not running";
+        case TBS_E_INSUFFICIENT_BUFFER:  return L"Insufficient buffer";
+#ifdef TBS_E_BAD_PARAMETER
+        case TBS_E_BAD_PARAMETER:        return L"Bad parameter";
+#endif
+#ifdef TBS_E_INTERNAL_ERROR
+        case TBS_E_INTERNAL_ERROR:       return L"Internal error";
+#endif
+#ifdef TBS_E_IOERROR
+        case TBS_E_IOERROR:              return L"I/O error";
+#endif
+#ifdef TBS_E_ACCESS_DENIED
+        case TBS_E_ACCESS_DENIED:        return L"Access denied";
+#endif
+        default: {
+            wchar_t buf[48];
+            swprintf_s(buf, L"TBS error 0x%08X", r);
+            return buf;
+        }
+        }
+    }
+
+    void SetStatusIfEmpty(std::wstring& status, const std::wstring& value) {
+        if (status.empty() || status == L"Unknown") status = value;
+    }
+}
+
 TpmInfo::TpmInfo(WmiManager& manager) : wmiManager(manager) {
-    // Initialize defaults
     hasTpm = false;
     tpmData.detectionMethod = L"NONE";
     tpmData.wmiDetectionWorked = false;
@@ -23,38 +67,27 @@ TpmInfo::TpmInfo(WmiManager& manager) : wmiManager(manager) {
 
     Logger::Info("TPM detection start (TBS primary, WMI fallback)");
 
-    // Try TBS first
-    try {
-        DetectTpmViaTbs();
-    } catch (...) {
-        // keep defaults
-        Logger::Warn("TBS detection threw an exception");
-    }
-
-    // Try WMI for details or as a fallback
-    try {
-        DetectTpmViaWmi();
-    } catch (...) {
-        Logger::Warn("WMI detection threw an exception");
-    }
+    try { DetectTpmViaTbs(); }
+    catch (...) { Logger::Warn("TBS detection threw an exception"); }
+    try { DetectTpmViaWmi(); }
+    catch (...) { Logger::Warn("WMI detection threw an exception"); }
 
     DetermineDetectionMethod();
 
     if (hasTpm) {
-        std::string manufacturerStr = WinUtils::WstringToString(tpmData.manufacturerName);
-        std::string versionStr = WinUtils::WstringToString(tpmData.version);
-        std::string statusStr = WinUtils::WstringToString(tpmData.status);
-        std::string methodStr = WinUtils::WstringToString(tpmData.detectionMethod);
-        Logger::Info("TPM detected: " + manufacturerStr + " v" + versionStr +
-                     " (" + statusStr + ") [method: " + methodStr + "]");
-    } else {
-        std::string errorStr = WinUtils::WstringToString(tpmData.errorMessage);
-        Logger::Info("No TPM detected: " + errorStr);
+        Logger::Info("TPM detected: " +
+            WinUtils::WstringToString(tpmData.manufacturerName) + " v" +
+            WinUtils::WstringToString(tpmData.version) + " (" +
+            WinUtils::WstringToString(tpmData.status) + ") [method: " +
+            WinUtils::WstringToString(tpmData.detectionMethod) + "]");
+    }
+    else {
+        Logger::Info("No TPM detected: " + WinUtils::WstringToString(tpmData.errorMessage));
     }
 }
 
 TpmInfo::~TpmInfo() {
-    Logger::Info("TPM detection end");
+    Logger::Debug("TPM detection end");
 }
 
 void TpmInfo::DetectTpmViaWmi() {
@@ -101,35 +134,35 @@ void TpmInfo::DetectTpmViaWmi() {
         VariantInit(&vtIsOwned);
         VariantInit(&vtPhysicalPresenceRequired);
 
-        if (SUCCEEDED(pclsObj->Get(L"ManufacturerName", 0, &vtManufacturerName, 0, 0)) && vtManufacturerName.vt == VT_BSTR) {
+        if (SUCCEEDED(pclsObj->Get(L"ManufacturerName", 0, &vtManufacturerName, 0, 0)) && vtManufacturerName.vt == VT_BSTR)
             tpmData.manufacturerName = vtManufacturerName.bstrVal;
-        }
+
         if (SUCCEEDED(pclsObj->Get(L"ManufacturerId", 0, &vtManufacturerId, 0, 0)) && vtManufacturerId.vt == VT_I4) {
             wchar_t manufacturerIdStr[32];
             swprintf_s(manufacturerIdStr, L"0x%08X", vtManufacturerId.intVal);
             tpmData.manufacturerId = manufacturerIdStr;
         }
-        if (SUCCEEDED(pclsObj->Get(L"SpecVersion", 0, &vtSpecVersion, 0, 0)) && vtSpecVersion.vt == VT_BSTR) {
+
+        if (SUCCEEDED(pclsObj->Get(L"SpecVersion", 0, &vtSpecVersion, 0, 0)) && vtSpecVersion.vt == VT_BSTR)
             tpmData.version = vtSpecVersion.bstrVal;
-        }
-        if (SUCCEEDED(pclsObj->Get(L"IsEnabled_InitialValue", 0, &vtIsEnabled, 0, 0)) && vtIsEnabled.vt == VT_BOOL) {
+
+        if (SUCCEEDED(pclsObj->Get(L"IsEnabled_InitialValue", 0, &vtIsEnabled, 0, 0)) && vtIsEnabled.vt == VT_BOOL)
             tpmData.isEnabled = (vtIsEnabled.boolVal == VARIANT_TRUE);
-        }
-        if (SUCCEEDED(pclsObj->Get(L"IsActivated_InitialValue", 0, &vtIsActivated, 0, 0)) && vtIsActivated.vt == VT_BOOL) {
+
+        if (SUCCEEDED(pclsObj->Get(L"IsActivated_InitialValue", 0, &vtIsActivated, 0, 0)) && vtIsActivated.vt == VT_BOOL)
             tpmData.isActivated = (vtIsActivated.boolVal == VARIANT_TRUE);
-        }
-        if (SUCCEEDED(pclsObj->Get(L"IsOwned_InitialValue", 0, &vtIsOwned, 0, 0)) && vtIsOwned.vt == VT_BOOL) {
+
+        if (SUCCEEDED(pclsObj->Get(L"IsOwned_InitialValue", 0, &vtIsOwned, 0, 0)) && vtIsOwned.vt == VT_BOOL)
             tpmData.isOwned = (vtIsOwned.boolVal == VARIANT_TRUE);
-        }
-        if (SUCCEEDED(pclsObj->Get(L"PhysicalPresenceRequired", 0, &vtPhysicalPresenceRequired, 0, 0)) && vtPhysicalPresenceRequired.vt == VT_BOOL) {
+
+        if (SUCCEEDED(pclsObj->Get(L"PhysicalPresenceRequired", 0, &vtPhysicalPresenceRequired, 0, 0)) && vtPhysicalPresenceRequired.vt == VT_BOOL)
             tpmData.physicalPresenceRequired = (vtPhysicalPresenceRequired.boolVal == VARIANT_TRUE);
-        }
 
         tpmData.isReady = tpmData.isEnabled && tpmData.isActivated;
-        if (tpmData.isReady) tpmData.status = L"Ready";
+        if (tpmData.isReady)          tpmData.status = L"Ready";
         else if (tpmData.isEnabled && !tpmData.isActivated) tpmData.status = L"EnabledNotActivated";
-        else if (!tpmData.isEnabled) tpmData.status = L"Disabled";
-        else tpmData.status = L"Unknown";
+        else if (!tpmData.isEnabled)  tpmData.status = L"Disabled";
+        else                          tpmData.status = L"Unknown";
 
         VariantClear(&vtManufacturerName);
         VariantClear(&vtManufacturerId);
@@ -140,7 +173,7 @@ void TpmInfo::DetectTpmViaWmi() {
         VariantClear(&vtPhysicalPresenceRequired);
 
         pclsObj->Release();
-        break; // handle first
+        break;
     }
 
     pEnumerator->Release();
@@ -152,12 +185,11 @@ void TpmInfo::DetectTpmViaWmi() {
 }
 
 void TpmInfo::DetectTpmViaTbs() {
-    // Basic TBS probe
-    TBS_HCONTEXT hContext = 0;
+    TbsContextGuard guard;
     TBS_CONTEXT_PARAMS params{};
     params.version = TBS_CONTEXT_VERSION_ONE;
 
-    TBS_RESULT result = Tbsi_Context_Create(&params, &hContext);
+    TBS_RESULT result = Tbsi_Context_Create(&params, &guard.ctx);
     if (result == TBS_SUCCESS) {
         tpmData.tbsAvailable = true;
 
@@ -166,28 +198,23 @@ void TpmInfo::DetectTpmViaTbs() {
         if (result == TBS_SUCCESS) {
             tpmData.tbsVersion = deviceInfo.tpmVersion;
             if (deviceInfo.tpmVersion == TPM_VERSION_12) {
+                SetStatusIfEmpty(tpmData.status, L"DetectedViaTBS");
                 if (tpmData.version.empty()) tpmData.version = L"1.2";
-            } else if (deviceInfo.tpmVersion == TPM_VERSION_20) {
+            }
+            else if (deviceInfo.tpmVersion == TPM_VERSION_20) {
+                SetStatusIfEmpty(tpmData.status, L"DetectedViaTBS");
                 if (tpmData.version.empty()) tpmData.version = L"2.0";
             }
         }
 
-        hasTpm = true; // TBS available implies TPM present
+        hasTpm = true;
         tpmData.tbsDetectionWorked = true;
-        if (tpmData.status.empty() || tpmData.status == L"Unknown") tpmData.status = L"DetectedViaTBS";
-
-        Tbsip_Context_Close(hContext);
-    } else {
+        SetStatusIfEmpty(tpmData.status, L"DetectedViaTBS");
+    }
+    else {
         tpmData.tbsAvailable = false;
-        // map common errors to messages
-        switch (result) {
-            case TBS_E_TPM_NOT_FOUND: tpmData.errorMessage = L"TPM not found"; break;
-            case TBS_E_SERVICE_NOT_RUNNING: tpmData.errorMessage = L"TBS service not running"; break;
-            case TBS_E_INSUFFICIENT_BUFFER: tpmData.errorMessage = L"Insufficient buffer"; break;
-            case TBS_E_INVALID_PARAMETER: tpmData.errorMessage = L"Invalid parameter"; break;
-            case TBS_E_ACCESS_DENIED: tpmData.errorMessage = L"Access denied"; break;
-            default: tpmData.errorMessage = L"TBS error"; break;
-        }
+        tpmData.errorMessage = MapTbsError(result);
+        // do not set hasTpm=true here
     }
 }
 
@@ -198,11 +225,14 @@ const TpmInfo::TpmData& TpmInfo::GetTpmData() const {
 void TpmInfo::DetermineDetectionMethod() {
     if (tpmData.tbsDetectionWorked && tpmData.wmiDetectionWorked) {
         tpmData.detectionMethod = L"TBS+WMI";
-    } else if (tpmData.tbsDetectionWorked) {
+    }
+    else if (tpmData.tbsDetectionWorked) {
         tpmData.detectionMethod = L"TBS";
-    } else if (tpmData.wmiDetectionWorked) {
+    }
+    else if (tpmData.wmiDetectionWorked) {
         tpmData.detectionMethod = L"WMI";
-    } else {
+    }
+    else {
         tpmData.detectionMethod = L"NONE";
     }
 }

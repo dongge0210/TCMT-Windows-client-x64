@@ -72,6 +72,10 @@ namespace WPF_UI1.ViewModels
 
         [ObservableProperty]
         private double cpuCurrentFrequencyMHz;
+
+        // 新增：CPU 使用率采样间隔（毫秒）
+        [ObservableProperty]
+        private double cpuUsageSampleIntervalMs;
         #endregion
 
         #region Memory Properties
@@ -119,6 +123,56 @@ namespace WPF_UI1.ViewModels
 
         [ObservableProperty]
         private PhysicalDiskView? selectedPhysicalDisk;
+        #endregion
+
+        #region TPM Properties
+        [ObservableProperty]
+        private bool hasTpm;
+
+        [ObservableProperty]
+        private string tpmManufacturer = "N/A";
+
+        [ObservableProperty]
+        private string tpmManufacturerId = "N/A";
+
+        [ObservableProperty]
+        private string tpmVersion = "N/A";
+
+        [ObservableProperty]
+        private string tpmFirmwareVersion = "N/A";
+
+        [ObservableProperty]
+        private string tpmStatus = "N/A";
+
+        [ObservableProperty]
+        private bool tpmEnabled;
+
+        [ObservableProperty]
+        private bool tpmIsActivated;
+
+        [ObservableProperty]
+        private bool tpmIsOwned;
+
+        [ObservableProperty]
+        private bool tpmReady;
+
+        [ObservableProperty]
+        private bool tpmTbsAvailable;
+
+        [ObservableProperty]
+        private bool tpmPhysicalPresenceRequired;
+
+        [ObservableProperty]
+        private uint tpmSpecVersion;
+
+        [ObservableProperty]
+        private uint tpmTbsVersion;
+
+        [ObservableProperty]
+        private string tpmErrorMessage = "N/A";
+
+        [ObservableProperty]
+        private string tpmDetectionMethod = "N/A";
         #endregion
 
         #region Chart Properties
@@ -391,6 +445,24 @@ namespace WPF_UI1.ViewModels
                 }
                 if (SelectedPhysicalDisk == null && PhysicalDisks.Count > 0)
                     SelectedPhysicalDisk = PhysicalDisks[0];
+
+                // 更新TPM信息
+                HasTpm = systemInfo.HasTpm;
+                TpmManufacturer = systemInfo.TpmManufacturer ?? "N/A";
+                TpmManufacturerId = systemInfo.TpmManufacturerId ?? "N/A";
+                TpmVersion = systemInfo.TpmVersion ?? "N/A";
+                TpmFirmwareVersion = systemInfo.TpmFirmwareVersion ?? "N/A";
+                TpmStatus = systemInfo.TpmStatus ?? "N/A";
+                TpmEnabled = systemInfo.TpmEnabled;
+                TpmIsActivated = systemInfo.TpmIsActivated;
+                TpmIsOwned = systemInfo.TpmIsOwned;
+                TpmReady = systemInfo.TpmReady;
+                TpmTbsAvailable = systemInfo.TpmTbsAvailable;
+                TpmPhysicalPresenceRequired = systemInfo.TpmPhysicalPresenceRequired;
+                TpmSpecVersion = systemInfo.TpmSpecVersion;
+                TpmTbsVersion = systemInfo.TpmTbsVersion;
+                TpmErrorMessage = systemInfo.TpmErrorMessage ?? "N/A";
+                TpmDetectionMethod = systemInfo.TpmDetectionMethod ?? "N/A";
 
                 // 更新温度图表
                 UpdateTemperatureCharts(systemInfo.CpuTemperature, systemInfo.GpuTemperature);
