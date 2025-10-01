@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "mcp-server-code-runner": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@iflow-mcp/mcp-server-code-runner"
+      ]
+    },
+    "mcp-taskmanager": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@iflow-mcp/mcp-taskmanager@1.0.2"
+      ]
+    }
+  }
+}
