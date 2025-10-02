@@ -9,6 +9,8 @@
 #include <comutil.h>
 #include <sstream>
 #include <iomanip>
+#include <vector>
+#include <algorithm>
 
 #pragma comment(lib, "iphlpapi.lib")
 #pragma comment(lib, "ws2_32.lib")
@@ -28,7 +30,7 @@ void NetworkAdapter::Initialize() {
         initialized = true;
     }
     else {
-        Logger::Error("WMI未初始化，无法获取网络信息");
+        Logger::Error("WMI not initialized, cannot get network information");
     }
 }
 
@@ -48,7 +50,7 @@ void NetworkAdapter::QueryAdapterInfo() {
 }
 
 bool NetworkAdapter::IsVirtualAdapter(const std::wstring& name) const {
-    const std::wstring virtualKeywords[] = {
+    const std::vector<std::wstring> virtualKeywords = {
         L"VirtualBox",
         L"Hyper-V",
         L"Virtual",
@@ -78,7 +80,7 @@ void NetworkAdapter::QueryWmiAdapterInfo() {
     );
 
     if (FAILED(hres)) {
-        Logger::Error("网络适配器WMI查询失败: HRESULT=0x" + std::to_string(hres));
+        Logger::Error("Network adapter WMI query failed: HRESULT=0x" + std::to_string(hres));
         return;
     }
 
@@ -88,7 +90,7 @@ void NetworkAdapter::QueryWmiAdapterInfo() {
         AdapterInfo info;
         info.isEnabled = false;
 
-        // 获取适配器名称
+        // Get adapter name
         VARIANT vtName, vtDesc, vtStatus;
         VariantInit(&vtName);
         VariantInit(&vtDesc);
@@ -102,7 +104,7 @@ void NetworkAdapter::QueryWmiAdapterInfo() {
             info.description = vtDesc.bstrVal;
         }
 
-        // 检查适配器状态
+        // Check adapter status
         if (SUCCEEDED(pclsObj->Get(L"NetEnabled", 0, &vtStatus, 0, 0))) {
             info.isEnabled = (vtStatus.boolVal == VARIANT_TRUE);
         }
@@ -111,13 +113,13 @@ void NetworkAdapter::QueryWmiAdapterInfo() {
         VariantClear(&vtDesc);
         VariantClear(&vtStatus);
 
-        // 过滤虚拟适配器
+        // Filter virtual adapters
         if (IsVirtualAdapter(info.name) || IsVirtualAdapter(info.description)) {
             SafeRelease(pclsObj);
             continue;
         }
 
-        // 获取MAC地址
+        // Get MAC address
         VARIANT vtMac;
         VariantInit(&vtMac);
         if (SUCCEEDED(pclsObj->Get(L"MACAddress", 0, &vtMac, 0, 0)) && vtMac.vt == VT_BSTR) {
@@ -125,8 +127,8 @@ void NetworkAdapter::QueryWmiAdapterInfo() {
         }
         VariantClear(&vtMac);
 
-        // 初始化网卡类型为未知
-        info.adapterType = L"未知";
+        // Initialize adapter type as Unknown
+        info.adapterType = L"Unknown";
 
         if (!info.name.empty() && !info.mac.empty()) {
             adapters.push_back(info);
@@ -154,7 +156,7 @@ void NetworkAdapter::UpdateAdapterAddresses() {
     PIP_ADAPTER_ADDRESSES pAddresses = reinterpret_cast<PIP_ADAPTER_ADDRESSES>(&buffer[0]);
 
     DWORD result = GetAdaptersAddresses(AF_INET,
-        GAA_FLAG_INCLUDE_PREFIX | GAA_FLAG_INCLUDE_GATEWAYS,  // 添加网关信息
+        GAA_FLAG_INCLUDE_PREFIX | GAA_FLAG_INCLUDE_GATEWAYS,  // Include gateway info
         nullptr,
         pAddresses,
         &bufferSize);
@@ -170,7 +172,7 @@ void NetworkAdapter::UpdateAdapterAddresses() {
     }
 
     if (result != NO_ERROR) {
-        Logger::Error("获取网络适配器地址失败: " + std::to_string(result));
+        Logger::Error("Failed to get network adapter addresses: " + std::to_string(result));
         return;
     }
 
@@ -186,28 +188,29 @@ void NetworkAdapter::UpdateAdapterAddresses() {
 
         for (auto& adapterInfo : adapters) {
             if (adapterInfo.mac == macAddress) {
-                // 更新连接状态
+                // Update connection status
                 adapterInfo.isConnected = (adapter->OperStatus == IfOperStatusUp);
 
-                // 更新网络速度 - 修复未连接网卡显示异常速度问题
+                // Update network speed - fix for disconnected adapters showing abnormal speeds
                 if (adapterInfo.isConnected) {
-                    // 仅当连接时记录真实速度
+                    // Only record real speed when connected
                     adapterInfo.speed = adapter->TransmitLinkSpeed;
                     adapterInfo.speedString = FormatSpeed(adapter->TransmitLinkSpeed);
-                } else {
-                    // 未连接时设置为0
+                }
+                else {
+                    // Set to 0 when not connected
                     adapterInfo.speed = 0;
-                    adapterInfo.speedString = L"未连接";
+                    adapterInfo.speedString = L"Not connected";
                 }
 
-                // 确定网卡类型
+                // Determine adapter type
                 adapterInfo.adapterType = DetermineAdapterType(
-                    adapterInfo.name, 
-                    adapterInfo.description, 
+                    adapterInfo.name,
+                    adapterInfo.description,
                     adapter->IfType
                 );
 
-                // 更新IP地址（仅当连接时）
+                // Update IP address (only when connected)
                 if (adapterInfo.isConnected) {
                     PIP_ADAPTER_UNICAST_ADDRESS address = adapter->FirstUnicastAddress;
                     while (address) {
@@ -222,7 +225,7 @@ void NetworkAdapter::UpdateAdapterAddresses() {
                     }
                 }
                 else {
-                    adapterInfo.ip = L"未连接";
+                    adapterInfo.ip = L"Not connected";
                 }
                 break;
             }
@@ -230,8 +233,8 @@ void NetworkAdapter::UpdateAdapterAddresses() {
     }
 }
 
-// 添加格式化网络速度的辅助方法
-std::wstring NetworkAdapter::FormatSpeed(uint64_t bitsPerSecond) const {  // 添加 const
+// Helper method to format network speed
+std::wstring NetworkAdapter::FormatSpeed(uint64_t bitsPerSecond) const {
     const double GB = 1000000000.0;
     const double MB = 1000000.0;
     const double KB = 1000.0;
@@ -255,59 +258,58 @@ std::wstring NetworkAdapter::FormatSpeed(uint64_t bitsPerSecond) const {  // 添
     return ss.str();
 }
 
-// 新增：确定网卡类型的方法
+// New method to determine adapter type
 std::wstring NetworkAdapter::DetermineAdapterType(const std::wstring& name, const std::wstring& description, DWORD ifType) const {
-    // 首先根据Windows接口类型判断
+    // First, judge by Windows interface type
     if (ifType == IF_TYPE_IEEE80211) {
-        return L"无线网卡";
+        return L"Wireless";
     }
     else if (ifType == IF_TYPE_ETHERNET_CSMACD) {
-        return L"有线网卡";
+        return L"Wired";
     }
-    
-    // 如果接口类型不明确，则通过名称和描述判断
+
+    // If interface type is not clear, judge by name and description
     std::wstring combinedText = name + L" " + description;
-    
-    // 转换为小写进行比较
+
+    // Convert to lowercase for comparison
     std::wstring lowerText = combinedText;
     std::transform(lowerText.begin(), lowerText.end(), lowerText.begin(), ::towlower);
-    
-    // 无线网卡关键词
-    const std::wstring wirelessKeywords[] = {
+
+    // Wireless adapter keywords
+    const std::vector<std::wstring> wirelessKeywords = {
         L"wi-fi", L"wifi", L"wireless", L"802.11", L"wlan",
-        L"无线", L"wifi", L"ac", L"ax", L"n", L"g",
+        L"ac", L"ax", L"n", L"g",
         L"realtek 8822ce", L"intel wireless", L"qualcomm atheros",
         L"broadcom", L"ralink", L"mediatek"
     };
-    
-    // 有线网卡关键词
-    const std::wstring ethernetKeywords[] = {
+
+    // Wired adapter keywords
+    const std::vector<std::wstring> ethernetKeywords = {
         L"ethernet", L"gigabit", L"fast ethernet", L"lan",
-        L"有线", L"以太网", L"千兆", L"百兆",
         L"realtek pcie gbe", L"intel ethernet", L"killer ethernet"
     };
-    
-    // 检查无线关键词
+
+    // Check for wireless keywords
     for (const auto& keyword : wirelessKeywords) {
         if (lowerText.find(keyword) != std::wstring::npos) {
-            return L"无线网卡";
+            return L"Wireless";
         }
     }
-    
-    // 检查有线关键词
+
+    // Check for wired keywords
     for (const auto& keyword : ethernetKeywords) {
         if (lowerText.find(keyword) != std::wstring::npos) {
-            return L"有线网卡";
+            return L"Wired";
         }
     }
-    
-    // 默认情况下，根据接口类型推测
-    if (ifType == IF_TYPE_ETHERNET_CSMACD || ifType == IF_TYPE_FASTETHER || 
+
+    // By default, infer from interface type
+    if (ifType == IF_TYPE_ETHERNET_CSMACD || ifType == IF_TYPE_FASTETHER ||
         ifType == IF_TYPE_GIGABITETHERNET) {
-        return L"有线网卡";
+        return L"Wired";
     }
-    
-    return L"未知类型";
+
+    return L"Unknown Type";
 }
 
 void NetworkAdapter::SafeRelease(IUnknown* pInterface) {

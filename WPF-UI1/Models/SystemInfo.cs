@@ -15,6 +15,9 @@ namespace WPF_UI1.Models
         public int EfficiencyCores { get; set; }
         public double PerformanceCoreFreq { get; set; }
         public double EfficiencyCoreFreq { get; set; }
+        // ������CPU ��׼/��ʱƵ�ʣ�MHz��
+        public double CpuBaseFrequencyMHz { get; set; }
+        public double CpuCurrentFrequencyMHz { get; set; }
         public bool HyperThreading { get; set; }
         public bool Virtualization { get; set; }
         // �ڴ���Ϣ
@@ -43,7 +46,7 @@ namespace WPF_UI1.Models
         public List<TemperatureData> Temperatures { get; set; } = new();
         public double CpuTemperature { get; set; }
         public double GpuTemperature { get; set; }
-        public double CpuUsageSampleIntervalMs { get; set; } // ������CPUʹ���ʲ������
+        public double CpuUsageSampleIntervalMs { get; set; } // ������CPUʹ���ʲ������?
         public DateTime LastUpdate { get; set; }
         // TPM ��Ϣ��������
         public bool HasTpm { get; set; }
@@ -61,9 +64,9 @@ namespace WPF_UI1.Models
         public uint TpmSpecVersion { get; set; }
         public uint TpmTbsVersion { get; set; }
         public string TpmErrorMessage { get; set; } = string.Empty;
-        public string TpmDetectionMethod { get; set; } = string.Empty; // 检测方法
-        public bool TpmWmiDetectionWorked { get; set; } // WMI检测是否成功
-        public bool TpmTbsDetectionWorked { get; set; } // TBS检测是否成功
+        public string TpmDetectionMethod { get; set; } = string.Empty; // 检测方�?
+        public bool TpmWmiDetectionWorked { get; set; } // WMI检测是否成�?
+        public bool TpmTbsDetectionWorked { get; set; } // TBS检测是否成�?
     }
 
     public abstract class NotifyBase : INotifyPropertyChanged
@@ -140,7 +143,7 @@ namespace WPF_UI1.Models
         public string Units { get; set; } = string.Empty;
     }
 
-    // �������̣��ۺ϶���߼�����
+    // �������̣��ۺ϶���߼�����?
     public class PhysicalDiskSmartData
     {
         public string Model { get; set; } = string.Empty;
@@ -172,7 +175,7 @@ namespace WPF_UI1.Models
         public double Temperature { get; set; }
     }
 
-    // WPF�����װ���������� + ���·���
+    // WPF�����װ����������?+ ���·���
     public class PhysicalDiskView : NotifyBase
     {
         private PhysicalDiskSmartData _disk;

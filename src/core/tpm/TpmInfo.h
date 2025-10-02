@@ -1,7 +1,5 @@
 #pragma once
-#include <vector>
 #include <string>
-#include <wbemidl.h>
 #include <windows.h>
 
 class WmiManager;
@@ -41,11 +39,9 @@ public:
 private:
     void DetectTpmViaWmi();
     void DetectTpmViaTbs();
-    void QueryTpmProperties();
     void DetermineDetectionMethod(); // 确定使用的检测方法
     
     WmiManager& wmiManager;
-    IWbemServices* pSvc = nullptr;
     TpmData tpmData;
     bool hasTpm = false;
 };

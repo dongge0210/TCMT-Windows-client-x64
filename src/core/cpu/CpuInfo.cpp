@@ -5,17 +5,91 @@
 #include <vector>
 #include <pdh.h>
 #include <algorithm>
-
+#include <powrprof.h> // CallNtPowerInformation
 #pragma comment(lib, "pdh.lib")
+#pragma comment(lib, "PowrProf.lib")
 
 // Define PDH constants if not available
 #ifndef PDH_CSTATUS_VALID_DATA
 #define PDH_CSTATUS_VALID_DATA 0x00000000L
 #endif
-
 #ifndef PDH_CSTATUS_NEW_DATA
 #define PDH_CSTATUS_NEW_DATA 0x00000001L
 #endif
+
+static bool QueryBaseAndCurrentFrequencyACPI(double& baseMHz, double& currentMHz)
+{
+    baseMHz = 0; currentMHz = 0;
+    typedef struct _PROCESSOR_POWER_INFORMATION { ULONG Number; ULONG MaxMhz; ULONG CurrentMhz; ULONG MhzLimit; ULONG MaxIdleState; ULONG CurrentIdleState; } PROCESSOR_POWER_INFORMATION;
+    SYSTEM_INFO si{}; GetSystemInfo(&si);
+    ULONG count = si.dwNumberOfProcessors; if (count == 0 || count > 256) return false;
+    std::vector<PROCESSOR_POWER_INFORMATION> buf(count);
+    auto st = CallNtPowerInformation(ProcessorInformation, nullptr, 0, buf.data(), (ULONG)(buf.size()*sizeof(PROCESSOR_POWER_INFORMATION)));
+    if (st == 0) { double sumBase=0,sumCur=0; int n=0; for (ULONG i=0;i<count;++i){ if (buf[i].MaxMhz>0){ sumBase+=buf[i].MaxMhz; sumCur+=buf[i].CurrentMhz; ++n; } } if (n>0){ baseMHz=sumBase/n; currentMHz=sumCur/n; return true; } }
+    return false;
+}
+
+static void QueryBaseAndCurrentFrequencyFallback(double& baseMHz, double& currentMHz)
+{
+    baseMHz = currentMHz = 0;
+    HKEY hKey; DWORD speed=0; DWORD size=sizeof(DWORD);
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+        if (RegQueryValueExW(hKey, L"~MHz", NULL, NULL, (LPBYTE)&speed, &size) == ERROR_SUCCESS) {
+            baseMHz = currentMHz = (double)speed;
+        }
+        RegCloseKey(hKey);
+    }
+}
+
+void CpuInfo::InitializeFrequencyCounter()
+{
+    if (freqCounterInitialized) return;
+    PDH_STATUS s = PdhOpenQuery(NULL, 0, &freqQueryHandle);
+    if (s != ERROR_SUCCESS) { Logger::Warn("无法打开PDH频率查询"); return; }
+    // English name to avoid localization: Processor Information(_Total)\\Processor Frequency
+    s = PdhAddEnglishCounter(freqQueryHandle, L"\\Processor Information(_Total)\\Processor Frequency", 0, &freqCounterHandle);
+    if (s != ERROR_SUCCESS) { Logger::Warn("无法添加频率计数器"); PdhCloseQuery(freqQueryHandle); return; }
+    s = PdhCollectQueryData(freqQueryHandle); // prime
+    if (s != ERROR_SUCCESS) { Logger::Warn("无法读取频率计数器初值"); PdhCloseQuery(freqQueryHandle); return; }
+    freqCounterInitialized = true;
+}
+
+void CpuInfo::CleanupFrequencyCounter()
+{
+    if (freqCounterInitialized) {
+        PdhCloseQuery(freqQueryHandle);
+        freqCounterInitialized = false;
+        freqQueryHandle = nullptr; freqCounterHandle = nullptr;
+    }
+}
+
+double CpuInfo::updateInstantFrequencyMHz()
+{
+    // 优先 ACPI
+    double base=0, cur=0;
+    if (QueryBaseAndCurrentFrequencyACPI(base, cur)) {
+        cachedInstantMHz = cur; return cachedInstantMHz;
+    }
+    // 次选 PDH 频率计数器
+    if (!freqCounterInitialized) InitializeFrequencyCounter();
+    if (freqCounterInitialized) {
+        DWORD now = GetTickCount();
+        if (now - lastFreqTick >= 300) { // 300ms 刷新
+            lastFreqTick = now;
+            PDH_STATUS s = PdhCollectQueryData(freqQueryHandle);
+            if (s == ERROR_SUCCESS) {
+                PDH_FMT_COUNTERVALUE v{}; s = PdhGetFormattedCounterValue(freqCounterHandle, PDH_FMT_DOUBLE, NULL, &v);
+                if (s == ERROR_SUCCESS && (v.CStatus == PDH_CSTATUS_VALID_DATA || v.CStatus == PDH_CSTATUS_NEW_DATA)) {
+                    cachedInstantMHz = v.doubleValue; return cachedInstantMHz;
+                }
+            }
+        }
+        if (cachedInstantMHz > 0) return cachedInstantMHz;
+    }
+    // 最后回退注册表
+    QueryBaseAndCurrentFrequencyFallback(base, cur);
+    cachedInstantMHz = cur; return cachedInstantMHz;
+}
 
 CpuInfo::CpuInfo() :
     totalCores(0),
@@ -33,6 +107,7 @@ CpuInfo::CpuInfo() :
         cpuName = GetNameFromRegistry();
         InitializeCounter();
         UpdateCoreSpeeds();  // 初始化频率信息
+        InitializeFrequencyCounter();     // 初始化即时频率计数器
     }
     catch (const std::exception& e) {
         Logger::Error("CPU信息初始化失败: " + std::string(e.what()));
@@ -40,6 +115,7 @@ CpuInfo::CpuInfo() :
 }
 
 CpuInfo::~CpuInfo() {
+    CleanupFrequencyCounter();
     CleanupCounter();
 }
 
@@ -169,7 +245,7 @@ double CpuInfo::updateUsage() {
     static DWORD lastCollectTime = 0;
     DWORD currentTime = GetTickCount();
     DWORD delta = currentTime - lastCollectTime;
-    if (delta < 1000) { // 至少1秒间隔
+    if (delta < 500) { // 放宽至 500ms
         return cpuUsage; // 返回上次的值
     }
 
@@ -263,6 +339,18 @@ DWORD CpuInfo::GetCurrentSpeed() const {
         RegCloseKey(hKey);
     }
     return speed;
+}
+
+double CpuInfo::GetBaseFrequencyMHz() const {
+    double base=0, cur=0;
+    if (!QueryBaseAndCurrentFrequencyACPI(base, cur)) {
+        QueryBaseAndCurrentFrequencyFallback(base, cur);
+    }
+    return base;
+}
+
+double CpuInfo::GetCurrentFrequencyMHz() const {
+    return const_cast<CpuInfo*>(this)->updateInstantFrequencyMHz();
 }
 
 std::string CpuInfo::GetName() {

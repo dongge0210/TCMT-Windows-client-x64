@@ -11,7 +11,7 @@ using SkiaSharp;
 using WPF_UI1.Models;
 using WPF_UI1.Services;
 using Serilog;
-using System.Linq; // ����: ���� FirstOrDefault / SequenceEqual
+using System.Linq;
 
 namespace WPF_UI1.ViewModels
 {
@@ -23,21 +23,24 @@ namespace WPF_UI1.ViewModels
         private int _consecutiveErrors = 0;
         private const int MAX_CONSECUTIVE_ERRORS = 5;
 
+        // 记住每个物理磁盘最后选择的分区字母
+        private readonly Dictionary<string, char> _lastPartitionByPhysical = new();
+
         [ObservableProperty]
         private bool isConnected;
 
         [ObservableProperty]
-        private string connectionStatus = "��������...";
+        private string connectionStatus = "正在连接...";
 
         [ObservableProperty]
-        private string windowTitle = "ϵͳӲ��������";
+        private string windowTitle = "系统硬件监视器";
 
         [ObservableProperty]
-        private string lastUpdateTime = "��δ����";
+        private string lastUpdateTime = "从未更新";
 
         #region CPU Properties
         [ObservableProperty]
-        private string cpuName = "���ڼ��...";
+        private string cpuName = "正在检测...";
 
         [ObservableProperty]
         private int physicalCores;
@@ -62,17 +65,28 @@ namespace WPF_UI1.ViewModels
 
         [ObservableProperty]
         private double cpuTemperature;
+
+        // 新增：CPU 基准/即时频率（MHz）
+        [ObservableProperty]
+        private double cpuBaseFrequencyMHz;
+
+        [ObservableProperty]
+        private double cpuCurrentFrequencyMHz;
+
+        // 新增：CPU 使用率采样间隔（毫秒）
+        [ObservableProperty]
+        private double cpuUsageSampleIntervalMs;
         #endregion
 
         #region Memory Properties
         [ObservableProperty]
-        private string totalMemory = "�����...";
+        private string totalMemory = "检测中...";
 
         [ObservableProperty]
-        private string usedMemory = "�����...";
+        private string usedMemory = "检测中...";
 
         [ObservableProperty]
-        private string availableMemory = "�����...";
+        private string availableMemory = "检测中...";
 
         [ObservableProperty]
         private double memoryUsagePercent;
@@ -104,7 +118,6 @@ namespace WPF_UI1.ViewModels
         [ObservableProperty]
         private DiskData? selectedDisk;
 
-        // �������������̷���
         [ObservableProperty]
         private ObservableCollection<PhysicalDiskView> physicalDisks = new();
 
@@ -117,19 +130,19 @@ namespace WPF_UI1.ViewModels
         private bool hasTpm;
 
         [ObservableProperty]
-        private string tpmManufacturer = "�����";
+        private string tpmManufacturer = "N/A";
 
         [ObservableProperty]
-        private string tpmManufacturerId = string.Empty;
+        private string tpmManufacturerId = "N/A";
 
         [ObservableProperty]
-        private string tpmVersion = string.Empty;
+        private string tpmVersion = "N/A";
 
         [ObservableProperty]
-        private string tpmFirmwareVersion = string.Empty;
+        private string tpmFirmwareVersion = "N/A";
 
         [ObservableProperty]
-        private string tpmStatus = string.Empty;
+        private string tpmStatus = "N/A";
 
         [ObservableProperty]
         private bool tpmEnabled;
@@ -156,16 +169,10 @@ namespace WPF_UI1.ViewModels
         private uint tpmTbsVersion;
 
         [ObservableProperty]
-        private string tpmErrorMessage = string.Empty;
-        
+        private string tpmErrorMessage = "N/A";
+
         [ObservableProperty]
-        private string tpmDetectionMethod = string.Empty;
-        
-        [ObservableProperty]
-        private bool tpmWmiDetectionWorked;
-        
-        [ObservableProperty]
-        private bool tpmTbsDetectionWorked;
+        private string tpmDetectionMethod = "N/A";
         #endregion
 
         #region Chart Properties
@@ -182,35 +189,59 @@ namespace WPF_UI1.ViewModels
             
             InitializeCharts();
             
-            // ���ø��¶�ʱ��
             _updateTimer = new DispatcherTimer
             {
-                Interval = TimeSpan.FromMilliseconds(500) // ��΢����Ƶ���Լ���CPUռ��
+                Interval = TimeSpan.FromMilliseconds(500)
             };
             _updateTimer.Tick += UpdateTimer_Tick;
             _updateTimer.Start();
 
-            // ���γ�������
             TryConnect();
+        }
+
+        partial void OnSelectedDiskChanged(DiskData? value)
+        {
+            var serial = SelectedPhysicalDisk?.Disk?.SerialNumber;
+            if (!string.IsNullOrEmpty(serial) && value != null)
+            {
+                _lastPartitionByPhysical[serial] = value.Letter;
+            }
+        }
+
+        partial void OnSelectedPhysicalDiskChanged(PhysicalDiskView? value)
+        {
+            if (value == null) return;
+            var serial = value.Disk?.SerialNumber ?? string.Empty;
+            if (!string.IsNullOrEmpty(serial) && _lastPartitionByPhysical.TryGetValue(serial, out var letter))
+            {
+                var part = value.Partitions.FirstOrDefault(p => char.ToUpperInvariant(p.Letter) == char.ToUpperInvariant(letter));
+                if (part != null)
+                {
+                    SelectedDisk = part;
+                    return;
+                }
+            }
+            if (value.Partitions.Count > 0)
+            {
+                SelectedDisk = value.Partitions[0];
+            }
         }
 
         private void InitializeCharts()
         {
-            // CPU�¶�ͼ��
             CpuTemperatureSeries.Add(new LineSeries<double>
             {
                 Values = _cpuTempData,
-                Name = "CPU�¶�",
+                Name = "CPU温度",
                 Stroke = new SolidColorPaint(SKColors.DeepSkyBlue) { StrokeThickness = 2 },
                 Fill = null,
-                GeometrySize = 0 // �������ݵ�
+                GeometrySize = 0 // 隐藏数据点
             });
 
-            // GPU�¶�ͼ��
             GpuTemperatureSeries.Add(new LineSeries<double>
             {
                 Values = _gpuTempData,
-                Name = "GPU�¶�",
+                Name = "GPU温度",
                 Stroke = new SolidColorPaint(SKColors.Orange) { StrokeThickness = 2 },
                 Fill = null,
                 GeometrySize = 0
@@ -230,13 +261,13 @@ namespace WPF_UI1.ViewModels
                 
                 if (systemInfo != null)
                 {
-                    _consecutiveErrors = 0; // ���ô��������
+                    _consecutiveErrors = 0; // 重置错误计数器
 
                     if (!IsConnected)
                     {
                         IsConnected = true;
-                        ConnectionStatus = "������";
-                        WindowTitle = "ϵͳӲ��������";
+                        ConnectionStatus = "已连接";
+                        WindowTitle = "系统硬件监视器";
                     }
 
                     UpdateSystemData(systemInfo);
@@ -251,13 +282,13 @@ namespace WPF_UI1.ViewModels
                         if (IsConnected)
                         {
                             IsConnected = false;
-                            ConnectionStatus = "�����ѶϿ� - ������������...";
-                            WindowTitle = "ϵͳӲ�������� - �����ж�";
+                            ConnectionStatus = "连接已断开 - 尝试重新连接...";
+                            WindowTitle = "系统硬件监视器 - 连接中断";
                             
-                            // ��ʾ����״̬������
+                            // 显示错误状态的数据
                             ShowDisconnectedState();
                             
-                            // ������������
+                            // 尝试重新连接
                             await Task.Run(() => TryConnect());
                         }
                     }
@@ -265,13 +296,13 @@ namespace WPF_UI1.ViewModels
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "����ϵͳ��Ϣʱ��������");
+                Log.Error(ex, "更新系统信息时发生错误");
                 _consecutiveErrors++;
                 
                 if (_consecutiveErrors >= MAX_CONSECUTIVE_ERRORS)
                 {
                     IsConnected = false;
-                    ConnectionStatus = $"����: {ex.Message}";
+                    ConnectionStatus = $"错误: {ex.Message}";
                     ShowErrorState(ex.Message);
                 }
             }
@@ -279,22 +310,22 @@ namespace WPF_UI1.ViewModels
 
         private void TryConnect()
         {
-            Log.Information("�������ӹ����ڴ�...");
+            Log.Information("尝试连接共享内存...");
             
             if (_sharedMemoryService.Initialize())
             {
                 IsConnected = true;
-                ConnectionStatus = "������";
-                WindowTitle = "ϵͳӲ��������";
+                ConnectionStatus = "已连接";
+                WindowTitle = "系统硬件监视器";
                 _consecutiveErrors = 0;
-                Log.Information("�����ڴ����ӳɹ�");
+                Log.Information("共享内存连接成功");
             }
             else
             {
                 IsConnected = false;
-                ConnectionStatus = $"����ʧ��: {_sharedMemoryService.LastError}";
-                WindowTitle = "ϵͳӲ�������� - δ����";
-                Log.Warning($"�����ڴ�����ʧ��: {_sharedMemoryService.LastError}");
+                ConnectionStatus = $"连接失败: {_sharedMemoryService.LastError}";
+                WindowTitle = "系统硬件监视器 - 未连接";
+                Log.Warning($"共享内存连接失败: {_sharedMemoryService.LastError}");
                 
                 ShowDisconnectedState();
             }
@@ -302,18 +333,18 @@ namespace WPF_UI1.ViewModels
 
         private void ShowDisconnectedState()
         {
-            CpuName = "? �����ѶϿ�";
-            TotalMemory = "δ����";
-            UsedMemory = "δ����";
-            AvailableMemory = "δ����";
+            CpuName = "? 连接已断开";
+            TotalMemory = "未连接";
+            UsedMemory = "未连接";
+            AvailableMemory = "未连接";
             
-            // ��ռ���
+            // 清空集合
             Gpus.Clear();
             NetworkAdapters.Clear();
             Disks.Clear();
             PhysicalDisks.Clear();
             
-            // ����ѡ��
+            // 重置选择
             SelectedGpu = null;
             SelectedNetworkAdapter = null;
             SelectedDisk = null;
@@ -322,72 +353,79 @@ namespace WPF_UI1.ViewModels
 
         private void ShowErrorState(string errorMessage)
         {
-            CpuName = $"?? ���ݶ�ȡʧ��: {errorMessage}";
-            TotalMemory = "��ȡʧ��";
-            UsedMemory = "��ȡʧ��";
-            AvailableMemory = "��ȡʧ��";
+            CpuName = $"?? 数据读取失败: {errorMessage}";
+            TotalMemory = "读取失败";
+            UsedMemory = "读取失败";
+            AvailableMemory = "读取失败";
         }
 
         private void UpdateSystemData(SystemInfo systemInfo)
         {
             try
             {
-                // ����CPU��Ϣ - ����������֤
-                CpuName = ValidateAndSetString(systemInfo.CpuName, "δ֪������");
-                PhysicalCores = ValidateAndSetInt(systemInfo.PhysicalCores, "��������");
-                LogicalCores = ValidateAndSetInt(systemInfo.LogicalCores, "�߼�����");
-                PerformanceCores = ValidateAndSetInt(systemInfo.PerformanceCores, "���ܺ���");
-                EfficiencyCores = ValidateAndSetInt(systemInfo.EfficiencyCores, "��Ч����");
-                CpuUsage = ValidateAndSetDouble(systemInfo.CpuUsage, "CPUʹ����");
+                // 记住当前物理磁盘和分区选择
+                string? previousPhysicalSerial = SelectedPhysicalDisk?.Disk?.SerialNumber;
+                char? previousPartitionLetter = SelectedDisk?.Letter;
+
+                // CPU
+                CpuName = ValidateAndSetString(systemInfo.CpuName, "未知处理器");
+                PhysicalCores = ValidateAndSetInt(systemInfo.PhysicalCores, "物理核心");
+                LogicalCores = ValidateAndSetInt(systemInfo.LogicalCores, "逻辑核心");
+                PerformanceCores = ValidateAndSetInt(systemInfo.PerformanceCores, "性能核心");
+                EfficiencyCores = ValidateAndSetInt(systemInfo.EfficiencyCores, "能效核心");
+                CpuUsage = ValidateAndSetDouble(systemInfo.CpuUsage, "CPU使用率");
                 HyperThreading = systemInfo.HyperThreading;
                 Virtualization = systemInfo.Virtualization;
-                CpuTemperature = ValidateAndSetDouble(systemInfo.CpuTemperature, "CPU�¶�");
+                CpuTemperature = ValidateAndSetDouble(systemInfo.CpuTemperature, "CPU温度");
+                // 新增：频率
+                CpuBaseFrequencyMHz = ValidateAndSetDouble(systemInfo.CpuBaseFrequencyMHz, "CPU基准频率");
+                CpuCurrentFrequencyMHz = ValidateAndSetDouble(systemInfo.CpuCurrentFrequencyMHz, "CPU即时频率");
 
-                // �����ڴ���Ϣ - ����������֤
-                TotalMemory = systemInfo.TotalMemory > 0 ? FormatBytes(systemInfo.TotalMemory) : "δ��⵽";
-                UsedMemory = systemInfo.UsedMemory > 0 ? FormatBytes(systemInfo.UsedMemory) : "δ֪";
-                AvailableMemory = systemInfo.AvailableMemory > 0 ? FormatBytes(systemInfo.AvailableMemory) : "δ֪";
+                // 更新内存信息 - 添加数据验证
+                TotalMemory = systemInfo.TotalMemory > 0 ? FormatBytes(systemInfo.TotalMemory) : "未检测到";
+                UsedMemory = systemInfo.UsedMemory > 0 ? FormatBytes(systemInfo.UsedMemory) : "未知";
+                AvailableMemory = systemInfo.AvailableMemory > 0 ? FormatBytes(systemInfo.AvailableMemory) : "未知";
                 
                 MemoryUsagePercent = systemInfo.TotalMemory > 0 
                     ? (double)systemInfo.UsedMemory / systemInfo.TotalMemory * 100.0 
                     : 0.0;
 
-                // ����GPU��Ϣ
+                // 更新GPU信息
                 UpdateCollection(Gpus, systemInfo.Gpus ?? new List<GpuData>());
                 if (SelectedGpu == null && Gpus.Count > 0)
                     SelectedGpu = Gpus[0];
 
-                GpuTemperature = ValidateAndSetDouble(systemInfo.GpuTemperature, "GPU�¶�");
+                GpuTemperature = ValidateAndSetDouble(systemInfo.GpuTemperature, "GPU温度");
 
-                // �ڸ�������������ǰ���浱ǰѡ���������ص���
+                // 在更新网络适配器前保存当前选择键（避免回弹）
                 string? previousNetKey = SelectedNetworkAdapter != null
                     ? $"{SelectedNetworkAdapter.Name}|{SelectedNetworkAdapter.Mac}"
                     : null;
 
-                // ����������Ϣ
+                // 更新网络信息
                 UpdateCollection(NetworkAdapters, systemInfo.Adapters ?? new List<NetworkAdapterData>());
 
-                // ���Իָ�֮ǰ��ѡ��
+                // 尝试恢复之前的选择
                 if (previousNetKey != null)
                 {
                     var restored = NetworkAdapters.FirstOrDefault(a => $"{a.Name}|{a.Mac}" == previousNetKey);
                     if (restored != null)
                     {
-                        SelectedNetworkAdapter = restored; // �ָ�ԭѡ��
+                        SelectedNetworkAdapter = restored; // 恢复原选择
                     }
                 }
 
                 if (SelectedNetworkAdapter == null && NetworkAdapters.Count > 0)
                     SelectedNetworkAdapter = NetworkAdapters[0];
 
-                // �ڸ��´���ǰ���浱ǰѡ��
+                // 在更新磁盘前保存当前选择
                 string? previousDiskKey = SelectedDisk != null ? $"{SelectedDisk.Letter}:{SelectedDisk.Label}" : null;
                 string? previousPhysicalKey = SelectedPhysicalDisk?.Disk?.SerialNumber;
 
-                // ���´�����Ϣ
+                // 更新磁盘信息
                 UpdateCollection(Disks, systemInfo.Disks ?? new List<DiskData>());
 
-                // ����/�����������̷���
+                // 构建/更新物理磁盘分组
                 BuildOrUpdatePhysicalDisks(systemInfo);
 
                 if (previousDiskKey != null)
@@ -408,56 +446,33 @@ namespace WPF_UI1.ViewModels
                 if (SelectedPhysicalDisk == null && PhysicalDisks.Count > 0)
                     SelectedPhysicalDisk = PhysicalDisks[0];
 
-                // �����¶�ͼ��
+                // 更新TPM信息
+                HasTpm = systemInfo.HasTpm;
+                TpmManufacturer = systemInfo.TpmManufacturer ?? "N/A";
+                TpmManufacturerId = systemInfo.TpmManufacturerId ?? "N/A";
+                TpmVersion = systemInfo.TpmVersion ?? "N/A";
+                TpmFirmwareVersion = systemInfo.TpmFirmwareVersion ?? "N/A";
+                TpmStatus = systemInfo.TpmStatus ?? "N/A";
+                TpmEnabled = systemInfo.TpmEnabled;
+                TpmIsActivated = systemInfo.TpmIsActivated;
+                TpmIsOwned = systemInfo.TpmIsOwned;
+                TpmReady = systemInfo.TpmReady;
+                TpmTbsAvailable = systemInfo.TpmTbsAvailable;
+                TpmPhysicalPresenceRequired = systemInfo.TpmPhysicalPresenceRequired;
+                TpmSpecVersion = systemInfo.TpmSpecVersion;
+                TpmTbsVersion = systemInfo.TpmTbsVersion;
+                TpmErrorMessage = systemInfo.TpmErrorMessage ?? "N/A";
+                TpmDetectionMethod = systemInfo.TpmDetectionMethod ?? "N/A";
+
+                // 更新温度图表
                 UpdateTemperatureCharts(systemInfo.CpuTemperature, systemInfo.GpuTemperature);
 
-                // TPM (����)
-                HasTpm = systemInfo.HasTpm;
-                if (systemInfo.HasTpm)
-                {
-                    TpmManufacturer = string.IsNullOrWhiteSpace(systemInfo.TpmManufacturer) ? "δ֪������" : systemInfo.TpmManufacturer;
-                    TpmManufacturerId = systemInfo.TpmManufacturerId;
-                    TpmVersion = string.IsNullOrWhiteSpace(systemInfo.TpmVersion) ? "δ֪�汾" : systemInfo.TpmVersion;
-                    TpmFirmwareVersion = systemInfo.TpmFirmwareVersion;
-                    TpmStatus = string.IsNullOrWhiteSpace(systemInfo.TpmStatus) ? "δ֪״̬" : systemInfo.TpmStatus;
-                    TpmEnabled = systemInfo.TpmEnabled;
-                    TpmIsActivated = systemInfo.TpmIsActivated;
-                    TpmIsOwned = systemInfo.TpmIsOwned;
-                    TpmReady = systemInfo.TpmReady;
-                    TpmTbsAvailable = systemInfo.TpmTbsAvailable;
-                    TpmPhysicalPresenceRequired = systemInfo.TpmPhysicalPresenceRequired;
-                    TpmSpecVersion = systemInfo.TpmSpecVersion;
-                    TpmTbsVersion = systemInfo.TpmTbsVersion;
-                    TpmErrorMessage = systemInfo.TpmErrorMessage;
-                    TpmDetectionMethod = string.IsNullOrWhiteSpace(systemInfo.TpmDetectionMethod) ? "δ֪" : systemInfo.TpmDetectionMethod;
-                    TpmWmiDetectionWorked = systemInfo.TpmWmiDetectionWorked;
-                    TpmTbsDetectionWorked = systemInfo.TpmTbsDetectionWorked;
-                }
-                else
-                {
-                    TpmManufacturer = "δ��⵽TPM";
-                    TpmVersion = "-";
-                    TpmStatus = "��";
-                    TpmEnabled = false;
-                    TpmReady = false;
-                    TpmIsActivated = false;
-                    TpmIsOwned = false;
-                    TpmTbsAvailable = false;
-                    TpmPhysicalPresenceRequired = false;
-                    TpmSpecVersion = 0;
-                    TpmTbsVersion = 0;
-                    TpmErrorMessage = string.Empty;
-                    TpmDetectionMethod = "δ��⵽";
-                    TpmWmiDetectionWorked = false;
-                    TpmTbsDetectionWorked = false;
-                }
-
-                Log.Debug($"ϵͳ���ݸ������: CPU={CpuName}, �ڴ�ʹ����={MemoryUsagePercent:F1}%, GPU����={Gpus.Count}");
+                Log.Debug($"系统数据更新完成: CPU={CpuName}, 内存使用率={MemoryUsagePercent:F1}%, GPU数量={Gpus.Count}");
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "����ϵͳ����ʱ��������");
-                CpuName = $"?? ���ݸ���ʧ��: {ex.Message}";
+                Log.Error(ex, "更新系统数据时发生错误");
+                CpuName = $"?? 数据更新失败: {ex.Message}";
             }
         }
 
@@ -465,10 +480,10 @@ namespace WPF_UI1.ViewModels
         {
             try
             {
-                // �Ƚ��� �����������к� -> ����View ӳ�䣬������������
+                // 先建立 物理磁盘序列号 -> 现有View 显映射，便于增量更新
                 var map = PhysicalDisks.ToDictionary(p => p.Disk.SerialNumber, p => p);
 
-                // ����Դ��ڵ�
+                // 标记仍存在的
                 var alive = new HashSet<string>();
 
                 foreach (var pd in systemInfo.PhysicalDisks)
@@ -480,23 +495,23 @@ namespace WPF_UI1.ViewModels
                     }
                     else
                     {
-                        // �������ã��������ؽ���
+                        // 更新引用（若对象重建）
                         view.Disk = pd;
                     }
                     alive.Add(pd.SerialNumber);
 
-                    // ����������б��������� Disks �� PhysicalDiskIndex ��Ӧ��
+                    // 更新其分区列表：找所有 Disks 中 PhysicalDiskIndex 对应的
                     var partitions = systemInfo.Disks.Where(d => d.PhysicalDiskIndex >= 0 && d.PhysicalDiskIndex < systemInfo.PhysicalDisks.Count && systemInfo.PhysicalDisks[d.PhysicalDiskIndex].SerialNumber == pd.SerialNumber).ToList();
 
-                    // ����ͬ�� view.Partitions
-                    // ɾ�������ڵ�
+                    // 增量同步 view.Partitions
+                    // 删除不存在的
                     for (int i = view.Partitions.Count - 1; i >= 0; i--)
                     {
                         var part = view.Partitions[i];
                         if (!partitions.Any(p => p.Letter == part.Letter))
                             view.Partitions.RemoveAt(i);
                     }
-                    // ����/����
+                    // 添加/更新
                     foreach (var part in partitions)
                     {
                         var existing = view.Partitions.FirstOrDefault(p => p.Letter == part.Letter);
@@ -506,12 +521,12 @@ namespace WPF_UI1.ViewModels
                         }
                         else
                         {
-                            // ���������Ѿ����¹���ͬ���󣩣����ǲ�ͬʵ���������Ը��ƣ��������ͬʵ��
+                            // 属性引用已经更新过（同对象），若是不同实例可逐属性复制，这里假设同实例
                         }
                     }
                 }
 
-                // �Ƴ��Ѳ����ڵ���������
+                // 移除已不存在的物理磁盘
                 for (int i = PhysicalDisks.Count - 1; i >= 0; i--)
                 {
                     if (!alive.Contains(PhysicalDisks[i].Disk.SerialNumber))
@@ -520,7 +535,7 @@ namespace WPF_UI1.ViewModels
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "�����������̷���ʧ��");
+                Log.Error(ex, "构建物理磁盘分组失败");
             }
         }
 
@@ -534,8 +549,8 @@ namespace WPF_UI1.ViewModels
         {
             if (string.IsNullOrWhiteSpace(value))
             {
-                Log.Debug($"{fieldName} ����Ϊ�գ�ʹ��Ĭ��ֵ");
-                return $"{fieldName} δ��⵽";
+                Log.Debug($"{fieldName} 数据为空，使用默认值");
+                return $"{fieldName} 未检测到";
             }
             return value;
         }
@@ -544,7 +559,7 @@ namespace WPF_UI1.ViewModels
         {
             if (value <= 0)
             {
-                Log.Debug($"{fieldName} �����쳣: {value}��ʹ��Ĭ��ֵ0");
+                Log.Debug($"{fieldName} 数据异常: {value}，使用默认值0");
                 return 0;
             }
             return value;
@@ -562,7 +577,7 @@ namespace WPF_UI1.ViewModels
 
         private void UpdateCollection<T>(ObservableCollection<T> collection, List<T> newItems)
         {
-            // �Ľ��ĸ��²��ԣ�ֻ�ڱ�Ҫʱ���¼���
+            // 改进的更新策略：只在必要时更新集合
             try
             {
                 if (newItems == null)
@@ -582,12 +597,12 @@ namespace WPF_UI1.ViewModels
                         collection.Add(item);
                     }
                     
-                    Log.Debug($"���¼���: {typeof(T).Name}, ����: {newItems.Count}");
+                    Log.Debug($"更新集合: {typeof(T).Name}, 数量: {newItems.Count}");
                 }
             }
             catch (Exception ex)
             {
-                Log.Error(ex, $"���¼���ʱ��������: {typeof(T).Name}");
+                Log.Error(ex, $"更新集合时发生错误: {typeof(T).Name}");
             }
         }
 
@@ -595,17 +610,17 @@ namespace WPF_UI1.ViewModels
         {
             try
             {
-                // ��֤�¶����ݵ���Ч��
-                if (cpuTemp > 0 && cpuTemp < 150) // ������CPU�¶ȷ�Χ
+                // 验证温度数据的有效性
+                if (cpuTemp > 0 && cpuTemp < 150) // 合理的CPU温度范围
                 {
                     _cpuTempData.Add(cpuTemp);
                 }
                 else if (_cpuTempData.Count == 0)
                 {
-                    _cpuTempData.Add(0); // ���û�����ݣ�����0�Ա���ͼ��������
+                    _cpuTempData.Add(0); // 如果没有数据，添加0以保持图表连续性
                 }
 
-                if (gpuTemp > 0 && gpuTemp < 150) // ������GPU�¶ȷ�Χ
+                if (gpuTemp > 0 && gpuTemp < 150) // 合理的GPU温度范围
                 {
                     _gpuTempData.Add(gpuTemp);
                 }
@@ -623,7 +638,7 @@ namespace WPF_UI1.ViewModels
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "�����¶�ͼ��ʱ��������");
+                Log.Error(ex, "更新温度图表时发生错误");
             }
         }
 
@@ -648,7 +663,7 @@ namespace WPF_UI1.ViewModels
 
         public string FormatFrequency(double frequency)
         {
-            if (frequency <= 0) return "δ֪";
+            if (frequency <= 0) return "未知";
             
             return frequency >= 1000 
                 ? $"{frequency / 1000.0:F1} GHz" 
@@ -657,13 +672,13 @@ namespace WPF_UI1.ViewModels
 
         public string FormatPercentage(double value)
         {
-            if (double.IsNaN(value) || value < 0) return "δ֪";
+            if (double.IsNaN(value) || value < 0) return "未知";
             return $"{value:F1}%";
         }
 
         public string FormatNetworkSpeed(ulong speedBps)
         {
-            if (speedBps == 0) return "δ����";
+            if (speedBps == 0) return "未连接";
 
             const ulong Kbps = 1000UL;
             const ulong Mbps = Kbps * Kbps;
@@ -683,19 +698,19 @@ namespace WPF_UI1.ViewModels
         {
             if (SelectedDisk != null)
             {
-                // TODO: ʵ��SMART����Ի���
-                Log.Information($"��ʾ���� {SelectedDisk.Letter}: ��SMART����");
+                // TODO: 实现SMART详情对话框
+                Log.Information($"显示磁盘 {SelectedDisk.Letter}: 的SMART详情");
             }
             else
             {
-                Log.Warning("δѡ����̣��޷���ʾSMART����");
+                Log.Warning("未选择磁盘，无法显示SMART详情");
             }
         }
 
         [RelayCommand]
         private void Reconnect()
         {
-            Log.Information("�û��ֶ�������������");
+            Log.Information("用户手动请求重新连接");
             _consecutiveErrors = 0;
             TryConnect();
         }
@@ -704,10 +719,10 @@ namespace WPF_UI1.ViewModels
         {
             base.OnPropertyChanged(e);
             
-            // �����������������Ա仯ʱ�����⴦���߼�
+            // 可以在这里添加属性变化时的特殊处理逻辑
             if (e.PropertyName == nameof(IsConnected))
             {
-                Log.Debug($"����״̬�仯: {IsConnected}");
+                Log.Debug($"连接状态变化: {IsConnected}");
             }
         }
     }

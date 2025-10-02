@@ -1,107 +1,104 @@
+// file: src/core/tpm/TpmInfo.cpp
 #include "TpmInfo.h"
 #include "../Utils/Logger.h"
-#include "../Utils/WMIManager.h"
-#include <comutil.h>
-#include <tbs.h>        // TPM Base Services
-#include <wbemidl.h>
+#include "../Utils/WmiManager.h"
+#include "../Utils/WinUtils.h"
 
-// 链接TBS库和其他必要的库
+#define WIN32_LEAN_AND_MEAN
+#include <tbs.h>
+#include <wbemidl.h>
+#include <comutil.h>
+#include <string>
+#include <cwchar>
+
 #pragma comment(lib, "tbs.lib")
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "oleaut32.lib")
 #pragma comment(lib, "wbemuuid.lib")
 
+namespace {
+    struct TbsContextGuard {
+        TBS_HCONTEXT ctx{ 0 };
+        ~TbsContextGuard() {
+            if (ctx) {
+                Tbsip_Context_Close(ctx);
+                ctx = 0;
+            }
+        }
+    };
+
+    std::wstring MapTbsError(TBS_RESULT r) {
+        switch (r) {
+        case TBS_E_TPM_NOT_FOUND:        return L"TPM not found";
+        case TBS_E_SERVICE_NOT_RUNNING:  return L"TBS service not running";
+        case TBS_E_INSUFFICIENT_BUFFER:  return L"Insufficient buffer";
+#ifdef TBS_E_BAD_PARAMETER
+        case TBS_E_BAD_PARAMETER:        return L"Bad parameter";
+#endif
+#ifdef TBS_E_INTERNAL_ERROR
+        case TBS_E_INTERNAL_ERROR:       return L"Internal error";
+#endif
+#ifdef TBS_E_IOERROR
+        case TBS_E_IOERROR:              return L"I/O error";
+#endif
+#ifdef TBS_E_ACCESS_DENIED
+        case TBS_E_ACCESS_DENIED:        return L"Access denied";
+#endif
+        default: {
+            wchar_t buf[48];
+            swprintf_s(buf, L"TBS error 0x%08X", r);
+            return buf;
+        }
+        }
+    }
+
+    void SetStatusIfEmpty(std::wstring& status, const std::wstring& value) {
+        if (status.empty() || status == L"Unknown") status = value;
+    }
+}
+
 TpmInfo::TpmInfo(WmiManager& manager) : wmiManager(manager) {
-    Logger::Info("开始TPM检测 - 优先使用TBS，WMI作为备份方法");
-    
-    // 初始化检测方法追踪
-    tpmData.detectionMethod = L"未检测到";
+    hasTpm = false;
+    tpmData.detectionMethod = L"NONE";
     tpmData.wmiDetectionWorked = false;
     tpmData.tbsDetectionWorked = false;
-    
-    // 步骤1: 优先尝试TBS检测
-    Logger::Info("第一步: 尝试TBS检测...");
-    try {
-        DetectTpmViaTbs();
-        if (tpmData.tbsAvailable) {
-            tpmData.tbsDetectionWorked = true;
-            hasTpm = true;
-            Logger::Info("TBS检测成功 - 检测到TPM");
-        } else {
-            Logger::Info("TBS检测失败 - 将尝试WMI备份方法");
-        }
-    } catch (const std::exception& e) {
-        Logger::Error("TBS TPM检测发生异常: " + std::string(e.what()));
-        tpmData.errorMessage = L"TBS检测异常: " + std::wstring(e.what(), e.what() + strlen(e.what()));
-    } catch (...) {
-        Logger::Error("TBS TPM检测发生未知异常");
-        tpmData.errorMessage = L"TBS检测发生未知异常";
-    }
-    
-    // 步骤2: 尝试WMI检测（无论TBS是否成功，都尝试获取更多信息）
-    Logger::Info("第二步: 尝试WMI检测获取详细信息...");
-    
-    if (!wmiManager.IsInitialized()) {
-        Logger::Warn("WMI服务未初始化，无法通过WMI获取详细TPM信息");
-        if (!tpmData.tbsDetectionWorked) {
-            tpmData.errorMessage = L"WMI服务未初始化且TBS检测失败";
-        }
-    } else {
-        pSvc = wmiManager.GetWmiService();
-        if (!pSvc) {
-            Logger::Warn("无法获取WMI服务，无法通过WMI获取详细TPM信息");
-            if (!tpmData.tbsDetectionWorked) {
-                tpmData.errorMessage = L"无法获取WMI服务且TBS检测失败";
-            }
-        } else {
-            try {
-                DetectTpmViaWmi();
-                if (tpmData.wmiDetectionWorked) {
-                    Logger::Info("WMI检测成功 - 获取到详细TPM信息");
-                    if (!hasTpm) {
-                        hasTpm = true; // WMI检测到TPM，即使TBS失败
-                    }
-                } else {
-                    Logger::Info("WMI检测未找到TPM信息");
-                }
-            } catch (const std::exception& e) {
-                Logger::Error("WMI TPM检测发生异常: " + std::string(e.what()));
-                if (tpmData.errorMessage.empty()) {
-                    tpmData.errorMessage = L"WMI检测异常: " + std::wstring(e.what(), e.what() + strlen(e.what()));
-                }
-            } catch (...) {
-                Logger::Error("WMI TPM检测发生未知异常");
-                if (tpmData.errorMessage.empty()) {
-                    tpmData.errorMessage = L"WMI检测发生未知异常";
-                }
-            }
-        }
-    }
-    
-    // 步骤3: 确定最终的检测方法和状态
+    tpmData.status = L"Unknown";
+    tpmData.errorMessage.clear();
+
+    Logger::Info("TPM detection start (TBS primary, WMI fallback)");
+
+    try { DetectTpmViaTbs(); }
+    catch (...) { Logger::Warn("TBS detection threw an exception"); }
+    try { DetectTpmViaWmi(); }
+    catch (...) { Logger::Warn("WMI detection threw an exception"); }
+
     DetermineDetectionMethod();
-    
-    // 记录最终检测结果
+
     if (hasTpm) {
-        std::string manufacturerStr(tpmData.manufacturerName.begin(), tpmData.manufacturerName.end());
-        std::string versionStr(tpmData.version.begin(), tpmData.version.end());
-        std::string statusStr(tpmData.status.begin(), tpmData.status.end());
-        std::string methodStr(tpmData.detectionMethod.begin(), tpmData.detectionMethod.end());
-        Logger::Info("TPM检测完成 - 检测到TPM: " + manufacturerStr + " v" + versionStr + 
-                    " (" + statusStr + ") [检测方法: " + methodStr + "]");
-    } else {
-        std::string errorStr(tpmData.errorMessage.begin(), tpmData.errorMessage.end());
-        Logger::Info("TPM检测完成 - 未检测到TPM: " + errorStr);
+        Logger::Info("TPM detected: " +
+            WinUtils::WstringToString(tpmData.manufacturerName) + " v" +
+            WinUtils::WstringToString(tpmData.version) + " (" +
+            WinUtils::WstringToString(tpmData.status) + ") [method: " +
+            WinUtils::WstringToString(tpmData.detectionMethod) + "]");
+    }
+    else {
+        Logger::Info("No TPM detected: " + WinUtils::WstringToString(tpmData.errorMessage));
     }
 }
 
 TpmInfo::~TpmInfo() {
-    Logger::Info("TPM信息检测结束");
+    Logger::Debug("TPM detection end");
 }
 
 void TpmInfo::DetectTpmViaWmi() {
+    if (!wmiManager.IsInitialized()) {
+        Logger::Warn("WMI manager not initialized");
+        return;
+    }
+
+    IWbemServices* pSvc = wmiManager.GetWmiService();
     if (!pSvc) {
-        Logger::Error("WMI服务不可用");
+        Logger::Warn("WMI service not available");
         return;
     }
 
@@ -114,21 +111,21 @@ void TpmInfo::DetectTpmViaWmi() {
         &pEnumerator
     );
 
-    if (FAILED(hres)) {
-        Logger::Warn("WMI查询Win32_Tpm失败，可能系统不支持TPM或未启用");
+    if (FAILED(hres) || !pEnumerator) {
+        Logger::Debug("Win32_Tpm query failed or returned null");
         return;
     }
 
     ULONG uReturn = 0;
     IWbemClassObject* pclsObj = nullptr;
-    bool foundTpmViaWmi = false;
-    
+    bool found = false;
+
     while (pEnumerator->Next(WBEM_INFINITE, 1, &pclsObj, &uReturn) == S_OK) {
-        foundTpmViaWmi = true;
-        
-        VARIANT vtManufacturerName, vtManufacturerId, vtSpecVersion;
-        VARIANT vtIsEnabled, vtIsActivated, vtIsOwned, vtPhysicalPresenceRequired;
-        
+        found = true;
+
+        VARIANT vtManufacturerName{}, vtManufacturerId{}, vtSpecVersion{};
+        VARIANT vtIsEnabled{}, vtIsActivated{}, vtIsOwned{}, vtPhysicalPresenceRequired{};
+
         VariantInit(&vtManufacturerName);
         VariantInit(&vtManufacturerId);
         VariantInit(&vtSpecVersion);
@@ -137,68 +134,36 @@ void TpmInfo::DetectTpmViaWmi() {
         VariantInit(&vtIsOwned);
         VariantInit(&vtPhysicalPresenceRequired);
 
-        // 获取制造商信息
-        if (SUCCEEDED(pclsObj->Get(L"ManufacturerName", 0, &vtManufacturerName, 0, 0)) && 
-            vtManufacturerName.vt == VT_BSTR) {
+        if (SUCCEEDED(pclsObj->Get(L"ManufacturerName", 0, &vtManufacturerName, 0, 0)) && vtManufacturerName.vt == VT_BSTR)
             tpmData.manufacturerName = vtManufacturerName.bstrVal;
-        }
 
-        if (SUCCEEDED(pclsObj->Get(L"ManufacturerId", 0, &vtManufacturerId, 0, 0)) && 
-            vtManufacturerId.vt == VT_I4) {
+        if (SUCCEEDED(pclsObj->Get(L"ManufacturerId", 0, &vtManufacturerId, 0, 0)) && vtManufacturerId.vt == VT_I4) {
             wchar_t manufacturerIdStr[32];
             swprintf_s(manufacturerIdStr, L"0x%08X", vtManufacturerId.intVal);
             tpmData.manufacturerId = manufacturerIdStr;
         }
 
-        // 获取规范版本
-        if (SUCCEEDED(pclsObj->Get(L"SpecVersion", 0, &vtSpecVersion, 0, 0)) && 
-            vtSpecVersion.vt == VT_BSTR) {
+        if (SUCCEEDED(pclsObj->Get(L"SpecVersion", 0, &vtSpecVersion, 0, 0)) && vtSpecVersion.vt == VT_BSTR)
             tpmData.version = vtSpecVersion.bstrVal;
-        }
 
-        // 获取状态信息
-        if (SUCCEEDED(pclsObj->Get(L"IsEnabled_InitialValue", 0, &vtIsEnabled, 0, 0)) && 
-            vtIsEnabled.vt == VT_BOOL) {
+        if (SUCCEEDED(pclsObj->Get(L"IsEnabled_InitialValue", 0, &vtIsEnabled, 0, 0)) && vtIsEnabled.vt == VT_BOOL)
             tpmData.isEnabled = (vtIsEnabled.boolVal == VARIANT_TRUE);
-        }
 
-        if (SUCCEEDED(pclsObj->Get(L"IsActivated_InitialValue", 0, &vtIsActivated, 0, 0)) && 
-            vtIsActivated.vt == VT_BOOL) {
+        if (SUCCEEDED(pclsObj->Get(L"IsActivated_InitialValue", 0, &vtIsActivated, 0, 0)) && vtIsActivated.vt == VT_BOOL)
             tpmData.isActivated = (vtIsActivated.boolVal == VARIANT_TRUE);
-        }
 
-        if (SUCCEEDED(pclsObj->Get(L"IsOwned_InitialValue", 0, &vtIsOwned, 0, 0)) && 
-            vtIsOwned.vt == VT_BOOL) {
+        if (SUCCEEDED(pclsObj->Get(L"IsOwned_InitialValue", 0, &vtIsOwned, 0, 0)) && vtIsOwned.vt == VT_BOOL)
             tpmData.isOwned = (vtIsOwned.boolVal == VARIANT_TRUE);
-        }
 
-        if (SUCCEEDED(pclsObj->Get(L"PhysicalPresenceRequired", 0, &vtPhysicalPresenceRequired, 0, 0)) && 
-            vtPhysicalPresenceRequired.vt == VT_BOOL) {
+        if (SUCCEEDED(pclsObj->Get(L"PhysicalPresenceRequired", 0, &vtPhysicalPresenceRequired, 0, 0)) && vtPhysicalPresenceRequired.vt == VT_BOOL)
             tpmData.physicalPresenceRequired = (vtPhysicalPresenceRequired.boolVal == VARIANT_TRUE);
-        }
 
-        // 设置整体状态
         tpmData.isReady = tpmData.isEnabled && tpmData.isActivated;
-        
-        if (tpmData.isReady) {
-            if (tpmData.status.empty() || tpmData.status == L"通过TBS检测到") {
-                tpmData.status = L"就绪";
-            }
-        } else if (tpmData.isEnabled && !tpmData.isActivated) {
-            if (tpmData.status.empty() || tpmData.status == L"通过TBS检测到") {
-                tpmData.status = L"已启用但未激活";
-            }
-        } else if (!tpmData.isEnabled) {
-            if (tpmData.status.empty() || tpmData.status == L"通过TBS检测到") {
-                tpmData.status = L"未启用";
-            }
-        } else {
-            if (tpmData.status.empty() || tpmData.status == L"通过TBS检测到") {
-                tpmData.status = L"未知状态";
-            }
-        }
+        if (tpmData.isReady)          tpmData.status = L"Ready";
+        else if (tpmData.isEnabled && !tpmData.isActivated) tpmData.status = L"EnabledNotActivated";
+        else if (!tpmData.isEnabled)  tpmData.status = L"Disabled";
+        else                          tpmData.status = L"Unknown";
 
-        // 清理变量
         VariantClear(&vtManufacturerName);
         VariantClear(&vtManufacturerId);
         VariantClear(&vtSpecVersion);
@@ -206,118 +171,50 @@ void TpmInfo::DetectTpmViaWmi() {
         VariantClear(&vtIsActivated);
         VariantClear(&vtIsOwned);
         VariantClear(&vtPhysicalPresenceRequired);
-        
+
         pclsObj->Release();
-        
-        // 记录TPM信息到日志
-        std::string manufacturerStr(tpmData.manufacturerName.begin(), tpmData.manufacturerName.end());
-        std::string versionStr(tpmData.version.begin(), tpmData.version.end());
-        std::string statusStr(tpmData.status.begin(), tpmData.status.end());
-        
-        Logger::Info("WMI检测到TPM: " + manufacturerStr + 
-                    ", 版本: " + versionStr + 
-                    ", 状态: " + statusStr + 
-                    ", 已启用: " + (tpmData.isEnabled ? "是" : "否") +
-                    ", 已激活: " + (tpmData.isActivated ? "是" : "否"));
-        
-        break; // 只处理第一个TPM
+        break;
     }
 
     pEnumerator->Release();
 
-    if (foundTpmViaWmi) {
+    if (found) {
         tpmData.wmiDetectionWorked = true;
         hasTpm = true;
-        Logger::Info("WMI成功检测到TPM设备");
-    } else {
-        Logger::Info("通过WMI未检测到TPM设备");
     }
 }
 
 void TpmInfo::DetectTpmViaTbs() {
-    // 尝试检测TBS (TPM Base Services)
-    TBS_HCONTEXT hContext = 0;
-    
-    // 使用TBS_CONTEXT_PARAMS 兼容旧版本Windows SDK
-    TBS_CONTEXT_PARAMS contextParams = { 0 };
-    contextParams.version = TBS_CONTEXT_VERSION_ONE; // 基础版本，兼容性更好
+    TbsContextGuard guard;
+    TBS_CONTEXT_PARAMS params{};
+    params.version = TBS_CONTEXT_VERSION_ONE;
 
-    TBS_RESULT result = Tbsi_Context_Create(&contextParams, &hContext);
-    
+    TBS_RESULT result = Tbsi_Context_Create(&params, &guard.ctx);
     if (result == TBS_SUCCESS) {
         tpmData.tbsAvailable = true;
-        
-        // 获取TBS版本信息
-        TPM_DEVICE_INFO deviceInfo = {0};
-        
+
+        TPM_DEVICE_INFO deviceInfo{};
         result = Tbsi_GetDeviceInfo(sizeof(deviceInfo), &deviceInfo);
         if (result == TBS_SUCCESS) {
             tpmData.tbsVersion = deviceInfo.tpmVersion;
-            
-            // 根据TPM版本设置版本字符串
             if (deviceInfo.tpmVersion == TPM_VERSION_12) {
-                if (tpmData.version.empty()) {
-                    tpmData.version = L"1.2";
-                }
-                Logger::Info("检测到TPM 1.2");
-            } else if (deviceInfo.tpmVersion == TPM_VERSION_20) {
-                if (tpmData.version.empty()) {
-                    tpmData.version = L"2.0";
-                }
-                Logger::Info("检测到TPM 2.0");
-            } else {
-                Logger::Info("检测到未知TPM版本: " + std::to_string(deviceInfo.tpmVersion));
+                SetStatusIfEmpty(tpmData.status, L"DetectedViaTBS");
+                if (tpmData.version.empty()) tpmData.version = L"1.2";
             }
-            
-            Logger::Info("TBS可用, TPM版本: " + std::to_string(deviceInfo.tpmVersion));
-        } else {
-            Logger::Warn("TBS设备信息获取失败: 0x" + std::to_string(result));
+            else if (deviceInfo.tpmVersion == TPM_VERSION_20) {
+                SetStatusIfEmpty(tpmData.status, L"DetectedViaTBS");
+                if (tpmData.version.empty()) tpmData.version = L"2.0";
+            }
         }
-        
-        // 如果WMI没有检测到TPM，但TBS可用，说明TPM存在
-        if (!hasTpm) {
-            hasTpm = true;
-            tpmData.isEnabled = true; // TBS可用说明TPM已启用
-            tpmData.isActivated = true; // 如果TBS可用，TPM通常也是激活的
-            tpmData.status = L"通过TBS检测到";
-            Logger::Info("通过TBS检测到TPM");
-        }
-        
-        // 关闭TBS上下文
-        Tbsip_Context_Close(hContext);
-    } else {
+
+        hasTpm = true;
+        tpmData.tbsDetectionWorked = true;
+        SetStatusIfEmpty(tpmData.status, L"DetectedViaTBS");
+    }
+    else {
         tpmData.tbsAvailable = false;
-        
-        // 设置详细的错误信息
-        switch (result) {
-            case TBS_E_TPM_NOT_FOUND:
-                tpmData.errorMessage = L"未找到TPM设备";
-                Logger::Info("TBS检测结果: 未找到TPM设备");
-                break;
-            case TBS_E_SERVICE_NOT_RUNNING:
-                tpmData.errorMessage = L"TPM基础服务未运行";
-                Logger::Warn("TBS检测结果: TPM基础服务未运行");
-                break;
-            case TBS_E_INSUFFICIENT_BUFFER:
-                tpmData.errorMessage = L"缓冲区不足";
-                Logger::Warn("TBS检测结果: 缓冲区不足");
-                break;
-            case TBS_E_INVALID_PARAMETER:
-                tpmData.errorMessage = L"无效参数";
-                Logger::Warn("TBS检测结果: 无效参数");
-                break;
-            case TBS_E_ACCESS_DENIED:
-                tpmData.errorMessage = L"访问被拒绝";
-                Logger::Warn("TBS检测结果: 访问被拒绝");
-                break;
-            default:
-                tpmData.errorMessage = L"TBS初始化失败: 0x" + std::to_wstring(result);
-                Logger::Warn("TBS检测失败，错误代码: 0x" + std::to_string(result));
-                break;
-        }
-        
-        std::string errorStr(tpmData.errorMessage.begin(), tpmData.errorMessage.end());
-        Logger::Warn("TBS检测失败: " + errorStr);
+        tpmData.errorMessage = MapTbsError(result);
+        // do not set hasTpm=true here
     }
 }
 
@@ -326,23 +223,16 @@ const TpmInfo::TpmData& TpmInfo::GetTpmData() const {
 }
 
 void TpmInfo::DetermineDetectionMethod() {
-    // 根据检测结果确定使用的方法
     if (tpmData.tbsDetectionWorked && tpmData.wmiDetectionWorked) {
         tpmData.detectionMethod = L"TBS+WMI";
-        Logger::Info("检测方法: TBS(主要) + WMI(备份详细信息)");
-    } else if (tpmData.tbsDetectionWorked && !tpmData.wmiDetectionWorked) {
+    }
+    else if (tpmData.tbsDetectionWorked) {
         tpmData.detectionMethod = L"TBS";
-        Logger::Info("检测方法: TBS(仅)");
-    } else if (!tpmData.tbsDetectionWorked && tpmData.wmiDetectionWorked) {
+    }
+    else if (tpmData.wmiDetectionWorked) {
         tpmData.detectionMethod = L"WMI";
-        Logger::Info("检测方法: WMI(备份方法)");
-    } else {
-        tpmData.detectionMethod = L"未检测到";
-        Logger::Info("检测方法: 无 - 未检测到TPM");
-        
-        // 如果没有检测到TPM，设置适当的错误信息
-        if (tpmData.errorMessage.empty()) {
-            tpmData.errorMessage = L"TBS和WMI检测均失败";
-        }
+    }
+    else {
+        tpmData.detectionMethod = L"NONE";
     }
 }

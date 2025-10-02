@@ -25,14 +25,14 @@ static void LogRealGpuNames(const std::vector<GpuInfo::GpuData>& gpus, bool isDe
         }
     }
     if (!realGpuNames.empty()) {
-        std::string msg = "TemperatureWrapper: 真实GPU名称列表: ";
+        std::string msg = "TemperatureWrapper: Real GPU name list: ";
         for (size_t i = 0; i < realGpuNames.size(); ++i) {
             msg += realGpuNames[i];
             if (i + 1 < realGpuNames.size()) msg += ", ";
         }
         Logger::Debug(msg);
     } else {
-        Logger::Debug("TemperatureWrapper: 未检测到真实GPU");
+        Logger::Debug("TemperatureWrapper: No real GPU detected");
     }
 }
 
@@ -44,10 +44,9 @@ void TemperatureWrapper::Initialize() {
         if (!wmiManager) wmiManager = new WmiManager();
         if (!gpuInfo && wmiManager && wmiManager->IsInitialized()) {
             gpuInfo = new GpuInfo(*wmiManager);
-            Logger::Debug("TemperatureWrapper: GpuInfo初始化成功");
             LogRealGpuNames(gpuInfo->GetGpuData(), true); // 初始化时总是显示
         } else if (!wmiManager || !wmiManager->IsInitialized()) {
-            Logger::Warn("TemperatureWrapper: WmiManager初始化失败，无法获取本地GPU温度");
+            Logger::Warn("TemperatureWrapper: WmiManager initialization failed, cannot get local GPU temperature");
         }
     }
     catch (...) {
@@ -79,12 +78,11 @@ std::vector<std::pair<std::string, double>> TemperatureWrapper::GetTemperatures(
         try {
             auto libreTemps = LibreHardwareMonitorBridge::GetTemperatures();
             if (isDetailedLogging) {
-                Logger::Debug("TemperatureWrapper: 从libre获取温度传感器数量: " + std::to_string(libreTemps.size()));
             }
             temps.insert(temps.end(), libreTemps.begin(), libreTemps.end());
         } catch (...) {
             if (isDetailedLogging) {
-                Logger::Warn("TemperatureWrapper: 获取libre温度异常");
+                Logger::Warn("TemperatureWrapper: Exception while getting temperatures from libre");
             }
         }
     }
@@ -93,31 +91,31 @@ std::vector<std::pair<std::string, double>> TemperatureWrapper::GetTemperatures(
     if (gpuInfo) {
         const auto& gpus = gpuInfo->GetGpuData();
         if (isDetailedLogging) {
-            Logger::Debug("TemperatureWrapper: GpuInfo GPU数量: " + std::to_string(gpus.size()));
+            Logger::Debug("TemperatureWrapper: GpuInfo GPU count: " + std::to_string(gpus.size()));
             LogRealGpuNames(gpus, isDetailedLogging);
         }
         
         for (const auto& gpu : gpus) {
             if (gpu.isVirtual) {
                 if (isDetailedLogging) {
-                    Logger::Debug("TemperatureWrapper: 跳过虚拟GPU: " + std::string(gpu.name.begin(), gpu.name.end()));
+                    Logger::Debug("TemperatureWrapper: Skipping virtual GPU: " + std::string(gpu.name.begin(), gpu.name.end()));
                 }
                 continue;
             }
             std::string gpuName(gpu.name.begin(), gpu.name.end());
             if (isDetailedLogging) {
-                Logger::Debug("TemperatureWrapper: GpuInfo检测到GPU: " + gpuName + ", 温度: " + std::to_string(gpu.temperature));
+                Logger::Debug("TemperatureWrapper: GpuInfo detected GPU: " + gpuName + ", Temperature: " + std::to_string(gpu.temperature));
             }
             temps.emplace_back("GPU: " + gpuName, static_cast<double>(gpu.temperature));
         }
     } else {
         if (isDetailedLogging) {
-            Logger::Warn("TemperatureWrapper: GpuInfo未初始化");
+            Logger::Warn("TemperatureWrapper: GpuInfo not initialized");
         }
     }
     
     if (isDetailedLogging) {
-        Logger::Debug("TemperatureWrapper: 总温度数量: " + std::to_string(temps.size()));
+        Logger::Debug("TemperatureWrapper: Total number of temperatures: " + std::to_string(temps.size()));
     }
     
     // 防止计数器溢出

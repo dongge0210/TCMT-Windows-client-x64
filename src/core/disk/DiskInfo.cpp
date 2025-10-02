@@ -5,7 +5,9 @@
 #include "../Utils/WmiManager.h"
 #include <wbemidl.h>
 #include <comdef.h>
+#include <shellapi.h> // SHGetFileInfoW fallback display name
 #pragma comment(lib, "wbemuuid.lib")
+#pragma comment(lib, "Shell32.lib")
 
 DiskInfo::DiskInfo() { QueryDrives(); }
 
@@ -21,22 +23,48 @@ void DiskInfo::QueryDrives() {
         UINT driveType = GetDriveTypeW(rootPath.c_str());
         if (!(driveType == DRIVE_FIXED || driveType == DRIVE_REMOVABLE)) continue;
         ULARGE_INTEGER freeBytesAvailable{}; ULARGE_INTEGER totalBytes{}; ULARGE_INTEGER totalFreeBytes{};
-        if (!GetDiskFreeSpaceExW(rootPath.c_str(), &freeBytesAvailable, &totalBytes, &totalFreeBytes)) { Logger::Warn("GetDiskFreeSpaceEx 失败: " + WinUtils::WstringToString(rootPath)); continue; }
+        if (!GetDiskFreeSpaceExW(rootPath.c_str(), &freeBytesAvailable, &totalBytes, &totalFreeBytes)) { Logger::Warn(L"GetDiskFreeSpaceEx 失败: " + rootPath); continue; }
         if (totalBytes.QuadPart == 0) continue;
         DriveInfo info{}; info.letter = driveLetter; info.totalSize = totalBytes.QuadPart; info.freeSpace = totalFreeBytes.QuadPart; info.usedSpace = (totalBytes.QuadPart >= totalFreeBytes.QuadPart)? (totalBytes.QuadPart - totalFreeBytes.QuadPart):0ULL;
         // 获取卷标 / 文件系统
         wchar_t volumeName[MAX_PATH + 1] = {0};
         wchar_t fileSystemName[MAX_PATH + 1] = {0};
         DWORD fsFlags = 0;
-        if (!GetVolumeInformationW(rootPath.c_str(), volumeName, MAX_PATH, nullptr, nullptr, &fsFlags, fileSystemName, MAX_PATH)) {
+        BOOL gotInfo = GetVolumeInformationW(rootPath.c_str(), volumeName, MAX_PATH, nullptr, nullptr, &fsFlags, fileSystemName, MAX_PATH);
+        if (!gotInfo) {
             info.label = L""; // 空表示未命名或获取失败
             info.fileSystem = L"未知";
-            Logger::Warn("GetVolumeInformation 失败: " + WinUtils::WstringToString(rootPath));
+            Logger::Warn(L"GetVolumeInformation 失败: " + rootPath);
         } else {
             info.label = volumeName;
-            if (info.label.empty()) info.label = L"未命名"; // 兜底
             info.fileSystem = fileSystemName;
         }
+        // 若卷标仍为空，尝试通过卷 GUID 路径再次获取（更稳健）
+        if (info.label.empty()) {
+            wchar_t volumeGuidPath[MAX_PATH + 1] = {0};
+            if (GetVolumeNameForVolumeMountPointW(rootPath.c_str(), volumeGuidPath, MAX_PATH)) {
+                wchar_t volumeName2[MAX_PATH + 1] = {0};
+                wchar_t fileSystemName2[MAX_PATH + 1] = {0};
+                DWORD fsFlags2 = 0;
+                if (GetVolumeInformationW(volumeGuidPath, volumeName2, MAX_PATH, nullptr, nullptr, &fsFlags2, fileSystemName2, MAX_PATH)) {
+                    if (volumeName2[0] != L'\0') info.label = volumeName2;
+                    if (fileSystemName2[0] != L'\0') info.fileSystem = fileSystemName2;
+                }
+            }
+        }
+        // 若仍为空，使用 Shell 友好显示名作为兜底（本地磁盘等）
+        if (info.label.empty()) {
+            SHFILEINFOW sfi{};
+            if (SHGetFileInfoW(rootPath.c_str(), FILE_ATTRIBUTE_DIRECTORY, &sfi, sizeof(sfi), SHGFI_DISPLAYNAME | SHGFI_USEFILEATTRIBUTES)) {
+                if (sfi.szDisplayName[0] != L'\0') {
+                    info.label = sfi.szDisplayName; // 例如：本地磁盘 (C:)
+                }
+            }
+        }
+        // 最后兜底
+        if (info.label.empty()) info.label = L"未命名";
+        if (info.fileSystem.empty()) info.fileSystem = L"未知";
+
         drives.push_back(std::move(info));
     }
     std::sort(drives.begin(), drives.end(), [](const DriveInfo& a,const DriveInfo& b){return a.letter<b.letter;});
@@ -66,7 +94,7 @@ void DiskInfo::CollectPhysicalDisks(WmiManager& wmi, const std::vector<DiskData>
     // 2. Win32_LogicalDiskToPartition 建立盘符 -> 物理索引
     std::map<char,int> letterToDiskIndex; {
         IEnumWbemClassObject* pEnum=nullptr; HRESULT hr=svc->ExecQuery(bstr_t(L"WQL"), bstr_t(L"SELECT * FROM Win32_LogicalDiskToPartition"), WBEM_FLAG_FORWARD_ONLY|WBEM_FLAG_RETURN_IMMEDIATELY,nullptr,&pEnum);
-        if (SUCCEEDED(hr)&&pEnum){ IWbemClassObject* obj=nullptr; ULONG ret=0; while(pEnum->Next(WBEM_INFINITE,1,&obj,&ret)==S_OK){ VARIANT ant; VARIANT dep; VariantInit(&ant); VariantInit(&dep); if (SUCCEEDED(obj->Get(L"Antecedent",0,&ant,0,0)) && ant.vt==VT_BSTR && SUCCEEDED(obj->Get(L"Dependent",0,&dep,0,0)) && dep.vt==VT_BSTR){ int diskIdx=-1; if (ParseDiskPartition(ant.bstrVal,diskIdx)){ std::wstring depStr = dep.bstrVal; size_t pos = depStr.find(L"DeviceID=\""); if (pos!=std::wstring::npos){ pos+=10; if (pos<depStr.size()){ wchar_t letterW = depStr[pos]; if(letterW && letterW!=L'"'){ letterToDiskIndex[ static_cast<char>(::toupper(letterW)) ] = diskIdx; } } } } } VariantClear(&ant); VariantClear(&dep); obj->Release(); } pEnum->Release(); } else { Logger::Warn("查询 Win32_LogicalDiskToPartition 失败"); } }
+        if (SUCCEEDED(hr)&&pEnum){ IWbemClassObject* obj=nullptr; ULONG ret=0; while(pEnum->Next(WBEM_INFINITE,1,&obj,&ret)==S_OK){ VARIANT ant; VARIANT dep; VariantInit(&ant); VariantInit(&dep); if (SUCCEEDED(obj->Get(L"Antecedent",0,&ant,0,0)) && ant.vt==VT_BSTR && SUCCEEDED(obj->Get(L"Dependent",0,&dep,0,0)) && dep.vt==VT_BSTR){ int diskIdx=-1; if (ParseDiskPartition(ant.bstrVal,diskIdx)){ std::wstring depStr = dep.bstrVal; size_t pos = depStr.find(L"DeviceID=\""); if (pos!=std::wstring::npos){ pos+=10; if (pos<depStr.size()){ wchar_t letterW = depStr[pos]; if(letterW && letterW!=L'\"'){ letterToDiskIndex[ static_cast<char>(::toupper(letterW)) ] = diskIdx; } } } } } VariantClear(&ant); VariantClear(&dep); obj->Release(); } pEnum->Release(); } else { Logger::Warn("查询 Win32_LogicalDiskToPartition 失败"); } }
     for (auto& kv: letterToDiskIndex) physicalIndexToLetters[kv.second].push_back(kv.first);
     // 3. Win32_DiskDrive 基本信息
     std::map<int,PhysicalDiskSmartData> tempDisks; {
@@ -76,5 +104,5 @@ void DiskInfo::CollectPhysicalDisks(WmiManager& wmi, const std::vector<DiskData>
     for (auto& kv: physicalIndexToLetters){ int diskIdx=kv.first; auto it=tempDisks.find(diskIdx); if(it==tempDisks.end()) continue; auto& pd=it->second; int count=0; for(char L: kv.second){ if(count>=8) break; pd.logicalDriveLetters[count++]=L; } pd.logicalDriveCount=count; }
     // 5. 写入 SystemInfo
     sysInfo.physicalDisks.clear(); for (auto& kv: tempDisks){ sysInfo.physicalDisks.push_back(kv.second); if (sysInfo.physicalDisks.size()>=8) break; }
-    Logger::Debug("物理磁盘枚举完成: " + std::to_string(sysInfo.physicalDisks.size()) + " 个");
+    Logger::Debug(L"物理磁盘枚举完成: " + std::to_wstring(sysInfo.physicalDisks.size()) + L" 个");
 }
