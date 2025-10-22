@@ -7,7 +7,7 @@
 #include <iphlpapi.h>
 #include <string>
 #include <vector>
-#include "WmiManager.h"
+#include "../Utils/WMIManager.h"
 
 class NetworkAdapter {
 public:
