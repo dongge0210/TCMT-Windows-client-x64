@@ -7,7 +7,7 @@
 #include <iphlpapi.h>
 
 #include "NetworkAdapter.h"
-#include "Logger.h"
+#include "../Utils/Logger.h"
 #include <comutil.h>
 #include <sstream>
 #include <iomanip>

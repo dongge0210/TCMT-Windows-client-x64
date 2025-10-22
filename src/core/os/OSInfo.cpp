@@ -1,5 +1,5 @@
 #include "OSInfo.h"
-#include "../utils/WinUtils.h"
+#include "../Utils/WinUtils.h"
 #include <windows.h>
 #include <winternl.h>
 #include <ntstatus.h>

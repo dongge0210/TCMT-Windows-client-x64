@@ -1,7 +1,7 @@
 #include "TemperatureWrapper.h"
 #include "../gpu/GpuInfo.h"
-#include "../utils/Logger.h"
-#include "../utils/WmiManager.h"
+#include "../Utils/Logger.h"
+#include "../Utils/WMIManager.h"
 #include <algorithm>
 #include <cwctype>
 // 切换到托管代码模式来调用LibreHardwareMonitorBridge

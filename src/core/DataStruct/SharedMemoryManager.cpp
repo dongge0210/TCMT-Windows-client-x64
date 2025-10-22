@@ -38,7 +38,7 @@
 // Fix the include path case sensitivity
 #include "../Utils/WinUtils.h"
 #include "../Utils/Logger.h"
-#include "../Utils/WmiManager.h"
+#include "../Utils/WMIManager.h"
 #include <iostream>
 #include <sstream>
 #include <stdexcept>

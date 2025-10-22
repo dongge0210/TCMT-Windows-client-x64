@@ -1,6 +1,6 @@
 ﻿#include "GpuInfo.h"
-#include "Logger.h"
-#include "WmiManager.h"
+#include "../../Utils/Logger.h"
+#include "../../Utils/WMIManager.h"
 #include <comutil.h>
 #include <nvml.h>
 #include <algorithm>  // Add this header for std::transform

@@ -1,5 +1,5 @@
 ﻿#include "CpuInfo.h"
-#include "Logger.h"
+#include "../Utils/Logger.h"
 #include <intrin.h>
 #include <windows.h>
 #include <vector>
