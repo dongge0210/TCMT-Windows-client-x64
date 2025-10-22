@@ -9,6 +9,13 @@
 警告	MSB8077	某些文件设置为 C++/CLI，但未定义"为单个文件启用 CLR 支持"属性。有关更多详细信息，请参阅"高级属性页"文档。
 以上警告请忽视，这个项目的结构没法兼容这个情况
 */
+
+#define _WIN32_WINNT 0x0600
+#include <winsock2.h>
+#include <windows.h>
+#include <ws2tcpip.h>
+#include <mstcpip.h>
+
 // 首先包含Windows头文件以避免宏重定义警告
 #include <windows.h>
 #include <shellapi.h>
