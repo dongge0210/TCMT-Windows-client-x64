@@ -138,7 +138,7 @@ std::string Logger::NormalizeToUTF8(const std::string& input) {
         }
     }
     std::wstring wide(static_cast<size_t>(wideLen), L'\0');
-    MultiByteToWideChar(CP_ACP, 0, input.data(), static_cast<int>(input.size()), const_cast<LPWSTR>(wide.data()), wideLen);
+    MultiByteToWideChar(CP_ACP, 0, input.data(), static_cast<int>(input.size()), &wide[0], wideLen);
 
     // Step 2: Wide -> UTF-8
     int utf8Len = WideCharToMultiByte(CP_UTF8, 0, wide.data(), wideLen, nullptr, 0, nullptr, nullptr);
@@ -146,7 +146,7 @@ std::string Logger::NormalizeToUTF8(const std::string& input) {
         return input; // 回退
     }
     std::string utf8(static_cast<size_t>(utf8Len), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, wide.data(), wideLen, const_cast<LPSTR>(utf8.data()), utf8Len, nullptr, nullptr);
+    WideCharToMultiByte(CP_UTF8, 0, wide.data(), wideLen, &utf8[0], utf8Len, nullptr, nullptr);
     return utf8;
 }
 
