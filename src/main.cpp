@@ -9,15 +9,20 @@
 警告	MSB8077	某些文件设置为 C++/CLI，但未定义"为单个文件启用 CLR 支持"属性。有关更多详细信息，请参阅"高级属性页"文档。
 以上警告请忽视，这个项目的结构没法兼容这个情况
 */
-// 首先包含Windows头文件以避免宏重定义警告
+
+#define _WINSOCKAPI_  // Prevent inclusion of winsock.h
+#define WIN32_LEAN_AND_MEAN
+#define _WIN32_WINNT 0x0600
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <mstcpip.h>
 #include <windows.h>
 #include <shellapi.h>
 #include <sddl.h>
 #include <Aclapi.h>
-#include <conio.h>   // 添加键盘输入支持
-#include <eh.h>      // 添加结构化异常处理支持
+#include <conio.h>
+#include <eh.h>
 
-// 然后包含标准库头文件
 #include <chrono>
 #include <iostream>
 #include <sstream>
@@ -26,29 +31,28 @@
 #include <thread>
 #include <io.h>
 #include <fcntl.h>
-#include <algorithm> // Include for std::transform
-#include <vector> // Include for std::vector
-#include <mutex>     // 添加线程同步支持
-#include <atomic>    // 添加原子操作支持
-#include <locale>   // 添加locale支持以使用setlocale
-#include <new>       // 添加内存分配异常支持
-#include <stdexcept> // 添加标准异常支持
+#include <algorithm>
+#include <vector>
+#include <mutex>
+#include <atomic>
+#include <locale>
+#include <new>
+#include <stdexcept>
 
-// 最后包含项目头文件
 #include "core/cpu/CpuInfo.h"
 #include "core/gpu/GpuInfo.h"
 #include "core/memory/MemoryInfo.h"
 #include "core/network/NetworkAdapter.h"
 #include "core/os/OSInfo.h"
-#include "core/utils/Logger.h"
-#include "core/utils/TimeUtils.h"
-#include "core/utils/WinUtils.h"
+#include "core/Utils/Logger.h"
+#include "core/Utils/TimeUtils.h"
+#include "core/Utils/WinUtils.h"
 #include "core/Utils/WMIManager.h"
 #include "core/disk/DiskInfo.h"
 #include "core/DataStruct/DataStruct.h"
-#include "core/DataStruct/SharedMemoryManager.h"  // Include the new shared memory manager
-#include "core/temperature/TemperatureWrapper.h"  // Use TemperatureWrapper instead of directly calling LibreHardwareMonitorBridge
-#include "core/tpm/TpmInfo.h"  // TPM detection (TBS primary, WMI fallback)
+#include "core/DataStruct/SharedMemoryManager.h"
+#include "core/temperature/TemperatureWrapper.h"
+#include "core/tpm/TpmInfo.h"
 
 #pragma comment(lib, "kernel32.lib")
 #pragma comment(lib, "user32.lib")

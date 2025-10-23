@@ -38,7 +38,7 @@
 // Fix the include path case sensitivity
 #include "../Utils/WinUtils.h"
 #include "../Utils/Logger.h"
-#include "../Utils/WmiManager.h"
+#include "../Utils/WMIManager.h"
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -344,7 +344,7 @@ void SharedMemoryManager::WriteToSharedMemory(const SystemInfo& systemInfo) {
                 std::wstring w = WinUtils::Utf8ToWstring(safeLabel); // 若不是utf8会得到空
                 if (w.empty()) {
                     int len = MultiByteToWideChar(CP_ACP, 0, safeLabel.c_str(), (int)safeLabel.size(), nullptr, 0);
-                    if (len > 0) { w.resize(len); MultiByteToWideChar(CP_ACP, 0, safeLabel.c_str(), (int)safeLabel.size(), w.data(), len); }
+                    if (len > 0) { w.resize(len); MultiByteToWideChar(CP_ACP, 0, safeLabel.c_str(), (int)safeLabel.size(), &w[0], len); }
                 }
                 safeLabel = WinUtils::WstringToUtf8(w);
             }

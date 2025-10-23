@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "1.0",
+  "generatedAt": "Oct 21 2025 15:48:01",
+  "architectureVersion": "v0.14",
+  "cppStandard": "C++20",
+  "packAlignment": 1,
+  "totalSize": 160,
+  "fieldOffsets": {
+    "structVersion": 0,
+    "totalSize": 4,
+    "writeSequence": 8,
+    "reserved": 12,
+    "cpuDataOffset": 16,
+    "memoryDataOffset": 20,
+    "gpuDataOffset": 24,
+    "networkDataOffset": 28,
+    "logicalDiskDataOffset": 32,
+    "physicalDiskDataOffset": 36,
+    "temperatureDataOffset": 40,
+    "tpmDataOffset": 44,
+    "processDataOffset": 48,
+    "usbDataOffset": 52,
+    "mainboardDataOffset": 56,
+    "globalTimestamp": 108,
+    "structureHash": 128
+  }
+}

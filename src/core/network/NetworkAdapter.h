@@ -1,5 +1,6 @@
 ﻿#pragma once
 
+#define _WINSOCKAPI_  // Prevent inclusion of winsock.h
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -7,7 +8,7 @@
 #include <iphlpapi.h>
 #include <string>
 #include <vector>
-#include "WmiManager.h"
+#include "../Utils/WMIManager.h"
 
 class NetworkAdapter {
 public:

@@ -1,11 +1,13 @@
+#define _WINSOCKAPI_  // Prevent inclusion of winsock.h
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <mstcpip.h>
 #include <windows.h>
 #include <iphlpapi.h>
 
 #include "NetworkAdapter.h"
-#include "Logger.h"
+#include "../Utils/Logger.h"
 #include <comutil.h>
 #include <sstream>
 #include <iomanip>
