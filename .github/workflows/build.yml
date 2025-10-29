@@ -89,15 +89,23 @@ jobs:
   cuda:
     runs-on: windows-latest
     steps:
+    - name: Cache CUDA
+      uses: actions/cache@v4
+      with:
+        path: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6
+        key: cuda-12.6-${{ runner.os }}
     - name: Setup CUDA 12.6
+      if: steps.cache.outputs.cache-hit != 'true'
       uses: Jimver/cuda-toolkit@v0.2.18
       with:
         cuda: '12.6.0'
+        method: 'network'
     - name: Verify CUDA installation
       shell: pwsh
       run: |
         if (-not (Test-Path "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6")) {
           Write-Host "CUDA 12.6 not found"
+          exit 1
         } else {
           Write-Host "CUDA 12.6 found successfully"
         }
