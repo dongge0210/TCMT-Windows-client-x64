@@ -79,12 +79,43 @@ jobs:
         name: saer-report
         path: saer.txt
 
-  # === 并行组2: 环境准备和依赖缓存 ===
-  setup-environment:
-    name: Setup Environment & Dependencies
+  # === 并行组2: CUDA缓存和安装 ===
+  setup-cuda:
+    name: Setup CUDA
     runs-on: windows-latest
     outputs:
-      environment-ready: ${{ steps.setup.outputs.ready }}
+      cuda-ready: ${{ steps.cuda.outputs.ready }}
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: dev
+        submodules: recursive
+        fetch-depth: 0
+    
+    - name: Cache CUDA
+      id: cache-cuda
+      uses: actions/cache@v4
+      with:
+        path: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6
+        key: cuda-12.6-${{ runner.os }}
+    
+    - name: Setup CUDA 12.6
+      if: steps.cache-cuda.outputs.cache-hit != 'true'
+      uses: Jimver/cuda-toolkit@v0.2.18
+      with:
+        cuda: '12.6.0'
+        method: 'network'
+    
+    - name: Mark CUDA ready
+      id: cuda
+      run: echo "ready=true" >> $env:GITHUB_OUTPUT
+
+  # === 并行组2: NuGet缓存 ===
+  setup-nuget:
+    name: Setup NuGet
+    runs-on: windows-latest
+    outputs:
+      nuget-ready: ${{ steps.nuget.outputs.ready }}
     steps:
     - uses: actions/checkout@v5
       with:
@@ -97,17 +128,8 @@ jobs:
       with:
         dotnet-version: '8.x'
     
-    - name: Setup MSBuild
-      uses: microsoft/setup-msbuild@v2
-    
-    - name: Cache CUDA
-      id: cache-cuda
-      uses: actions/cache@v4
-      with:
-        path: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6
-        key: cuda-12.6-${{ runner.os }}
-    
     - name: Cache NuGet packages
+      id: cache-nuget
       uses: actions/cache@v4
       with:
         path: |
@@ -116,7 +138,28 @@ jobs:
         restore-keys: |
           nuget-${{ runner.os }}-
     
+    - name: Mark NuGet ready
+      id: nuget
+      run: echo "ready=true" >> $env:GITHUB_OUTPUT
+
+  # === 并行组2: MSBuild缓存 ===
+  setup-msbuild:
+    name: Setup MSBuild
+    runs-on: windows-latest
+    outputs:
+      msbuild-ready: ${{ steps.msbuild.outputs.ready }}
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: dev
+        submodules: recursive
+        fetch-depth: 0
+    
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+    
     - name: Cache MSBuild packages
+      id: cache-msbuild
       uses: actions/cache@v4
       with:
         path: |
@@ -126,32 +169,15 @@ jobs:
         restore-keys: |
           msbuild-${{ runner.os }}-
     
-    - name: Setup CUDA 12.6
-      if: steps.cache-cuda.outputs.cache-hit != 'true'
-      uses: Jimver/cuda-toolkit@v0.2.18
-      with:
-        cuda: '12.6.0'
-        method: 'network'
-    
-    - name: Install iflow-cli
-      run: |
-        if (!(Get-Command iflow -ErrorAction SilentlyContinue)) {
-          Write-Host "Installing iflow-cli..."
-          npm install -g @iflow-ai/iflow-cli
-        } else {
-          Write-Host "iflow-cli already installed"
-        }
-        iflow --version
-    
-    - name: Mark environment ready
-      id: setup
+    - name: Mark MSBuild ready
+      id: msbuild
       run: echo "ready=true" >> $env:GITHUB_OUTPUT
 
-  # === 并行组3: iflow-cli智能决策 ===
+  # === 并行组3: iflow-cli安装和智能决策 ===
   iflow-analysis:
     name: iFlow CLI Analysis
     runs-on: windows-latest
-    needs: [saer-report, setup-environment]
+    needs: [saer-report, setup-cuda, setup-nuget, setup-msbuild]
     outputs:
       build-decision: ${{ steps.iflow.outputs.decision }}
     steps:
@@ -168,6 +194,16 @@ jobs:
     
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
+    
+    - name: Install iflow-cli
+      run: |
+        if (!(Get-Command iflow -ErrorAction SilentlyContinue)) {
+          Write-Host "Installing iflow-cli..."
+          npm install -g @iflow-ai/iflow-cli
+        } else {
+          Write-Host "iflow-cli already installed"
+        }
+        iflow --version
     
     - name: Download S.A.E.R Report
       uses: actions/download-artifact@v4
@@ -232,7 +268,7 @@ jobs:
   build-lib:
     name: Build LibreHardwareMonitor
     runs-on: windows-latest
-    needs: setup-environment
+    needs: [setup-nuget]
     steps:
     - uses: actions/checkout@v5
       with:
@@ -259,7 +295,7 @@ jobs:
   build-wpf:
     name: Build WPF-UI1
     runs-on: windows-latest
-    needs: setup-environment
+    needs: [setup-nuget]
     steps:
     - uses: actions/checkout@v5
       with:
@@ -286,7 +322,7 @@ jobs:
   build-cpp:
     name: Build CPP-parsers
     runs-on: windows-latest
-    needs: setup-environment
+    needs: [setup-msbuild]
     steps:
     - uses: actions/checkout@v5
       with:
@@ -310,7 +346,7 @@ jobs:
   build-main:
     name: Build Main Project
     runs-on: windows-latest
-    needs: [setup-environment, build-lib, build-wpf, build-cpp]
+    needs: [setup-nuget, setup-msbuild, setup-cuda, build-lib, build-wpf, build-cpp]
     steps:
     - uses: actions/checkout@v5
       with:
