@@ -81,7 +81,7 @@ jobs:
         path: changes_analysis.json
 
   system_info:
-    name: System and Environment Report
+    name: S.A.E.R (System and Environment Report)
     runs-on: windows-latest
     needs: analyze_changes
     # 只在失败时运行系统信息收集，减少正常构建的时间
@@ -91,38 +91,47 @@ jobs:
       uses: ilammy/msvc-dev-cmd@v1
       with:
         arch: x64
-    - name: Print system info
+    - name: Generate System and Environment Report
       shell: pwsh
       run: |
-        systeminfo | Out-File -FilePath system_info.txt -Append
-        echo "`n==== DISK SPACE ====" | Out-File -FilePath system_info.txt -Append
-        Get-PSDrive | Out-File -FilePath system_info.txt -Append
-        echo "`n==== ENVIRONMENT ====" | Out-File -FilePath system_info.txt -Append
-        Get-ChildItem Env: | Out-File -FilePath system_info.txt -Append
-        echo "`n==== VSWHERE ====" | Out-File -FilePath system_info.txt -Append
-        if (Test-Path "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe") {
-          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -all -prerelease -products * -format list | Out-File -FilePath system_info.txt -Append
-        }
-        echo "`n==== MSBuild Version ====" | Out-File -FilePath system_info.txt -Append
-        msbuild -version | Out-File -FilePath system_info.txt -Append
-        echo "`n==== cl.exe Version ====" | Out-File -FilePath system_info.txt -Append
-        cl 2>&1 | Out-File -FilePath system_info.txt -Append
-        echo "`n==== dotnet --info ====" | Out-File -FilePath system_info.txt -Append
-        dotnet --info | Out-File -FilePath system_info.txt -Append
-        echo "`n==== CUDA ====" | Out-File -FilePath system_info.txt -Append
-        if (Test-Path "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA") {
-          Get-ChildItem "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA" | Out-File -FilePath system_info.txt -Append
-          if (Test-Path "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\bin\nvcc.exe") {
-            & "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\bin\nvcc.exe" --version | Out-File -FilePath system_info.txt -Append
-          }
-        }
-        echo "`n==== GPU INFO ====" | Out-File -FilePath system_info.txt -Append
-        Get-WmiObject win32_VideoController | Format-List | Out-File -FilePath system_info.txt -Append
+        echo "=== SYSTEM AND ENVIRONMENT REPORT ===" | Out-File -FilePath saer.txt -Append
+        echo "" | Out-File -FilePath saer.txt -Append
+        echo "WSL Information:" | Out-File -FilePath saer.txt -Append
+        wsl --version 2>$null | Out-File -FilePath saer.txt -Append
+        echo "" | Out-File -FilePath saer.txt -Append
+        
+        echo "RAM Information:" | Out-File -FilePath saer.txt -Append
+        Get-CimInstance -ClassName Win32_ComputerSystem | Select-Object TotalPhysicalMemory, @{Name="RAM(GB)";Expression={[math]::Round($_.TotalPhysicalMemory / 1GB, 2)}} | Format-Table | Out-File -FilePath saer.txt -Append
+        echo "" | Out-File -FilePath saer.txt -Append
+        
+        echo "CPU Information:" | Out-File -FilePath saer.txt -Append
+        Get-CimInstance -ClassName Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors, MaxClockSpeed | Format-Table | Out-File -FilePath saer.txt -Append
+        echo "" | Out-File -FilePath saer.txt -Append
+        
+        echo "System Variables:" | Out-File -FilePath saer.txt -Append
+        Get-ChildItem Env: | Where-Object { $_.Name -match "PATH|JAVA|PYTHON|NODE|CUDA|MSBUILD|VISUAL" } | Select-Object Name, Value | Format-Table | Out-File -FilePath saer.txt -Append
+        echo "" | Out-File -FilePath saer.txt -Append
+        
+        echo "User Variables:" | Out-File -FilePath saer.txt -Append
+        Get-ChildItem Env: | Where-Object { $_.Name -match "GITHUB|RUNNER|AGENT" } | Select-Object Name, Value | Format-Table | Out-File -FilePath saer.txt -Append
+        echo "" | Out-File -FilePath saer.txt -Append
+        
+        echo "Git Version:" | Out-File -FilePath saer.txt -Append
+        git --version | Out-File -FilePath saer.txt -Append
+        echo "" | Out-File -FilePath saer.txt -Append
+        
+        echo "System Architecture:" | Out-File -FilePath saer.txt -Append
+        $env:PROCESSOR_ARCHITECTURE | Out-File -FilePath saer.txt -Append
+        $env:OS | Out-File -FilePath saer.txt -Append
+        echo "" | Out-File -FilePath saer.txt -Append
+        
+        echo "Repository Structure:" | Out-File -FilePath saer.txt -Append
+        git ls-tree -r HEAD --name-only | Out-File -FilePath saer.txt -Append
     - name: Upload System Info
       uses: actions/upload-artifact@v4
       with:
         name: system_info
-        path: system_info.txt
+        path: saer.txt
 
   
 
@@ -316,6 +325,51 @@ jobs:
         Write-Host "Lib Changed: ${{ needs.analyze_changes.outputs.lib-changed }}"
         Write-Host "Use Cached Build: ${{ needs.analyze_changes.outputs.use-cached-build }}"
 
+  build_lib_cached:
+    runs-on: windows-latest
+    needs: [analyze_changes, restore]
+    if: needs.analyze_changes.outputs.use-cached-build == 'true' && needs.analyze_changes.outputs.lib-changed == 'false'
+    steps:
+    - name: Download cached artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: build_lib_logs
+        merge-multiple: true
+    - name: Use cached build results
+      shell: pwsh
+      run: |
+        Write-Host "Using cached LibreHardwareMonitor build results - no code changes detected"
+
+  build_wpf_cached:
+    runs-on: windows-latest
+    needs: [analyze_changes, restore]
+    if: needs.analyze_changes.outputs.use-cached-build == 'true' && needs.analyze_changes.outputs.wpf-changed == 'false'
+    steps:
+    - name: Download cached artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: wpfui1_build_logs
+        merge-multiple: true
+    - name: Use cached build results
+      shell: pwsh
+      run: |
+        Write-Host "Using cached WPF-UI1 build results - no code changes detected"
+
+  build_cpp_cached:
+    runs-on: windows-latest
+    needs: [analyze_changes, restore]
+    if: needs.analyze_changes.outputs.use-cached-build == 'true' && needs.analyze_changes.outputs.cpp-changed == 'false'
+    steps:
+    - name: Download cached artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: cpp_parsers_build_logs
+        merge-multiple: true
+    - name: Use cached build results
+      shell: pwsh
+      run: |
+        Write-Host "Using cached CPP-parsers build results - no code changes detected"
+
   build_main:
     runs-on: windows-latest
     needs: [analyze_changes, restore, cuda]
@@ -377,7 +431,7 @@ jobs:
 
   run_and_screenshot:
     runs-on: windows-latest
-    needs: [build_wpf, build_main, build_main_cached]
+    needs: [build_wpf, build_wpf_cached, build_main, build_main_cached, build_lib, build_lib_cached, build_cpp, build_cpp_cached]
     continue-on-error: true
     steps:
     - name: 下载主程序产物
@@ -420,7 +474,7 @@ jobs:
   report_error:
     if: always() && github.event_name == 'pull_request' && (failure() || cancelled())
     runs-on: windows-latest
-    needs: [build_lib, build_wpf, build_cpp, build_main, build_main_cached, run_and_screenshot]
+    needs: [build_lib, build_lib_cached, build_wpf, build_wpf_cached, build_cpp, build_cpp_cached, build_main, build_main_cached, run_and_screenshot]
     steps:
     - name: Download logs
       uses: actions/download-artifact@v4
@@ -467,17 +521,12 @@ jobs:
           $report += "`n==== main_build 致命错误 ====`n日志缺失"
         }
 
-        $sysinfo = Get-ChildItem -Recurse logs | Where-Object { $_.Name -eq "system_info.txt" } | Select-Object -First 1
+        $sysinfo = Get-ChildItem -Recurse logs | Where-Object { $_.Name -eq "saer.txt" } | Select-Object -First 1
         if ($sysinfo) {
           $lines = Get-Content $sysinfo.FullName
-          $os   = ($lines | Select-String -Pattern "^OS Name:").Line
-          $ver  = ($lines | Select-String -Pattern "^OS Version:").Line
-          $cpu  = ($lines | Select-String -Pattern "^Processor\(s\):").Line
-          $mem  = ($lines | Select-String -Pattern "^Total Physical Memory:").Line
-          $gpu  = ($lines | Select-String -Pattern "^Name\s+:").Line
-          $report += "`n==== 系统环境简要 ====`n$os`n$ver`n$cpu`n$mem`n$gpu"
+          $report += "`n==== S.A.E.R ====`n$lines"
         } else {
-          $report += "`n==== 系统环境信息 ====`n缺失"
+          $report += "`n==== S.A.E.R ====`n缺失"
         }
 
         Set-Content logs/ci_error_report.txt $report
