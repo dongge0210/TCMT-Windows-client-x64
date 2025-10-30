@@ -13,6 +13,20 @@
         "-y",
         "@iflow-mcp/mcp-taskmanager@1.0.2"
       ]
+    },
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@iflow-mcp/playwright-mcp"
+      ]
+    },
+    "spec-kit": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-server-spec-driven-development@latest"
+      ]
     }
   }
 }
