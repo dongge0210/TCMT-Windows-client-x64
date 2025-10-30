@@ -16,9 +16,74 @@ env:
   MAIN_EXE: ""
 
 jobs:
+  analyze_changes:
+    name: Analyze Changes for Smart Caching
+    runs-on: windows-latest
+    outputs:
+      cpp-changed: ${{ steps.changes.outputs.cpp-changed }}
+      wpf-changed: ${{ steps.changes.outputs.wpf-changed }}
+      lib-changed: ${{ steps.changes.outputs.lib-changed }}
+      use-cached-build: ${{ steps.changes.outputs.use-cached-build }}
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+    - name: Analyze code changes
+      id: changes
+      shell: pwsh
+      run: |
+        # 获取变更的文件
+        $changedFiles = git diff --name-only HEAD~1 HEAD
+        
+        # 分析不同类型的变更
+        $cppChanged = $false
+        $wpfChanged = $false
+        $libChanged = $false
+        
+        foreach ($file in $changedFiles) {
+          if ($file -match '^src/core/|^src/main\.cpp') {
+            $cppChanged = $true
+          }
+          if ($file -match '^WPF-UI1/') {
+            $wpfChanged = $true
+          }
+          if ($file -match '^src/third_party/') {
+            $libChanged = $true
+          }
+        }
+        
+        # 决定是否可以使用缓存
+        $useCachedBuild = -not ($cppChanged -or $libChanged)
+        
+        Write-Host "CPP Changed: $cppChanged"
+        Write-Host "WPF Changed: $wpfChanged" 
+        Write-Host "Lib Changed: $libChanged"
+        Write-Host "Use Cached Build: $useCachedBuild"
+        
+        # 设置输出
+        echo "::set-output name=cpp-changed::$cppChanged"
+        echo "::set-output name=wpf-changed::$wpfChanged"
+        echo "::set-output name=lib-changed::$libChanged"
+        echo "::set-output name=use-cached-build::$useCachedBuild"
+        
+        # 保存变更信息到文件供其他作业使用
+        @{
+          cppChanged = $cppChanged
+          wpfChanged = $wpfChanged
+          libChanged = $libChanged
+          useCachedBuild = $useCachedBuild
+        } | ConvertTo-Json | Out-File -FilePath "changes_analysis.json"
+        
+    - name: Upload analysis results
+      uses: actions/upload-artifact@v4
+      with:
+        name: changes-analysis
+        path: changes_analysis.json
+
   system_info:
     name: System and Environment Report
     runs-on: windows-latest
+    needs: analyze_changes
     steps:
     - name: Setup MSVC Dev Cmd
       uses: ilammy/msvc-dev-cmd@v1
@@ -61,10 +126,9 @@ jobs:
 
   restore:
     runs-on: windows-latest
-    needs: [system_info]
+    needs: analyze_changes
     steps:
-    - name: Checkout
-      uses: actions/checkout@v5
+    - uses: actions/checkout@v5
       with:
         ref: dev
         submodules: recursive
@@ -113,7 +177,8 @@ jobs:
 
   build_lib:
     runs-on: windows-latest
-    needs: [restore]
+    needs: [analyze_changes, restore]
+    if: needs.analyze_changes.outputs.lib-changed == 'true' || needs.analyze_changes.outputs.use-cached-build == 'false'
     steps:
     - uses: actions/checkout@v5
       with:
@@ -136,7 +201,8 @@ jobs:
 
   build_wpf:
     runs-on: windows-latest
-    needs: [restore]
+    needs: [analyze_changes, restore]
+    if: needs.analyze_changes.outputs.wpf-changed == 'true' || needs.analyze_changes.outputs.use-cached-build == 'false'
     steps:
     - uses: actions/checkout@v5
       with:
@@ -159,7 +225,8 @@ jobs:
 
   build_cpp:
     runs-on: windows-latest
-    needs: [restore]
+    needs: [analyze_changes, restore]
+    if: needs.analyze_changes.outputs.cpp-changed == 'true' || needs.analyze_changes.outputs.use-cached-build == 'false'
     steps:
     - uses: actions/checkout@v5
       with:
@@ -192,9 +259,29 @@ jobs:
         name: cpp_parsers_build_logs
         path: cpp_parsers_build.log
 
+  build_main_cached:
+    runs-on: windows-latest
+    needs: [analyze_changes, restore]
+    if: needs.analyze_changes.outputs.use-cached-build == 'true' && needs.analyze_changes.outputs.cpp-changed == 'false'
+    steps:
+    - name: Download cached artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: "*_build_logs"
+        merge-multiple: true
+    - name: Use cached build results
+      shell: pwsh
+      run: |
+        Write-Host "Using cached build results - no code changes detected"
+        Write-Host "CPP Changed: ${{ needs.analyze_changes.outputs.cpp-changed }}"
+        Write-Host "WPF Changed: ${{ needs.analyze_changes.outputs.wpf-changed }}"
+        Write-Host "Lib Changed: ${{ needs.analyze_changes.outputs.lib-changed }}"
+        Write-Host "Use Cached Build: ${{ needs.analyze_changes.outputs.use-cached-build }}"
+
   build_main:
     runs-on: windows-latest
-    needs: [restore, cuda, build_cpp, build_lib]
+    needs: [analyze_changes, restore, cuda, build_cpp, build_lib]
+    if: needs.analyze_changes.outputs.use-cached-build == 'false' || contains(needs.analyze_changes.outputs.cpp-changed, 'true')
     steps:
     - uses: actions/checkout@v5
       with:
@@ -251,7 +338,7 @@ jobs:
 
   run_and_screenshot:
     runs-on: windows-latest
-    needs: [build_wpf, build_main]
+    needs: [build_wpf, build_main, build_main_cached]
     continue-on-error: true
     steps:
     - name: 下载主程序产物
@@ -294,7 +381,7 @@ jobs:
   report_error:
     if: always() && github.event_name == 'pull_request'
     runs-on: windows-latest
-    needs: [system_info, build_lib, build_wpf, build_cpp, build_main, run_and_screenshot]
+    needs: [system_info, build_lib, build_wpf, build_cpp, build_main, build_main_cached, run_and_screenshot]
     steps:
     - name: Download logs
       uses: actions/download-artifact@v4
