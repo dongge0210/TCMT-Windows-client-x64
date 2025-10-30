@@ -83,9 +83,7 @@ jobs:
   system_info:
     name: S.A.E.R (System and Environment Report)
     runs-on: windows-latest
-    needs: analyze_changes
-    # 只在失败时运行系统信息收集，减少正常构建的时间
-    if: failure()
+    # 独立运行，不依赖其他作业
     steps:
     - name: Setup MSVC Dev Cmd
       uses: ilammy/msvc-dev-cmd@v1
