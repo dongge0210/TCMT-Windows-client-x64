@@ -17,18 +17,17 @@ env:
 
 jobs:
   analyze_changes:
-    name: Analyze Changes for Smart Caching
+    name: Detect Code Changes
     runs-on: windows-latest
     outputs:
       cpp-changed: ${{ steps.changes.outputs.cpp-changed }}
       wpf-changed: ${{ steps.changes.outputs.wpf-changed }}
       lib-changed: ${{ steps.changes.outputs.lib-changed }}
-      use-cached-build: ${{ steps.changes.outputs.use-cached-build }}
     steps:
     - uses: actions/checkout@v5
       with:
         fetch-depth: 0
-    - name: Analyze code changes
+    - name: Detect code changes
       id: changes
       shell: pwsh
       run: |
@@ -52,26 +51,20 @@ jobs:
           }
         }
         
-        # 决定是否可以使用缓存 - 只有当没有任何代码变更时才使用缓存
-        $useCachedBuild = -not ($cppChanged -or $wpfChanged -or $libChanged)
-        
         Write-Host "CPP Changed: $cppChanged"
         Write-Host "WPF Changed: $wpfChanged" 
         Write-Host "Lib Changed: $libChanged"
-        Write-Host "Use Cached Build: $useCachedBuild"
         
-        # 设置输出
+        # 设置输出 - 仅变更检测，缓存决策由iflow-cli处理
         echo "cpp-changed=$cppChanged" >> $GITHUB_OUTPUT
-        echo "wpf-changed=$wpfChanged" >> $GITHUB_OUTPUT
+        echo "wpf-changed=$wpfChanged" >> $ITHUB_OUTPUT
         echo "lib-changed=$libChanged" >> $GITHUB_OUTPUT
-        echo "use-cached-build=$useCachedBuild" >> $GITHUB_OUTPUT
         
-        # 保存变更信息到文件供其他作业使用
+        # 保存变更信息到文件供iflow-cli使用
         @{
           cppChanged = $cppChanged
           wpfChanged = $wpfChanged
           libChanged = $libChanged
-          useCachedBuild = $useCachedBuild
         } | ConvertTo-Json | Out-File -FilePath "changes_analysis.json"
         
     - name: Upload analysis results
@@ -205,7 +198,7 @@ jobs:
   build_lib:
     runs-on: windows-latest
     needs: [analyze_changes, restore]
-    if: needs.analyze_changes.outputs.lib-changed == 'true' || needs.analyze_changes.outputs.use-cached-build == 'false'
+    if: needs.analyze_changes.outputs.lib-changed == 'true'
     steps:
     - uses: actions/checkout@v5
       with:
@@ -238,7 +231,7 @@ jobs:
   build_wpf:
     runs-on: windows-latest
     needs: [analyze_changes, restore]
-    if: needs.analyze_changes.outputs.wpf-changed == 'true' || needs.analyze_changes.outputs.use-cached-build == 'false'
+    if: needs.analyze_changes.outputs.wpf-changed == 'true'
     steps:
     - uses: actions/checkout@v5
       with:
@@ -271,7 +264,7 @@ jobs:
   build_cpp:
     runs-on: windows-latest
     needs: [analyze_changes, restore]
-    if: needs.analyze_changes.outputs.cpp-changed == 'true' || needs.analyze_changes.outputs.use-cached-build == 'false'
+    if: needs.analyze_changes.outputs.cpp-changed == 'true'
     steps:
     - uses: actions/checkout@v5
       with:
@@ -304,75 +297,13 @@ jobs:
         name: cpp_parsers_build_logs
         path: cpp_parsers_build.log
 
-  build_main_cached:
-    runs-on: windows-latest
-    needs: [analyze_changes, restore]
-    if: needs.analyze_changes.outputs.use-cached-build == 'true' && needs.analyze_changes.outputs.cpp-changed == 'false'
-    steps:
-    - name: Download cached artifacts
-      uses: actions/download-artifact@v4
-      with:
-        pattern: "*_build_logs"
-        merge-multiple: true
-    - name: Use cached build results
-      shell: pwsh
-      run: |
-        Write-Host "Using cached build results - no code changes detected"
-        Write-Host "CPP Changed: ${{ needs.analyze_changes.outputs.cpp-changed }}"
-        Write-Host "WPF Changed: ${{ needs.analyze_changes.outputs.wpf-changed }}"
-        Write-Host "Lib Changed: ${{ needs.analyze_changes.outputs.lib-changed }}"
-        Write-Host "Use Cached Build: ${{ needs.analyze_changes.outputs.use-cached-build }}"
-
-  build_lib_cached:
-    runs-on: windows-latest
-    needs: [analyze_changes, restore]
-    if: needs.analyze_changes.outputs.use-cached-build == 'true' && needs.analyze_changes.outputs.lib-changed == 'false'
-    steps:
-    - name: Download cached artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: build_lib_logs
-        merge-multiple: true
-    - name: Use cached build results
-      shell: pwsh
-      run: |
-        Write-Host "Using cached LibreHardwareMonitor build results - no code changes detected"
-
-  build_wpf_cached:
-    runs-on: windows-latest
-    needs: [analyze_changes, restore]
-    if: needs.analyze_changes.outputs.use-cached-build == 'true' && needs.analyze_changes.outputs.wpf-changed == 'false'
-    steps:
-    - name: Download cached artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: wpfui1_build_logs
-        merge-multiple: true
-    - name: Use cached build results
-      shell: pwsh
-      run: |
-        Write-Host "Using cached WPF-UI1 build results - no code changes detected"
-
-  build_cpp_cached:
-    runs-on: windows-latest
-    needs: [analyze_changes, restore]
-    if: needs.analyze_changes.outputs.use-cached-build == 'true' && needs.analyze_changes.outputs.cpp-changed == 'false'
-    steps:
-    - name: Download cached artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: cpp_parsers_build_logs
-        merge-multiple: true
-    - name: Use cached build results
-      shell: pwsh
-      run: |
-        Write-Host "Using cached CPP-parsers build results - no code changes detected"
+  
 
   build_main:
     runs-on: windows-latest
     needs: [analyze_changes, restore, cuda]
     # 确保CUDA已安装后再开始主构建
-    if: needs.analyze_changes.outputs.use-cached-build == 'false' || contains(needs.analyze_changes.outputs.cpp-changed, 'true')
+    if: needs.analyze_changes.outputs.cpp-changed == 'true'
     steps:
     - uses: actions/checkout@v5
       with:
@@ -429,7 +360,7 @@ jobs:
 
   run_and_screenshot:
     runs-on: windows-latest
-    needs: [build_wpf, build_wpf_cached, build_main, build_main_cached, build_lib, build_lib_cached, build_cpp, build_cpp_cached]
+    needs: [build_wpf, build_main, build_lib, build_cpp]
     continue-on-error: true
     steps:
     - name: 下载主程序产物
@@ -472,7 +403,7 @@ jobs:
   report_error:
     if: always() && github.event_name == 'pull_request' && (failure() || cancelled())
     runs-on: windows-latest
-    needs: [build_lib, build_lib_cached, build_wpf, build_wpf_cached, build_cpp, build_cpp_cached, build_main, build_main_cached, run_and_screenshot]
+    needs: [build_lib, build_wpf, build_cpp, build_main, run_and_screenshot]
     steps:
     - name: Download logs
       uses: actions/download-artifact@v4
