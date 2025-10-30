@@ -61,10 +61,10 @@ jobs:
         Write-Host "Use Cached Build: $useCachedBuild"
         
         # 设置输出
-        echo "::set-output name=cpp-changed::$cppChanged"
-        echo "::set-output name=wpf-changed::$wpfChanged"
-        echo "::set-output name=lib-changed::$libChanged"
-        echo "::set-output name=use-cached-build::$useCachedBuild"
+        echo "cpp-changed=$cppChanged" >> $GITHUB_OUTPUT
+        echo "wpf-changed=$wpfChanged" >> $GITHUB_OUTPUT
+        echo "lib-changed=$libChanged" >> $GITHUB_OUTPUT
+        echo "use-cached-build=$useCachedBuild" >> $GITHUB_OUTPUT
         
         # 保存变更信息到文件供其他作业使用
         @{
