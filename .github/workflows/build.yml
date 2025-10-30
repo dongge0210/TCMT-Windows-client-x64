@@ -16,10 +16,12 @@ env:
   MAIN_EXE: ""
 
 jobs:
-  # 统一的并行执行job
-  build_pipeline:
-    name: TCMT Build Pipeline
+  # === 并行组1: S.A.E.R 系统环境报告 ===
+  saer-report:
+    name: S.A.E.R System Report
     runs-on: windows-latest
+    outputs:
+      report-file: ${{ steps.report.outputs.file }}
     steps:
     - uses: actions/checkout@v5
       with:
@@ -27,52 +29,71 @@ jobs:
         submodules: recursive
         fetch-depth: 0
     
-    # === 并行组1: S.A.E.R 系统环境报告 ===
     - name: Setup MSVC for S.A.E.R
       uses: ilammy/msvc-dev-cmd@v1
       with:
         arch: x64
     
     - name: Generate S.A.E.R Report
-      shell: pwsh
+      id: report
       run: |
-        Start-Job -ScriptBlock {
-          echo "=== SYSTEM AND ENVIRONMENT REPORT ===" | Out-File -FilePath saer.txt -Append
-          echo "" | Out-File -FilePath saer.txt -Append
-          echo "WSL Information:" | Out-File -FilePath saer.txt -Append
-          wsl --version 2>$null | Out-File -FilePath saer.txt -Append
-          echo "" | Out-File -FilePath saer.txt -Append
-          
-          echo "RAM Information:" | Out-File -FilePath saer.txt -Append
-          Get-CimInstance -ClassName Win32_ComputerSystem | Select-Object TotalPhysicalMemory, @{Name="RAM(GB)";Expression={[math]::Round($_.TotalPhysicalMemory / 1GB, 2)}} | Format-Table | Out-File -FilePath saer.txt -Append
-          echo "" | Out-File -FilePath saer.txt -Append
-          
-          echo "CPU Information:" | Out-File -FilePath saer.txt -Append
-          Get-CimInstance -ClassName Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors, MaxClockSpeed | Format-Table | Out-File -FilePath saer.txt -Append
-          echo "" | Out-File -FilePath saer.txt -Append
-          
-          echo "System Variables:" | Out-File -FilePath saer.txt -Append
-          Get-ChildItem Env: | Where-Object { $_.Name -match "PATH|JAVA|PYTHON|NODE|CUDA|MSBUILD|VISUAL" } | Select-Object Name, Value | Format-Table | Out-File -FilePath saer.txt -Append
-          echo "" | Out-File -FilePath saer.txt -Append
-          
-          echo "User Variables:" | Out-File -FilePath saer.txt -Append
-          Get-ChildItem Env: | Where-Object { $_.Name -match "GITHUB|RUNNER|AGENT" } | Select-Object Name, Value | Format-Table | Out-File -FilePath saer.txt -Append
-          echo "" | Out-File -FilePath saer.txt -Append
-          
-          echo "Git Version:" | Out-File -FilePath saer.txt -Append
-          git --version | Out-File -FilePath saer.txt -Append
-          echo "" | Out-File -FilePath saer.txt -Append
-          
-          echo "System Architecture:" | Out-File -FilePath saer.txt -Append
-          $env:PROCESSOR_ARCHITECTURE | Out-File -FilePath saer.txt -Append
-          $env:OS | Out-File -FilePath saer.txt -Append
-          echo "" | Out-File -FilePath saer.txt -Append
-          
-          echo "Repository Structure:" | Out-File -FilePath saer.txt -Append
-          git ls-tree -r HEAD --name-only | Out-File -FilePath saer.txt -Append
-        }
+        echo "=== SYSTEM AND ENVIRONMENT REPORT ===" | Out-File -FilePath saer.txt -Append
+        echo "" | Out-File -FilePath saer.txt -Append
+        echo "WSL Information:" | Out-File -FilePath saer.txt -Append
+        wsl --version 2>$null | Out-File -FilePath saer.txt -Append
+        echo "" | Out-File -FilePath saer.txt -Append
+        
+        echo "RAM Information:" | Out-File -FilePath saer.txt -Append
+        Get-CimInstance -ClassName Win32_ComputerSystem | Select-Object TotalPhysicalMemory, @{Name="RAM(GB)";Expression={[math]::Round($_.TotalPhysicalMemory / 1GB, 2)}} | Format-Table | Out-File -FilePath saer.txt -Append
+        echo "" | Out-File -FilePath saer.txt -Append
+        
+        echo "CPU Information:" | Out-File -FilePath saer.txt -Append
+        Get-CimInstance -ClassName Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors, MaxClockSpeed | Format-Table | Out-File -FilePath saer.txt -Append
+        echo "" | Out-File -FilePath saer.txt -Append
+        
+        echo "System Variables:" | Out-File -FilePath saer.txt -Append
+        Get-ChildItem Env: | Where-Object { $_.Name -match "PATH|JAVA|PYTHON|NODE|CUDA|MSBUILD|VISUAL" } | Select-Object Name, Value | Format-Table | Out-File -FilePath saer.txt -Append
+        echo "" | Out-File -FilePath saer.txt -Append
+        
+        echo "User Variables:" | Out-File -FilePath saer.txt -Append
+        Get-ChildItem Env: | Where-Object { $_.Name -match "GITHUB|RUNNER|AGENT" } | Select-Object Name, Value | Format-Table | Out-File -FilePath saer.txt -Append
+        echo "" | Out-File -FilePath saer.txt -Append
+        
+        echo "Git Version:" | Out-File -FilePath saer.txt -Append
+        git --version | Out-File -FilePath saer.txt -Append
+        echo "" | Out-File -FilePath saer.txt -Append
+        
+        echo "System Architecture:" | Out-File -FilePath saer.txt -Append
+        $env:PROCESSOR_ARCHITECTURE | Out-File -FilePath saer.txt -Append
+        $env:OS | Out-File -FilePath saer.txt -Append
+        echo "" | Out-File -FilePath saer.txt -Append
+        
+        echo "Repository Structure:" | Out-File -FilePath saer.txt -Append
+        git ls-tree -r HEAD --name-only | Out-File -FilePath saer.txt -Append
+        
+        echo "file=saer.txt" >> $env:GITHUB_OUTPUT
     
-    # === 并行组2: 环境准备和依赖缓存 ===
+    - name: Upload S.A.E.R Report
+      uses: actions/upload-artifact@v4
+      with:
+        name: saer-report
+        path: saer.txt
+
+  # === 并行组2: 环境准备和依赖缓存 ===
+  setup-environment:
+    name: Setup Environment & Dependencies
+    runs-on: windows-latest
+    outputs:
+      cuda-cache-hit: ${{ steps.cache-cuda.outputs.cache-hit }}
+      nuget-cache-hit: ${{ steps.cache-nuget.outputs.cache-hit }}
+      msbuild-cache-hit: ${{ steps.cache-msbuild.outputs.cache-hit }}
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: dev
+        submodules: recursive
+        fetch-depth: 0
+    
     - name: Setup .NET
       uses: actions/setup-dotnet@v5
       with:
@@ -89,6 +110,7 @@ jobs:
         key: cuda-12.6-${{ runner.os }}
     
     - name: Cache NuGet packages
+      id: cache-nuget
       uses: actions/cache@v4
       with:
         path: |
@@ -98,6 +120,7 @@ jobs:
           nuget-${{ runner.os }}-
     
     - name: Cache MSBuild packages
+      id: cache-msbuild
       uses: actions/cache@v4
       with:
         path: |
@@ -115,20 +138,36 @@ jobs:
         method: 'network'
     
     - name: Install iflow-cli
-      shell: pwsh
       run: |
-        Start-Job -ScriptBlock {
-          if (!(Get-Command iflow -ErrorAction SilentlyContinue)) {
-            Write-Host "Installing iflow-cli..."
-            npm install -g @iflow-ai/iflow-cli
-          } else {
-            Write-Host "iflow-cli already installed"
-          }
-          iflow --version
+        if (!(Get-Command iflow -ErrorAction SilentlyContinue)) {
+          Write-Host "Installing iflow-cli..."
+          npm install -g @iflow-ai/iflow-cli
+        } else {
+          Write-Host "iflow-cli already installed"
         }
+        iflow --version
+
+  # === 并行组3: iflow-cli智能决策 ===
+  iflow-analysis:
+    name: iFlow CLI Analysis
+    runs-on: windows-latest
+    needs: [saer-report, setup-environment]
+    outputs:
+      build-decision: ${{ steps.iflow.outputs.decision }}
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: dev
+        submodules: recursive
+        fetch-depth: 0
     
-    # === 并行组3: iflow-cli智能决策 ===
+    - name: Download S.A.E.R Report
+      uses: actions/download-artifact@v4
+      with:
+        name: saer-report
+    
     - name: Run iFlow CLI Analysis
+      id: iflow
       uses: iflow-ai/iflow-cli-action@v2.0.0
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -175,66 +214,153 @@ jobs:
           - 如果WPF界面有变更，必须编译wpf模块
           - 如果第三方库有变更，必须编译lib模块
     
-    # === 并行组4: 智能编译 ===
+    - name: Upload Build Decision
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-decision
+        path: build_decision.json
+
+  # === 并行组4: 智能编译 ===
+  build-lib:
+    name: Build LibreHardwareMonitor
+    runs-on: windows-latest
+    needs: setup-environment
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: dev
+        submodules: recursive
+        fetch-depth: 0
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: '8.x'
+    
+    - name: Build LibreHardwareMonitor
+      run: |
+        cd src/third_party/LibreHardwareMonitor
+        dotnet build LibreHardwareMonitorLib/LibreHardwareMonitorLib.csproj -c Release -f net472 --no-restore 2>&1 | Tee-Object -FilePath build_lib.log
+    
+    - name: Upload Build Log
+      uses: actions/upload-artifact@v4
+      with:
+        name: lib-build-log
+        path: build_lib.log
+
+  build-wpf:
+    name: Build WPF-UI1
+    runs-on: windows-latest
+    needs: setup-environment
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: dev
+        submodules: recursive
+        fetch-depth: 0
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: '8.x'
+    
+    - name: Build WPF-UI1
+      run: |
+        cd WPF-UI1
+        dotnet build WPF-UI1.csproj -c Release --no-restore 2>&1 | Tee-Object -FilePath wpfui1_build.log
+    
+    - name: Upload Build Log
+      uses: actions/upload-artifact@v4
+      with:
+        name: wpf-build-log
+        path: wpfui1_build.log
+
+  build-cpp:
+    name: Build CPP-parsers
+    runs-on: windows-latest
+    needs: setup-environment
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: dev
+        submodules: recursive
+        fetch-depth: 0
+    
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+    
+    - name: Build CPP-parsers
+      run: |
+        msbuild src/CPP-parsers/CPP-parsers/CPP-parsers.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m /verbosity:minimal 2>&1 | Tee-Object -FilePath cpp_parsers_build.log
+    
+    - name: Upload Build Log
+      uses: actions/upload-artifact@v4
+      with:
+        name: cpp-build-log
+        path: cpp_parsers_build.log
+
+  build-main:
+    name: Build Main Project
+    runs-on: windows-latest
+    needs: [setup-environment, build-lib, build-wpf, build-cpp]
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: dev
+        submodules: recursive
+        fetch-depth: 0
+    
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+    
     - name: Restore solution
-      shell: pwsh
       run: |
-        Start-Job -ScriptBlock {
-          nuget restore ${{ env.SOLUTION_FILE_PATH }}
-          dotnet restore ${{ env.SOLUTION_FILE_PATH }}
+        nuget restore ${{ env.SOLUTION_FILE_PATH }}
+        dotnet restore ${{ env.SOLUTION_FILE_PATH }}
+    
+    - name: Build main project
+      run: |
+        msbuild ${{ env.SOLUTION_FILE_PATH }} /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ env.BUILD_PLATFORM }} /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m /verbosity:minimal 2>&1 | Tee-Object -FilePath main_build.log
+        
+        # 扫描致命错误
+        $lines = Get-Content main_build.log | Select-String -Pattern "${{ env.FAIL_ERROR_REGEX }}"
+        $lines = $lines | Where-Object { $_.Line -notmatch '0 Error\(s\)' }
+        if ($lines){
+          Set-Content main_build.errors.txt ($lines | ForEach-Object {$_.Line} | Out-String)
+          exit 1
+        } else {
+          Set-Content main_build.errors.txt "未发现致命错误(main_build)。"
         }
     
-    - name: Build LibreHardwareMonitor (parallel)
-      shell: pwsh
-      run: |
-        Start-Job -ScriptBlock {
-          cd src/third_party/LibreHardwareMonitor
-          dotnet build LibreHardwareMonitorLib/LibreHardwareMonitorLib.csproj -c Release -f net472 --no-restore 2>&1 | Tee-Object -FilePath build_lib.log
-        }
+    - name: Upload Build Log
+      uses: actions/upload-artifact@v4
+      with:
+        name: main-build-log
+        path: |
+          main_build.log
+          main_build.errors.txt
+
+  # === 并行组5: 测试运行（1分钟限时） ===
+  test-application:
+    name: Test Application (1min limited)
+    runs-on: windows-latest
+    needs: build-main
+    timeout-minutes: 1
+    continue-on-error: true
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: dev
+        submodules: recursive
+        fetch-depth: 0
     
-    - name: Build WPF-UI1 (parallel)
-      shell: pwsh
-      run: |
-        Start-Job -ScriptBlock {
-          cd WPF-UI1
-          dotnet build WPF-UI1.csproj -c Release --no-restore 2>&1 | Tee-Object -FilePath wpfui1_build.log
-        }
+    - name: Download all build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: "*-build-log"
+        merge-multiple: true
     
-    - name: Build CPP-parsers (parallel)
-      shell: pwsh
-      run: |
-        Start-Job -ScriptBlock {
-          msbuild src/CPP-parsers/CPP-parsers/CPP-parsers.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m /verbosity:minimal 2>&1 | Tee-Object -FilePath cpp_parsers_build.log
-        }
-    
-    - name: Build main project (parallel)
-      shell: pwsh
-      run: |
-        Start-Job -ScriptBlock {
-          msbuild ${{ env.SOLUTION_FILE_PATH }} /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ env.BUILD_PLATFORM }} /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m /verbosity:minimal 2>&1 | Tee-Object -FilePath main_build.log
-          
-          # 扫描致命错误
-          $lines = Get-Content main_build.log | Select-String -Pattern "${{ env.FAIL_ERROR_REGEX }}"
-          $lines = $lines | Where-Object { $_.Line -notmatch '0 Error\(s\)' }
-          if ($lines){
-            Set-Content main_build.errors.txt ($lines | ForEach-Object {$_.Line} | Out-String)
-            exit 1
-          } else {
-            Set-Content main_build.errors.txt "未发现致命错误(main_build)。"
-          }
-        }
-    
-    # 等待所有并行编译任务完成
-    - name: Wait for all builds
-      shell: pwsh
-      run: |
-        Get-Job | Wait-Job | Receive-Job
-    
-    # === 并行组5: 测试运行（1分钟限时） ===
-    - name: Test Application (1min limited)
-      timeout-minutes: 1
-      continue-on-error: true
-      shell: pwsh
+    - name: Test Application
       run: |
         # 查找主程序
         $exeToRun = $null
@@ -267,9 +393,31 @@ jobs:
           Write-Host "No executable found for testing"
         }
     
-    # === 并行组6: iflow-cli编译总结 ===
+    - name: Upload Test Results
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results
+        path: test_screenshot.png
+
+  # === 并行组6: iflow-cli编译总结 ===
+  iflow-summary:
+    name: iFlow CLI Summary
+    runs-on: windows-latest
+    needs: [iflow-analysis, build-lib, build-wpf, build-cpp, build-main, test-application]
+    if: always()
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: dev
+        submodules: recursive
+        fetch-depth: 0
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        merge-multiple: true
+    
     - name: Run iFlow CLI Summary
-      if: always()
       uses: iflow-ai/iflow-cli-action@v2.0.0
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -321,10 +469,31 @@ jobs:
           - 优先识别阻塞性错误
           - 提供具体的修复建议
     
-    # === 并行组7: PR反馈推送 ===
+    - name: Upload Summary
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-summary
+        path: build_summary.json
+
+  # === 并行组7: PR反馈推送 ===
+  pr-feedback:
+    name: PR Feedback
+    runs-on: windows-latest
+    needs: [iflow-summary]
+    if: failure() && github.event_name == 'pull_request'
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: dev
+        submodules: recursive
+        fetch-depth: 0
+    
+    - name: Download Summary
+      uses: actions/download-artifact@v4
+      with:
+        name: build-summary
+    
     - name: Post PR Comment
-      if: failure() && github.event_name == 'pull_request'
-      shell: pwsh
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -384,19 +553,3 @@ jobs:
         $prNumber = $env:PR_NUMBER
         $url = "https://api.github.com/repos/$repo/issues/$prNumber/comments"
         Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $body
-    
-    # === 上传所有构建产物 ===
-    - name: Upload build artifacts
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-logs
-        path: |
-          saer.txt
-          build_*.log
-          wpfui1_build.log
-          cpp_parsers_build.log
-          main_build.log
-          main_build.errors.txt
-          test_screenshot.png
-          build_summary.json
