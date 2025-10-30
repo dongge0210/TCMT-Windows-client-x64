@@ -10,7 +10,11 @@
 以上警告请忽视，这个项目的结构没法兼容这个情况
 */
 // 首先包含Windows头文件以避免宏重定义警告
+// 修复sockaddr重定义问题：确保winsock2.h在windows.h之后包含
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <shellapi.h>
 #include <sddl.h>
 #include <Aclapi.h>
