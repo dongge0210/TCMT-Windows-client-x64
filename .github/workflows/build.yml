@@ -185,7 +185,6 @@ jobs:
         }
     
     - name: Build LibreHardwareMonitor (parallel)
-      if: contains(steps.iflow-cli.outputs.result, '"build_lib": true')
       shell: pwsh
       run: |
         Start-Job -ScriptBlock {
@@ -194,7 +193,6 @@ jobs:
         }
     
     - name: Build WPF-UI1 (parallel)
-      if: contains(steps.iflow-cli.outputs.result, '"build_wpf": true')
       shell: pwsh
       run: |
         Start-Job -ScriptBlock {
@@ -203,7 +201,6 @@ jobs:
         }
     
     - name: Build CPP-parsers (parallel)
-      if: contains(steps.iflow-cli.outputs.result, '"build_cpp": true')
       shell: pwsh
       run: |
         Start-Job -ScriptBlock {
@@ -211,7 +208,6 @@ jobs:
         }
     
     - name: Build main project (parallel)
-      if: contains(steps.iflow-cli.outputs.result, '"build_cpp": true')
       shell: pwsh
       run: |
         Start-Job -ScriptBlock {
