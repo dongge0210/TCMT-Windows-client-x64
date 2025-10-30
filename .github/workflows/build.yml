@@ -52,8 +52,8 @@ jobs:
           }
         }
         
-        # 决定是否可以使用缓存
-        $useCachedBuild = -not ($cppChanged -or $libChanged)
+        # 决定是否可以使用缓存 - 只有当没有任何代码变更时才使用缓存
+        $useCachedBuild = -not ($cppChanged -or $wpfChanged -or $libChanged)
         
         Write-Host "CPP Changed: $cppChanged"
         Write-Host "WPF Changed: $wpfChanged" 
