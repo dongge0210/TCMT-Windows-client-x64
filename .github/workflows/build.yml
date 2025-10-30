@@ -318,8 +318,8 @@ jobs:
 
   build_main:
     runs-on: windows-latest
-    needs: [analyze_changes, restore]
-    # 减少依赖，让build_main可以更早开始
+    needs: [analyze_changes, restore, cuda]
+    # 确保CUDA已安装后再开始主构建
     if: needs.analyze_changes.outputs.use-cached-build == 'false' || contains(needs.analyze_changes.outputs.cpp-changed, 'true')
     steps:
     - uses: actions/checkout@v5
