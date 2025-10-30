@@ -84,9 +84,7 @@ jobs:
     name: Setup Environment & Dependencies
     runs-on: windows-latest
     outputs:
-      cuda-cache-hit: ${{ steps.cache-cuda.outputs.cache-hit }}
-      nuget-cache-hit: ${{ steps.cache-nuget.outputs.cache-hit }}
-      msbuild-cache-hit: ${{ steps.cache-msbuild.outputs.cache-hit }}
+      environment-ready: ${{ steps.setup.outputs.ready }}
     steps:
     - uses: actions/checkout@v5
       with:
@@ -110,7 +108,6 @@ jobs:
         key: cuda-12.6-${{ runner.os }}
     
     - name: Cache NuGet packages
-      id: cache-nuget
       uses: actions/cache@v4
       with:
         path: |
@@ -120,7 +117,6 @@ jobs:
           nuget-${{ runner.os }}-
     
     - name: Cache MSBuild packages
-      id: cache-msbuild
       uses: actions/cache@v4
       with:
         path: |
@@ -146,6 +142,10 @@ jobs:
           Write-Host "iflow-cli already installed"
         }
         iflow --version
+    
+    - name: Mark environment ready
+      id: setup
+      run: echo "ready=true" >> $env:GITHUB_OUTPUT
 
   # === 并行组3: iflow-cli智能决策 ===
   iflow-analysis:
@@ -160,6 +160,14 @@ jobs:
         ref: dev
         submodules: recursive
         fetch-depth: 0
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: '8.x'
+    
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
     
     - name: Download S.A.E.R Report
       uses: actions/download-artifact@v4
@@ -310,6 +318,11 @@ jobs:
         submodules: recursive
         fetch-depth: 0
     
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: '8.x'
+    
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
     
@@ -411,6 +424,14 @@ jobs:
         ref: dev
         submodules: recursive
         fetch-depth: 0
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: '8.x'
+    
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
     
     - name: Download all artifacts
       uses: actions/download-artifact@v4
