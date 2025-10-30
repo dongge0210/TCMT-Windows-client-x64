@@ -84,6 +84,8 @@ jobs:
     name: System and Environment Report
     runs-on: windows-latest
     needs: analyze_changes
+    # 只在失败时运行系统信息收集，减少正常构建的时间
+    if: failure()
     steps:
     - name: Setup MSVC Dev Cmd
       uses: ilammy/msvc-dev-cmd@v1
@@ -145,6 +147,24 @@ jobs:
         key: nuget-${{ runner.os }}-${{ hashFiles('**/*.sln','**/*.csproj','**/packages.config') }}
         restore-keys: |
           nuget-${{ runner.os }}-
+    - name: Cache MSBuild packages
+      uses: actions/cache@v4
+      with:
+        path: |
+          C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\MSBuild
+          C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\MSBuild
+        key: msbuild-${{ runner.os }}-${{ hashFiles('**/*.sln') }}
+        restore-keys: |
+          msbuild-${{ runner.os }}-
+    - name: Cache Windows SDK
+      uses: actions/cache@v4
+      with:
+        path: |
+          C:\Program Files (x86)\Windows Kits\10\lib
+          C:\Program Files (x86)\Windows Kits\10\include
+        key: windows-sdk-${{ runner.os }}-10.0.26100.0
+        restore-keys: |
+          windows-sdk-${{ runner.os }}-
     - name: NuGet Restore
       shell: pwsh
       run: |
@@ -189,10 +209,19 @@ jobs:
       uses: actions/setup-dotnet@v5
       with:
         dotnet-version: '8.x'
+    - name: Cache LibreHardwareMonitor build
+      uses: actions/cache@v4
+      with:
+        path: |
+          src/third_party/LibreHardwareMonitor/LibreHardwareMonitorLib/bin
+          src/third_party/LibreHardwareMonitor/LibreHardwareMonitorLib/obj
+        key: librehardwaremonitor-${{ runner.os }}-${{ hashFiles('src/third_party/LibreHardwareMonitor/**/*.csproj') }}
+        restore-keys: |
+          librehardwaremonitor-${{ runner.os }}-
     - name: Build LibreHardwareMonitorLib
       run: |
         cd src/third_party/LibreHardwareMonitor
-        dotnet build LibreHardwareMonitorLib/LibreHardwareMonitorLib.csproj -c Release -f net472 2>&1 | Tee-Object -FilePath build_lib.log
+        dotnet build LibreHardwareMonitorLib/LibreHardwareMonitorLib.csproj -c Release -f net472 --no-restore 2>&1 | Tee-Object -FilePath build_lib.log
     - name: 上传日志
       uses: actions/upload-artifact@v4
       with:
@@ -213,10 +242,19 @@ jobs:
       uses: actions/setup-dotnet@v5
       with:
         dotnet-version: '8.x'
+    - name: Cache WPF build
+      uses: actions/cache@v4
+      with:
+        path: |
+          WPF-UI1/bin
+          WPF-UI1/obj
+        key: wpf-ui1-${{ runner.os }}-${{ hashFiles('WPF-UI1/**/*.csproj') }}
+        restore-keys: |
+          wpf-ui1-${{ runner.os }}-
     - name: Build WPF-UI1
       run: |
         cd WPF-UI1
-        dotnet build WPF-UI1.csproj -c Release 2>&1 | Tee-Object -FilePath wpfui1_build.log
+        dotnet build WPF-UI1.csproj -c Release --no-restore 2>&1 | Tee-Object -FilePath wpfui1_build.log
     - name: 上传日志
       uses: actions/upload-artifact@v4
       with:
@@ -280,7 +318,8 @@ jobs:
 
   build_main:
     runs-on: windows-latest
-    needs: [analyze_changes, restore, cuda, build_cpp, build_lib]
+    needs: [analyze_changes, restore]
+    # 减少依赖，让build_main可以更早开始
     if: needs.analyze_changes.outputs.use-cached-build == 'false' || contains(needs.analyze_changes.outputs.cpp-changed, 'true')
     steps:
     - uses: actions/checkout@v5
@@ -379,9 +418,9 @@ jobs:
         path: run_screenshot.png
 
   report_error:
-    if: always() && github.event_name == 'pull_request'
+    if: always() && github.event_name == 'pull_request' && (failure() || cancelled())
     runs-on: windows-latest
-    needs: [system_info, build_lib, build_wpf, build_cpp, build_main, build_main_cached, run_and_screenshot]
+    needs: [build_lib, build_wpf, build_cpp, build_main, build_main_cached, run_and_screenshot]
     steps:
     - name: Download logs
       uses: actions/download-artifact@v4
