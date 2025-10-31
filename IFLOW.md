@@ -1,7 +1,7 @@
 # 项目概述 (Project Overview)
 
 ## 项目名称
-project-monitor-TC
+TCMT-Windows-client-x64
 
 ## 项目描述
 这是一个系统硬件监控工具，用于实时监测和展示 Windows 系统的硬件状态。它旨在为用户提供全面、准确且易于理解的系统性能视图。
@@ -23,7 +23,8 @@ project-monitor-TC
 
 ## 核心技术栈
 - **后端 (数据收集)**: 
-  - C++ (用于高性能数据收集和处理)
+  - C++ (用于高性能数据收集和处理，遵循 C++20 标准)
+  - C (用于底层系统交互，遵循 C17 标准)
   - Windows API (用于底层系统交互)
   - PDH (Performance Data Helper) (用于收集系统性能计数器数据)
   - WMI (Windows Management Instrumentation) (用于获取硬件和操作系统信息)
@@ -47,26 +48,72 @@ project-monitor-TC
 
 ## 项目架构
 ```
-project-monitor-TC/
-├── src/                     # C++ 后端源代码
+TCMT-Windows-client-x64/
+├── src/                     # C++ 后端源代码 (遵循 C++17 和 C11 标准)
+│   ├── main.cpp             # 程序入口点
 │   ├── core/                # 核心硬件信息收集模块
 │   │   ├── cpu/             # CPU 信息
+│   │   │   ├── CpuInfo.cpp
+│   │   │   └── CpuInfo.h
 │   │   ├── memory/          # 内存信息
+│   │   │   ├── MemoryInfo.cpp
+│   │   │   └── MemoryInfo.h
 │   │   ├── gpu/             # GPU 信息
+│   │   │   ├── GpuInfo.cpp
+│   │   │   └── GpuInfo.h
 │   │   ├── network/         # 网络适配器信息
+│   │   │   ├── NetworkAdapter.cpp
+│   │   │   └── NetworkAdapter.h
 │   │   ├── disk/            # 磁盘信息
+│   │   │   ├── DiskInfo.cpp
+│   │   │   └── DiskInfo.h
 │   │   ├── temperature/     # 温度传感器信息
+│   │   │   ├── TemperatureWrapper.cpp
+│   │   │   ├── TemperatureWrapper.h
+│   │   │   ├── LibreHardwareMonitorBridge.cpp
+│   │   │   └── LibreHardwareMonitorBridge.h
 │   │   ├── tpm/             # TPM 信息
+│   │   │   ├── TpmInfo.cpp
+│   │   │   └── TpmInfo.h
 │   │   ├── DataStruct/      # 共享数据结构和内存管理
+│   │   │   ├── DataStruct.h
+│   │   │   ├── SharedMemoryManager.cpp
+│   │   │   ├── SharedMemoryManager.h
+│   │   │   └── Producer.cpp
 │   │   └── Utils/           # 工具类 (日志、时间、WMI 管理等)
+│   │       ├── Logger.cpp
+│   │       ├── Logger.h
+│   │       ├── TimeUtils.cpp
+│   │       ├── TimeUtils.h
+│   │       ├── WinUtils.cpp
+│   │       ├── WinUtils.h
+│   │       ├── WMIManager.cpp
+│   │       ├── WMIManager.h
+│   │       └── ComInitializationHelper.cpp
 │   ├── third_party/         # 第三方库 (作为 Git 子模块)
+│   │   ├── LibreHardwareMonitor
+│   │   ├── curl
+│   │   ├── openssl
+│   │   ├── PDCurses
+│   │   ├── TC
+│   │   ├── tpm2-tss
+│   │   ├── USBMonitor-cpp
+│   │   └── websocketpp
 │   └── CPP-parsers/         # 配置文件解析器 (作为 Git 子模块)
 ├── WPF-UI1/                 # C# WPF 前端
+│   ├── App.xaml             # 应用程序入口点
+│   ├── App.xaml.cs
+│   ├── MainWindow.xaml      # 主窗口
+│   ├── MainWindow.xaml.cs
 │   ├── ViewModels/          # MVVM 视图模型
+│   │   └── MainWindowViewModel.cs
 │   ├── Models/              # 数据模型
+│   │   └── SystemInfo.cs
 │   ├── Services/            # 服务层 (如共享内存服务)
+│   │   └── SharedMemoryService.cs
 │   ├── Converters/          # 数据转换器
-│   └── ...                  # UI 文件 (XAML) 和应用入口
+│   │   └── ValueConverters.cs
+│   └── ...                  # 其他 UI 文件和项目配置
 └── ...                      # 构建配置、文档等
 ```
 
@@ -202,3 +249,5 @@ litho.docs/
 - 各专业领域的深入分析请查看 `4、深入探索/` 目录下的相关文档
 
 **注意**: `__Litho_Summary_Detail__.md` 文件较大（约 13.7MB），建议根据需要选择性查看相关章节。
+- **字符编码**: 使用 `wchar_t` (C++) 和 `ushort[]` (C#) 来处理宽字符字符串，确保跨语言字符串传递的正确性。所有源代码文件必须使用 UTF-8 (with BOM) 编码和 CRLF 换行符。
+- **内存对齐**: 必须保证 C++ 和 C# 端的共享内存数据结构完全对齐，以确保跨语言数据传递的正确性。任何不匹配都可能导致 WPF-UI 显示内容缺失或有问题，需要自动检查所有步骤并修复。

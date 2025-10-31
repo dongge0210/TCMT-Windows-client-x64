@@ -131,7 +131,7 @@ _WINSOCK_DEPRECATED_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefiniti
       <CompileAsManaged>false</CompileAsManaged>
       <CompileAsWinRT>false</CompileAsWinRT>
       <MultiProcessorCompilation>false</MultiProcessorCompilation>
-      <AdditionalIncludeDirectories>GeneratedFiles\$(ConfigurationName);GeneratedFiles;$(ProjectDir)../src/core/Utils;$(WindowsSDK_MetadataPath);$(ProjectDir)../src/core;$(ProjectDir)../src;$(ProjectDir)src;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\include;$(SolutionDir)src\third_party\LibreHardwareMonitor\LibreHardwareMonitorLib\obj\Debug\net8.0;$(ProjectDir)\GeneratedFiles;$(SolutionDir)src\third_party\tpm2-tss\src\tss2-fapi;$(SolutionDir)src\third_party\tpm2-tss\src\tss2-fapi\api;$(SolutionDir)src\third_party\tpm2-tss\include\tss2;$(SolutionDir)src\third_party\tpm2-tss\src\tss2-esys\api;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>GeneratedFiles\$(ConfigurationName);GeneratedFiles;$(ProjectDir)../src/core/Utils;$(WindowsSDK_MetadataPath);$(ProjectDir)../src/core;$(ProjectDir)../src;$(ProjectDir)src;$(CUDA_PATH)\include;$(SolutionDir)src\third_party\LibreHardwareMonitor\LibreHardwareMonitorLib\obj\Debug\net8.0;$(ProjectDir)\GeneratedFiles;F:\Win_x64-10.lastest-sysMonitor\src\third_party\tpm2-tss\src\tss2-fapi;F:\Win_x64-10.lastest-sysMonitor\src\third_party\tpm2-tss\src\tss2-fapi\api;F:\Win_x64-10.lastest-sysMonitor\src\third_party\tpm2-tss\include\tss2;F:\Win_x64-10.lastest-sysMonitor\src\third_party\tpm2-tss\src\tss2-esys\api;$(SolutionDir)src\third_party\USBMonitor-cpp\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalUsingDirectories>$(WindowsSDK_MetadataPath);$(FrameworkPathOverride);$(DOTNET_ReferenceAssemblyPath_472);C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.7.2;%(AdditionalUsingDirectories)</AdditionalUsingDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
@@ -147,8 +147,8 @@ _WINSOCK_DEPRECATED_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefiniti
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(WindowsSDK_LibraryPath_x64);C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\lib\x64;$(SolutionDir)src\third_party\LibreHardwareMonitor\bin\Debug\net8.0;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib;dxgi.lib;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8\lib\x64\nvml.lib;wbemuuid.lib;msvcrtd.lib;ucrtd.lib;vcruntimed.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>F:\Win_x64-sysMonitor\Windows Kits\10\Lib\10.0.26100.0\ucrt\x64;F:\Win_x64-sysMonitor\Windows Kits\10\Lib\10.0.26100.0\um\x64;$(CUDA_PATH)/lib/x64;$(SolutionDir)src\third_party\LibreHardwareMonitor\bin\Debug\net8.0;$(SolutionDir)src\third_party\tpm2-tss\src\.libs;E:\Qt\6.9.0\msvc2022_64\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib;dxgi.lib;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8\lib\x64\nvml.lib;wbemuuid.lib;msvcrtd.lib;ucrtd.lib;vcruntimed.lib;E:\Qt\6.9.0\msvc2022_64\lib\Qt6Charts.lib;E:\Qt\6.9.0\msvc2022_64\lib\Qt6ChartsQml.lib;E:\Qt\6.9.0\msvc2022_64\lib\Qt6Core.lib;E:\Qt\6.9.0\msvc2022_64\lib\Qt6Gui.lib;E:\Qt\6.9.0\msvc2022_64\lib\Qt6Widgets.lib;E:\Qt\6.9.0\msvc2022_64\lib\Qt6Chartsd.lib;E:\Qt\6.9.0\msvc2022_64\lib\Qt6ChartsQmld.lib;E:\Qt\6.9.0\msvc2022_64\lib\Qt6Cored.lib;E:\Qt\6.9.0\msvc2022_64\lib\Qt6Guid.lib;E:\Qt\6.9.0\msvc2022_64\lib\Qt6Widgetsd.lib;tbs.lib;crypt32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>
@@ -188,6 +188,9 @@ _WINSOCK_DEPRECATED_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefiniti
     <ClInclude Include="..\src\core\os\OSInfo.h" />
     <ClInclude Include="..\src\core\temperature\TemperatureWrapper.h" />
     <ClInclude Include="..\src\core\tpm\TpmInfo.h" />
+    <ClInclude Include="..\src\core\tpm\TpmInfoEnhanced.h" />
+    <ClInclude Include="..\src\core\usb\USBInfo.h" />
+    <ClInclude Include="..\src\core\Utils\MotherboardInfo.h" />
     <ClInclude Include="..\src\core\Utils\LibreHardwareMonitorBridge.h" />
     <ClInclude Include="..\src\core\Utils\Logger.h" />
     <ClInclude Include="..\src\core\Utils\stdafx.h" />
@@ -216,6 +219,9 @@ _WINSOCK_DEPRECATED_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefiniti
       <CompileAsManaged Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</CompileAsManaged>
     </ClCompile>
     <ClCompile Include="..\src\core\tpm\TpmInfo.cpp" />
+    <ClCompile Include="..\src\core\tpm\TpmInfoEnhanced.cpp" />
+    <ClCompile Include="..\src\core\usb\USBInfo.cpp" />
+    <ClCompile Include="..\src\core\Utils\MotherboardInfo.cpp" />
     <ClCompile Include="..\src\core\Utils\LibreHardwareMonitorBridge.cpp">
       <CompileAsManaged Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</CompileAsManaged>
       <CompileAsManaged Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</CompileAsManaged>
@@ -251,6 +257,10 @@ _WINSOCK_DEPRECATED_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefiniti
     <Reference Include="System.CodeDom">
       <HintPath>..\src\third_party\LibreHardwareMonitor\bin\Debug\net472\System.CodeDom.dll</HintPath>
     </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="WPF-UI1\Models\SharedMemoryBlock.cs" />
+    <None Include="WPF-UI1\Services\SharedMemoryService.cs" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   

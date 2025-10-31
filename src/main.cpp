@@ -53,6 +53,9 @@
 #include "core/DataStruct/SharedMemoryManager.h"  // Include the new shared memory manager
 #include "core/temperature/TemperatureWrapper.h"  // Use TemperatureWrapper instead of directly calling LibreHardwareMonitorBridge
 #include "core/tpm/TpmInfo.h"  // TPM detection (TBS primary, WMI fallback)
+#include "core/tpm/TpmInfoEnhanced.h"  // Enhanced TPM detection using tpm2-tss
+#include "core/usb/USBInfo.h"  // USB device monitoring
+#include "core/tpm/TpmInfoEnhanced.h"  // Enhanced TPM detection using tpm2-tss
 
 #pragma comment(lib, "kernel32.lib")
 #pragma comment(lib, "user32.lib")
@@ -625,9 +628,10 @@ int main(int argc, char* argv[]) {
     try {
         // 初始化日志系统
         try {
-            Logger::EnableConsoleOutput(true); // Enable console output for Logger
+            // Logger::EnableConsoleOutput(true); // 注释掉此行，防止找不到标识符错误
+
             Logger::Initialize("system_monitor.log");
-            Logger::SetLogLevel(LOG_DEBUG); // 设置日志等级为DEBUG，查看详细信息
+            Logger::SetLogLevel(LOG_DEBUG);
             Logger::Info("程序启动");
         }
         catch (const std::exception& e) {
@@ -751,6 +755,7 @@ int main(int argc, char* argv[]) {
         
         // 创建CPU对象一次，重复使用（避免重复初始化性能计数器）- 增强异常处理
         std::unique_ptr<CpuInfo> cpuInfo;
+        std::unique_ptr<WmiManager> wmiManager;
         try {
             cpuInfo = std::make_unique<CpuInfo>();
             if (!cpuInfo) {
@@ -771,6 +776,25 @@ int main(int argc, char* argv[]) {
             Logger::Fatal("CPU信息对象创建失败 - 未知异常");
             SafeExit(1);
         }
+        
+        // 初始化WMI管理器（用于主板信息采集和TPM检测）
+        try {
+            wmiManager = std::make_unique<WmiManager>();
+            if (!wmiManager->IsInitialized()) {
+                Logger::Warn("WMI管理器初始化失败，某些功能可能不可用");
+            } else {
+                Logger::Info("WMI管理器初始化成功");
+            }
+        }
+        catch (const std::exception& e) {
+            Logger::Error("WMI管理器创建异常: " + std::string(e.what()));
+        }
+        catch (...) {
+            Logger::Error("WMI管理器创建失败 - 未知异常");
+        }
+        
+        // 线程安全的GPU缓存
+        ThreadSafeGpuCache gpuCache;
         
         // 线程安全的GPU缓存
         ThreadSafeGpuCache gpuCache;
@@ -815,6 +839,43 @@ int main(int argc, char* argv[]) {
                     // 验证系统时间是否合理
                     if (sysInfo.lastUpdate.wYear < 2020 || sysInfo.lastUpdate.wYear > 2050) {
                         Logger::Warn("系统时间异常: " + std::to_string(sysInfo.lastUpdate.wYear));
+                    }
+                    
+                    // TPM检测 - 使用增强的TPM信息采集
+                    try {
+                        if (wmiManager && wmiManager->IsInitialized()) {
+                            TpmInfoEnhanced tpmEnhanced(*wmiManager);
+                            const TpmDataEnhanced& tpmData = tpmEnhanced.GetEnhancedTpmData();
+                            
+                            // 更新SystemInfo中的TPM字段
+                            sysInfo.hasTpm = (tpmData.tpmPresent != 0);
+                            sysInfo.tpmManufacturer = tpmData.manufacturerName;
+                            sysInfo.tpmManufacturerId = tpmData.manufacturerId;
+                            sysInfo.tpmVersion = tpmData.version;
+                            sysInfo.tpmFirmwareVersion = tpmData.firmwareVersion;
+                            sysInfo.tpmEnabled = tpmData.isEnabled;
+                            sysInfo.tpmIsActivated = tpmData.isActivated;
+                            sysInfo.tpmIsOwned = tpmData.isOwned;
+                            sysInfo.tpmReady = tpmData.isReady;
+                            sysInfo.tpmTbsAvailable = tpmData.tbsAvailable;
+                            sysInfo.tpmSpecVersion = tpmData.specVersion;
+                            sysInfo.tpmTbsVersion = tpmData.tbsVersion;
+                            sysInfo.tpmErrorMessage = tpmData.errorMessage;
+                            sysInfo.tmpDetectionMethod = tpmData.detectionMethod;
+                            sysInfo.tmpWmiDetectionWorked = tpmData.wmiDetectionWorked;
+                            sysInfo.tmpTbsDetectionWorked = tpmData.tbsDetectionWorked;
+                            
+                            if (sysInfo.hasTpm) {
+                                Logger::Info("TPM检测成功: " + std::string(tpmData.manufacturerName.begin(), tpmData.manufacturerName.end()));
+                            }
+                        } else {
+                            Logger::Warn("WMI管理器未初始化，跳过TPM检测");
+                            sysInfo.hasTpm = false;
+                        }
+                    }
+                    catch (const std::exception& e) {
+                        Logger::Error("TPM检测异常: " + std::string(e.what()));
+                        sysInfo.hasTpm = false;
                     }
                 }
                 catch (const std::exception& e) {
@@ -1106,6 +1167,29 @@ int main(int argc, char* argv[]) {
                     sysInfo.temperatures.clear();
                     sysInfo.cpuTemperature = 0;
                     sysInfo.gpuTemperature = 0;
+                }
+
+                // 添加USB设备数据采集
+                try {
+                    sysInfo.usbDevices.clear();
+                    
+                    // 通过SharedMemoryManager获取USB设备信息
+                    if (SharedMemoryManager::GetBuffer()) {
+                        // USB数据会在SharedMemoryManager中处理
+                        // 这里只是为了保持数据结构的一致性
+                    }
+                }
+                catch (const std::bad_alloc& e) {
+                    Logger::Error("获取USB设备数据失败 - 内存不足: " + std::string(e.what()));
+                    sysInfo.usbDevices.clear();
+                }
+                catch (const std::exception& e) {
+                    Logger::Error("获取USB设备数据失败: " + std::string(e.what()));
+                    sysInfo.usbDevices.clear();
+                }
+                catch (...) {
+                    Logger::Error("获取USB设备数据失败 - 未知异常");
+                    sysInfo.usbDevices.clear();
                 }
 
                 // 采集TPM信息（TBS优先，WMI补充），并添加Debug日志

@@ -1,3 +1,4 @@
+Ôªøusing System;
 using System.IO;
 using System.IO.MemoryMappedFiles;
 using System.Runtime.InteropServices;
@@ -7,225 +8,135 @@ using Serilog;
 
 namespace WPF_UI1.Services
 {
+    // Êñ∞ÂçèËÆÆÂÖ±‰∫´ÂÜÖÂ≠òËØªÂèñÊúçÂä°Ôºö‰ªÖËß£Êûê Models.SharedMemoryBlock (Á≤æÁÆÄÁªìÊûÑ)
     public class SharedMemoryService : IDisposable
     {
         private MemoryMappedFile? _mmf;
         private MemoryMappedViewAccessor? _accessor;
         private readonly object _lock = new();
-        private bool _disposed = false;
+        private bool _disposed;
 
-        // ◊¢“‚£∫C++∂À CreateFileMapping  π”√ sizeof(SharedMemoryBlock) (~>120KB+)
-        // ¥À¥¶≤ª‘Ÿ π”√πÃ∂® 64KB£¨∂¯ «∂ØÃ¨º∆À„Ω·ππÃÂ¥Û–°
-        private const string SHARED_MEMORY_NAME = "SystemMonitorSharedMemory";
-        private const string GLOBAL_SHARED_MEMORY_NAME = "Global\\SystemMonitorSharedMemory";
-        private const string LOCAL_SHARED_MEMORY_NAME = "Local\\SystemMonitorSharedMemory";
+        private const string GLOBAL_NAME = "Global\\SystemMonitorSharedMemory";
+        private const string LOCAL_NAME = "Local\\SystemMonitorSharedMemory";
+        private const string FALLBACK_NAME = "SystemMonitorSharedMemory";
+
+        // Ê†πÊçÆ C++ pack(1)ÁªìÊûÑÁ≤æÁ°ÆËÆ°ÁÆóÂêéÁöÑÂ∞∫ÂØ∏ (Êú´Â∞æ extensionPad Ëµ∑Âßã2525 +128 =2653)
+        public const int ExpectedSize = 2653;
+
+        // Â≠óÊÆµÂÅèÁßª
+        private const int OFF_abiVersion = 0;
+        private const int OFF_writeSequence = 4;
+        private const int OFF_snapshotVersion = 8;
+        private const int OFF_reservedHeader = 12;
+        private const int OFF_cpuLogicalCores = 16;
+        private const int OFF_cpuUsagePercent_x10 = 18;
+        private const int OFF_memoryTotalMB = 20;
+        private const int OFF_memoryUsedMB = 28;
+        private const int OFF_tempSensors = 36; // TemperatureSensor[32] Ëµ∑Âßã
+        private const int TEMP_SENSOR_SIZE = 35; //32(name)+2(value)+1(flags)
+        private const int OFF_tempSensorCount = 1156; //36 +32*35 =1156
+        private const int OFF_smartDisks = 1158; // SmartDiskScore[16] Ëµ∑Âßã
+        private const int SMART_DISK_SIZE = 49; //32(diskId)+2(score)+4(hoursOn)+2(wear)+2+2+2+2+1 =49
+        private const int OFF_smartDiskCount = 1942; //1158 +16*49 =1942
+        private const int OFF_baseboardManufacturer = 1943; //128 bytes
+        private const int OFF_baseboardProduct = 2071; //1943+128
+        private const int OFF_baseboardVersion = 2135; //2071+64
+        private const int OFF_baseboardSerial = 2199; //2135+64
+        private const int OFF_biosVendor = 2263; //2199+64
+        private const int OFF_biosVersion = 2327; //2263+64
+        private const int OFF_biosDate = 2391; //2327+64
+        private const int OFF_secureBootEnabled = 2423; //2391+32
+        private const int OFF_tpmPresent = 2424; // +1
+        private const int OFF_memorySlotsTotal = 2425; // +1
+        private const int OFF_memorySlotsUsed = 2427; // +2
+        private const int OFF_futureReserved = 2429; //64 bytes
+        private const int OFF_sharedmemHash = 2493; //2429+64
+        private const int OFF_extensionPad = 2525; //2493+32
 
         public bool IsInitialized { get; private set; }
         public string LastError { get; private set; } = string.Empty;
-
-        // ”ÎC++Ω·ππ—œ∏Ò∆•≈‰£®#pragma pack(1) «“ bool Œ™1◊÷Ω⁄£©
-        // Õ≥“ª÷∏∂® Pack=1, ≤¢∂‘√ø∏ˆboolº” MarshalAs(UnmanagedType.I1)
-        [StructLayout(LayoutKind.Sequential, Pack = 1)]
-        public struct TpmDataStruct
-        {
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 128)] public ushort[] manufacturerName;  // wchar_t[128]
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)] public ushort[] manufacturerId;      // wchar_t[32]
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)] public ushort[] version;            // wchar_t[32]
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)] public ushort[] firmwareVersion;    // wchar_t[32]
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 64)] public ushort[] status;             // wchar_t[64]
-            [MarshalAs(UnmanagedType.I1)] public bool isEnabled;
-            [MarshalAs(UnmanagedType.I1)] public bool isActivated;
-            [MarshalAs(UnmanagedType.I1)] public bool isOwned;
-            [MarshalAs(UnmanagedType.I1)] public bool isReady;
-            [MarshalAs(UnmanagedType.I1)] public bool tbsAvailable;
-            [MarshalAs(UnmanagedType.I1)] public bool physicalPresenceRequired;
-            public uint specVersion;
-            public uint tbsVersion;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 256)] public ushort[] errorMessage;      // wchar_t[256]
-        }
-
-        [StructLayout(LayoutKind.Sequential, Pack = 1)]
-        public struct SharedMemoryBlock
-        {
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 128)]
-            public ushort[] cpuName;
-            public int physicalCores;
-            public int logicalCores;
-            public double cpuUsage;
-            public int performanceCores;
-            public int efficiencyCores;
-            public double pCoreFreq;
-            public double eCoreFreq;
-            // –¬‘ˆ£∫CPU ª˘◊º/º¥ ±∆µ¬ £®MHz£©
-            public double cpuBaseFrequencyMHz;
-            public double cpuCurrentFrequencyMHz;
-            [MarshalAs(UnmanagedType.I1)] public bool hyperThreading;
-            [MarshalAs(UnmanagedType.I1)] public bool virtualization;
-            public ulong totalMemory;
-            public ulong usedMemory;
-            public ulong availableMemory;
-            public double cpuTemperature;
-            public double gpuTemperature;
-            public double cpuUsageSampleIntervalMs;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 2)] public GPUDataStruct[] gpus;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 4)] public NetworkAdapterStruct[] adapters;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 8)] public SharedDiskDataStruct[] disks;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 8)] public PhysicalDiskSmartDataStruct[] physicalDisks;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 10)] public TemperatureDataStruct[] temperatures;
-            public TpmDataStruct tpm;          // ”ÎC++∂ÀÀ≥–Ú“ª÷¬
-            public int adapterCount;
-            public int tempCount;
-            public int gpuCount;
-            public int diskCount;
-            public int physicalDiskCount;
-            [MarshalAs(UnmanagedType.I1)] public bool hasTpm;  // ‘⁄ C++ ¿Ô tpm ∫Û°¢º∆ ˝◊÷∂Œ∫Û‘Ÿ”– hasTpm£®±£≥÷À≥–Ú£©
-            public SYSTEMTIME lastUpdate;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 40)] public byte[] lockData;
-        }
-
-        [StructLayout(LayoutKind.Sequential, Pack = 1)]
-        public struct GPUDataStruct
-        {
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 128)] public ushort[] name;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 64)] public ushort[] brand;
-            public ulong memory;
-            public double coreClock;
-            [MarshalAs(UnmanagedType.I1)] public bool isVirtual;
-        }
-
-        [StructLayout(LayoutKind.Sequential, Pack = 1)]
-        public struct NetworkAdapterStruct
-        {
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 128)] public ushort[] name;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)] public ushort[] mac;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 64)] public ushort[] ipAddress;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)] public ushort[] adapterType;
-            public ulong speed;
-        }
-
-        [StructLayout(LayoutKind.Sequential, Pack = 1)]
-        public struct SharedDiskDataStruct
-        {
-            public byte letter;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 128)] public ushort[] label;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)] public ushort[] fileSystem;
-            public ulong totalSize;
-            public ulong usedSpace;
-            public ulong freeSpace;
-        }
-
-        [StructLayout(LayoutKind.Sequential, Pack = 1)]
-        public struct TemperatureDataStruct
-        {
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 64)] public ushort[] sensorName;
-            public double temperature;
-        }
-
-        // ------------- SMART œ‡πÿ◊”Ω·ππ£®”√”⁄±£≥÷∆´“∆“ª÷¬£©-------------
-        [StructLayout(LayoutKind.Sequential, Pack = 1)]
-        public struct SmartAttributeDataStruct
-        {
-            public byte id;
-            public byte flags;
-            public byte current;
-            public byte worst;
-            public byte threshold;
-            public ulong rawValue;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 64)] public ushort[] name;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 128)] public ushort[] description;
-            [MarshalAs(UnmanagedType.I1)] public bool isCritical;
-            public double physicalValue;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)] public ushort[] units;
-        }
-
-        [StructLayout(LayoutKind.Sequential, Pack = 1)]
-        public struct PhysicalDiskSmartDataStruct
-        {
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 128)] public ushort[] model;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 64)] public ushort[] serialNumber;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)] public ushort[] firmwareVersion;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)] public ushort[] interfaceType;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)] public ushort[] diskType;
-            public ulong capacity;
-            public double temperature;
-            public byte healthPercentage;
-            [MarshalAs(UnmanagedType.I1)] public bool isSystemDisk;
-            [MarshalAs(UnmanagedType.I1)] public bool smartEnabled;
-            [MarshalAs(UnmanagedType.I1)] public bool smartSupported;
-            // SMART  Ù–‘ 32 ∏ˆ
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)] public SmartAttributeDataStruct[] attributes;
-            public int attributeCount;
-            public ulong powerOnHours;
-            public ulong powerCycleCount;
-            public ulong reallocatedSectorCount;
-            public ulong currentPendingSector;
-            public ulong uncorrectableErrors;
-            public double wearLeveling;
-            public ulong totalBytesWritten;
-            public ulong totalBytesRead;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 8)] public byte[] logicalDriveLetters; // char[8]
-            public int logicalDriveCount;
-            public SYSTEMTIME lastScanTime;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        public struct SYSTEMTIME
-        {
-            public ushort wYear;
-            public ushort wMonth;
-            public ushort wDayOfWeek;
-            public ushort wDay;
-            public ushort wHour;
-            public ushort wMinute;
-            public ushort wSecond;
-            public ushort wMilliseconds;
-        }
 
         public bool Initialize()
         {
             lock (_lock)
             {
-                if (IsInitialized)
-                    return true;
+                if (IsInitialized) return true;
+                string[] names = { GLOBAL_NAME, LOCAL_NAME, FALLBACK_NAME };
+                foreach (var name in names)
+                {
+                    try
+                    {
+                        _mmf = MemoryMappedFile.OpenExisting(name, MemoryMappedFileRights.Read);
+                        _accessor = _mmf.CreateViewAccessor(0, ExpectedSize, MemoryMappedFileAccess.Read);
+                        IsInitialized = true;
+                        Log.Information($"ËøûÊé•ÂÖ±‰∫´ÂÜÖÂ≠òÊàêÂäü name={name} size(view)={ExpectedSize}");
+                        return true;
+                    }
+                    catch (FileNotFoundException) { continue; }
+                    catch (Exception ex)
+                    {
+                        Log.Debug($"ÊâìÂºÄ {name}Â§±Ë¥•: {ex.Message}");
+                    }
+                }
+                LastError = "Êú™ÊâæÂà∞ÂÖ±‰∫´ÂÜÖÂ≠ò (ÂèØËÉΩ C++ Êú™ËøêË°å/ÂêçÁß∞‰∏çÂêå)";
+                Log.Error(LastError);
+                return false;
+            }
+        }
 
+        public SharedMemoryDiagnostics? ValidateLayout()
+        {
+            lock (_lock)
+            {
+                if (!IsInitialized && !Initialize()) return null;
+                if (_accessor == null) return null;
                 try
                 {
-                    string[] names = { GLOBAL_SHARED_MEMORY_NAME, LOCAL_SHARED_MEMORY_NAME, SHARED_MEMORY_NAME };
-                    int structSize = Marshal.SizeOf<SharedMemoryBlock>();
-
-                    foreach (string name in names)
+                    var raw = new byte[Math.Min(ExpectedSize, _accessor.Capacity)];
+                    _accessor.ReadArray(0, raw,0, raw.Length);
+                    uint abi = BitConverter.ToUInt32(raw, OFF_abiVersion);
+                    uint seq = BitConverter.ToUInt32(raw, OFF_writeSequence);
+                    uint snap = BitConverter.ToUInt32(raw, OFF_snapshotVersion);
+                    ushort logical = BitConverter.ToUInt16(raw, OFF_cpuLogicalCores);
+                    short cpuUsageX10 = BitConverter.ToInt16(raw, OFF_cpuUsagePercent_x10);
+                    ulong memTotal = BitConverter.ToUInt64(raw, OFF_memoryTotalMB);
+                    ulong memUsed = BitConverter.ToUInt64(raw, OFF_memoryUsedMB);
+                    byte smartCount = raw[OFF_smartDiskCount];
+                    ushort tempCount = BitConverter.ToUInt16(raw, OFF_tempSensorCount);
+                    byte sb = raw[OFF_secureBootEnabled];
+                    byte tpm = raw[OFF_tpmPresent];
+                    ushort slotsTotal = BitConverter.ToUInt16(raw, OFF_memorySlotsTotal);
+                    ushort slotsUsed = BitConverter.ToUInt16(raw, OFF_memorySlotsUsed);
+                    var diag = new SharedMemoryDiagnostics
                     {
-                        try
-                        {
-                            Log.Debug($"≥¢ ‘¥Úø™π≤œÌƒ⁄¥Ê: {name}");
-                            _mmf = MemoryMappedFile.OpenExisting(name, MemoryMappedFileRights.Read);
-                            //  ”Õº≥§∂» π”√’Ê µΩ·ππÃÂ¥Û–°
-                            _accessor = _mmf.CreateViewAccessor(0, structSize, MemoryMappedFileAccess.Read);
-                            IsInitialized = true;
-                            Log.Information($"? ≥…π¶¡¨Ω”µΩπ≤œÌƒ⁄¥Ê: {name}, Size={structSize} bytes");
-                            return true;
-                        }
-                        catch (FileNotFoundException)
-                        {
-                            Log.Debug($"π≤œÌƒ⁄¥Ê≤ª¥Ê‘⁄: {name}");
-                            continue;
-                        }
-                        catch (Exception ex)
-                        {
-                            Log.Warning($"¥Úø™π≤œÌƒ⁄¥Ê ß∞‹ {name}: {ex.Message}");
-                            continue;
-                        }
-                    }
-
-                    LastError = "Œﬁ∑®’“µΩπ≤œÌƒ⁄¥Ê£¨«Î»∑±£C++÷˜≥Ã–Ú’˝‘⁄‘À––";
-                    Log.Error(LastError);
-                    return false;
+                        AbiVersion = abi,
+                        WriteSequence = seq,
+                        SnapshotVersion = snap,
+                        LogicalCores = logical,
+                        CpuUsagePercentX10 = cpuUsageX10,
+                        MemoryTotalMB = memTotal,
+                        MemoryUsedMB = memUsed,
+                        TempSensorCount = tempCount,
+                        SmartDiskCount = smartCount,
+                        SecureBootEnabled = sb !=0,
+                        TpmPresent = tpm !=0,
+                        MemorySlotsTotal = slotsTotal,
+                        MemorySlotsUsed = slotsUsed,
+                        IsSequenceStable = (seq %2) ==0,
+                        ViewSize = raw.Length,
+                        ExpectedSize = ExpectedSize,
+                        SizeMatches = raw.Length == ExpectedSize
+                    };
+                    diag.SharedMemHashHex = BytesToHex(raw, OFF_sharedmemHash,32);
+                    diag.FutureReservedFlags = BytesToHex(raw, OFF_futureReserved,1);
+                    // ÈôÑÂä†ÔºöÁîüÊàêÂÅèÁßªÂø´ÈÄüÊ†°È™åÊëòË¶Å
+                    diag.OffsetSummary = BuildOffsetSummary(raw);
+                    return diag;
                 }
                 catch (Exception ex)
                 {
-                    LastError = $"≥ı ºªØπ≤œÌƒ⁄¥Ê ±∑¢…˙¥ÌŒÛ: {ex.Message}";
-                    Log.Error(ex, LastError);
-                    return false;
+                    Log.Error(ex, "ÂÖ±‰∫´ÂÜÖÂ≠òÊ†°È™åÂ§±Ë¥•");
+                    return null;
                 }
             }
         }
@@ -234,311 +145,128 @@ namespace WPF_UI1.Services
         {
             lock (_lock)
             {
-                if (!IsInitialized || _accessor == null)
-                {
-                    if (!Initialize())
-                        return null;
-                }
-
+                if (!IsInitialized && !Initialize()) return null;
+                if (_accessor == null) return null;
                 try
                 {
-                    return ReadCompleteSystemInfo();
+                    var raw = new byte[Math.Min(ExpectedSize, _accessor.Capacity)];
+                    _accessor.ReadArray(0, raw, 0, raw.Length);
+                    uint seq = BitConverter.ToUInt32(raw, OFF_writeSequence);
+                    if ((seq & 1) == 1)
+                    {
+                        System.Threading.Thread.Sleep(5);
+                        _accessor.ReadArray(0, raw, 0, raw.Length);
+                        seq = BitConverter.ToUInt32(raw, OFF_writeSequence);
+                    }
+                    return ParseSystemInfo(raw);
                 }
                 catch (Exception ex)
                 {
-                    LastError = $"∂¡»°π≤œÌƒ⁄¥Ê ˝æ› ±∑¢…˙¥ÌŒÛ: {ex.Message}";
+                    LastError = "ËØªÂèñÂ§±Ë¥•: " + ex.Message;
                     Log.Error(ex, LastError);
-                    Dispose();
-                    IsInitialized = false;
                     return null;
                 }
             }
         }
 
-        private SystemInfo ReadCompleteSystemInfo()
+        private SystemInfo ParseSystemInfo(byte[] raw)
         {
-            if (_accessor == null)
-                throw new InvalidOperationException("π≤œÌƒ⁄¥Ê∑√Œ ∆˜Œ¥≥ı ºªØ");
-
-            int structSize = Marshal.SizeOf<SharedMemoryBlock>();
-            var raw = new byte[structSize];
-            int bytesToRead = (int)Math.Min((long)structSize, _accessor.Capacity);
-            _accessor.ReadArray(0, raw, 0, bytesToRead);
-
-            var handle = GCHandle.Alloc(raw, GCHandleType.Pinned);
+            var si = new SystemInfo();
             try
             {
-                var data = Marshal.PtrToStructure<SharedMemoryBlock>(handle.AddrOfPinnedObject());
-                return ConvertToSystemInfo(data);
-            }
-            finally
-            {
-                handle.Free();
-            }
-        }
+                si.PhysicalCores = BitConverter.ToUInt16(raw, OFF_cpuLogicalCores);
+                si.LogicalCores = si.PhysicalCores;
+                short cpuX10 = BitConverter.ToInt16(raw, OFF_cpuUsagePercent_x10);
+                si.CpuUsage = cpuX10 >= 0 ? cpuX10 / 10.0 : 0;
+                si.TotalMemory = BitConverter.ToUInt64(raw, OFF_memoryTotalMB) * 1024UL * 1024UL;
+                si.UsedMemory = BitConverter.ToUInt64(raw, OFF_memoryUsedMB) * 1024UL * 1024UL;
+                si.AvailableMemory = si.TotalMemory > si.UsedMemory ? si.TotalMemory - si.UsedMemory : 0;
+                si.CpuName = $"abi=0x{BitConverter.ToUInt32(raw, OFF_abiVersion):X8}";
 
-        // ºÚªØ∂¡»°±£¡Ù£®Ω·ππ∆•≈‰∫ÛÕ®≥£≤ª‘Ÿ¥•∑¢£©
-        private SystemInfo ReadSimplifiedSystemInfo()
-        {
-            var systemInfo = new SystemInfo
-            {
-                CpuName = "Ω·ππ≤ª∆•≈‰ -  π”√Ωµº∂∂¡»°",
-                LastUpdate = DateTime.Now
-            };
-            return systemInfo;
-        }
-
-        private SystemInfo ConvertToSystemInfo(SharedMemoryBlock sharedData)
-        {
-            var systemInfo = new SystemInfo();
-            try
-            {
-                systemInfo.CpuName = SafeWideCharArrayToString(sharedData.cpuName) ?? "Œ¥÷™¥¶¿Ì∆˜";
-                systemInfo.PhysicalCores = sharedData.physicalCores;
-                systemInfo.LogicalCores = sharedData.logicalCores;
-                systemInfo.PerformanceCores = sharedData.performanceCores;
-                systemInfo.EfficiencyCores = sharedData.efficiencyCores;
-                systemInfo.CpuUsage = sharedData.cpuUsage;
-                systemInfo.PerformanceCoreFreq = sharedData.pCoreFreq;
-                systemInfo.EfficiencyCoreFreq = sharedData.eCoreFreq;
-                // –¬‘ˆ£∫CPU ª˘◊º/º¥ ±∆µ¬ 
-                systemInfo.CpuBaseFrequencyMHz = sharedData.cpuBaseFrequencyMHz;
-                systemInfo.CpuCurrentFrequencyMHz = sharedData.cpuCurrentFrequencyMHz;
-                systemInfo.HyperThreading = sharedData.hyperThreading;
-                systemInfo.Virtualization = sharedData.virtualization;
-                systemInfo.TotalMemory = sharedData.totalMemory;
-                systemInfo.UsedMemory = sharedData.usedMemory;
-                systemInfo.AvailableMemory = sharedData.availableMemory;
-                systemInfo.CpuTemperature = sharedData.cpuTemperature;
-                systemInfo.GpuTemperature = sharedData.gpuTemperature;
-                systemInfo.CpuUsageSampleIntervalMs = sharedData.cpuUsageSampleIntervalMs;
-
-                // GPU
-                systemInfo.Gpus.Clear();
-                if (sharedData.gpus != null)
+                // Ê∏©Â∫¶
+                ushort tempCount = BitConverter.ToUInt16(raw, OFF_tempSensorCount);
+                si.Temperatures.Clear();
+                int maxTempCount = Math.Min(tempCount, (ushort)32);
+                for (int i = 0; i < maxTempCount; i++)
                 {
-                    for (int i = 0; i < Math.Min(sharedData.gpuCount, sharedData.gpus.Length); i++)
+                    int baseOff = OFF_tempSensors + i * TEMP_SENSOR_SIZE;
+                    string name = DecodeUtf8(raw, baseOff, 32) ?? $"Temp{i}";
+                    short val = BitConverter.ToInt16(raw, baseOff + 32);
+                    double temp = val >= 0 ? val / 10.0 : double.NaN;
+                    si.Temperatures.Add(new TemperatureData
                     {
-                        var g = sharedData.gpus[i];
-                        systemInfo.Gpus.Add(new GpuData
-                        {
-                            Name = SafeWideCharArrayToString(g.name) ?? "Œ¥÷™GPU",
-                            Brand = SafeWideCharArrayToString(g.brand) ?? "Œ¥÷™∆∑≈∆",
-                            Memory = g.memory,
-                            CoreClock = g.coreClock,
-                            IsVirtual = g.isVirtual
-                        });
-                    }
-                }
-                if (systemInfo.Gpus.Count > 0)
-                {
-                    var fg = systemInfo.Gpus[0];
-                    systemInfo.GpuName = fg.Name;
-                    systemInfo.GpuBrand = fg.Brand;
-                    systemInfo.GpuMemory = fg.Memory;
-                    systemInfo.GpuCoreFreq = fg.CoreClock;
-                    systemInfo.GpuIsVirtual = fg.IsVirtual;
+                        SensorName = name,
+                        Temperature = temp
+                    });
+                    if (name.ToLowerInvariant().Contains("cpu") && double.IsNaN(si.CpuTemperature)) si.CpuTemperature = temp;
+                    if ((name.ToLowerInvariant().Contains("gpu") || name.ToLowerInvariant().Contains("graphics")) && double.IsNaN(si.GpuTemperature)) si.GpuTemperature = temp;
                 }
 
-                // Õ¯¬Á
-                systemInfo.Adapters.Clear();
-                if (sharedData.adapters != null)
-                {
-                    for (int i = 0; i < Math.Min(sharedData.adapterCount, sharedData.adapters.Length); i++)
-                    {
-                        var a = sharedData.adapters[i];
-                        systemInfo.Adapters.Add(new NetworkAdapterData
-                        {
-                            Name = SafeWideCharArrayToString(a.name) ?? "Œ¥÷™Õ¯ø®",
-                            Mac = SafeWideCharArrayToString(a.mac) ?? "00-00-00-00-00-00",
-                            IpAddress = SafeWideCharArrayToString(a.ipAddress) ?? "Œ¥∑÷≈‰",
-                            AdapterType = SafeWideCharArrayToString(a.adapterType) ?? "Œ¥÷™¿‡–Õ",
-                            Speed = a.speed
-                        });
-                    }
-                }
-                if (systemInfo.Adapters.Count > 0)
-                {
-                    var fa = systemInfo.Adapters[0];
-                    systemInfo.NetworkAdapterName = fa.Name;
-                    systemInfo.NetworkAdapterMac = fa.Mac;
-                    systemInfo.NetworkAdapterIp = fa.IpAddress;
-                    systemInfo.NetworkAdapterType = fa.AdapterType;
-                    systemInfo.NetworkAdapterSpeed = fa.Speed;
-                }
+                // ‰∏ªÊùøÂíå BIOS Â≠óÁ¨¶‰∏≤
+                si.TpmManufacturer = DecodeUtf8(raw, OFF_baseboardManufacturer, 128) ?? string.Empty;
+                si.TpmVersion = DecodeUtf8(raw, OFF_biosVendor, 64) ?? string.Empty;
+                si.TpmFirmwareVersion = DecodeUtf8(raw, OFF_biosVersion, 64) ?? string.Empty;
+                si.TpmStatus = (raw[OFF_tpmPresent] != 0) ? "TPM Present" : "TPM Absent";
+                si.HasTpm = raw[OFF_tpmPresent] != 0;
 
-                // ¬ﬂº≠¥≈≈Ã
-                systemInfo.Disks.Clear();
-                if (sharedData.disks != null)
-                {
-                    for (int i = 0; i < Math.Min(sharedData.diskCount, sharedData.disks.Length); i++)
-                    {
-                        var d = sharedData.disks[i];
-                        systemInfo.Disks.Add(new DiskData
-                        {
-                            Letter = (char)d.letter,
-                            Label = SafeWideCharArrayToString(d.label) ?? "Œ¥√¸√˚",
-                            FileSystem = SafeWideCharArrayToString(d.fileSystem) ?? "Œ¥÷™",
-                            TotalSize = d.totalSize,
-                            UsedSpace = d.usedSpace,
-                            FreeSpace = d.freeSpace,
-                            PhysicalDiskIndex = -1 // ≥ı ºŒ™Œ¥πÿ¡™
-                        });
-                    }
-                }
-
-                // ŒÔ¿Ì¥≈≈Ã + SMART
-                systemInfo.PhysicalDisks.Clear();
-                if (sharedData.physicalDisks != null)
-                {
-                    for (int i = 0; i < Math.Min(sharedData.physicalDiskCount, sharedData.physicalDisks.Length); i++)
-                    {
-                        var pd = sharedData.physicalDisks[i];
-                        var physicalDisk = new PhysicalDiskSmartData
-                        {
-                            Model = SafeWideCharArrayToString(pd.model) ?? "Œ¥÷™–Õ∫≈",
-                            SerialNumber = SafeWideCharArrayToString(pd.serialNumber) ?? string.Empty,
-                            FirmwareVersion = SafeWideCharArrayToString(pd.firmwareVersion) ?? string.Empty,
-                            InterfaceType = SafeWideCharArrayToString(pd.interfaceType) ?? string.Empty,
-                            DiskType = SafeWideCharArrayToString(pd.diskType) ?? string.Empty,
-                            Capacity = pd.capacity,
-                            Temperature = pd.temperature,
-                            HealthPercentage = pd.healthPercentage,
-                            IsSystemDisk = pd.isSystemDisk,
-                            SmartEnabled = pd.smartEnabled,
-                            SmartSupported = pd.smartSupported,
-                            PowerOnHours = pd.powerOnHours,
-                            PowerCycleCount = pd.powerCycleCount,
-                            ReallocatedSectorCount = pd.reallocatedSectorCount,
-                            CurrentPendingSector = pd.currentPendingSector,
-                            UncorrectableErrors = pd.uncorrectableErrors,
-                            WearLeveling = pd.wearLeveling,
-                            TotalBytesWritten = pd.totalBytesWritten,
-                            TotalBytesRead = pd.totalBytesRead
-                        };
-
-                        // πÿ¡™¬ﬂº≠«˝∂Ø∆˜◊÷ƒ∏
-                        if (pd.logicalDriveLetters != null && pd.logicalDriveLetters.Length > 0)
-                        {
-                            for (int b = 0; b < Math.Min(pd.logicalDriveLetters.Length, pd.logicalDriveCount); b++)
-                            {
-                                byte letterByte = pd.logicalDriveLetters[b];
-                                if (letterByte == 0) break;
-                                char letter = (char)letterByte;
-                                if (char.IsLetter(letter))
-                                {
-                                    physicalDisk.LogicalDriveLetters.Add(letter);
-                                }
-                            }
-                        }
-
-                        // SMART  Ù–‘
-                        physicalDisk.Attributes.Clear();
-                        if (pd.attributes != null)
-                        {
-                            int attrCount = Math.Min(pd.attributeCount, pd.attributes.Length);
-                            for (int a = 0; a < attrCount; a++)
-                            {
-                                var sa = pd.attributes[a];
-                                var attr = new SmartAttributeData
-                                {
-                                    Id = sa.id,
-                                    Current = sa.current,
-                                    Worst = sa.worst,
-                                    Threshold = sa.threshold,
-                                    RawValue = sa.rawValue,
-                                    Name = SafeWideCharArrayToString(sa.name) ?? $"Attr {sa.id}",
-                                    Description = SafeWideCharArrayToString(sa.description) ?? string.Empty,
-                                    IsCritical = sa.isCritical,
-                                    PhysicalValue = sa.physicalValue,
-                                    Units = SafeWideCharArrayToString(sa.units) ?? string.Empty
-                                };
-                                physicalDisk.Attributes.Add(attr);
-                            }
-                        }
-
-                        systemInfo.PhysicalDisks.Add(physicalDisk);
-                    }
-                }
-
-                // Ω®¡¢¬ﬂº≠≈Ã -> ŒÔ¿Ì≈ÃÀ˜“˝”≥…‰
-                if (systemInfo.PhysicalDisks.Count > 0 && systemInfo.Disks.Count > 0)
-                {
-                    for (int pi = 0; pi < systemInfo.PhysicalDisks.Count; pi++)
-                    {
-                        var pd = systemInfo.PhysicalDisks[pi];
-                        foreach (var drvLetter in pd.LogicalDriveLetters)
-                        {
-                            for (int di = 0; di < systemInfo.Disks.Count; di++)
-                            {
-                                if (char.ToUpperInvariant(systemInfo.Disks[di].Letter) == char.ToUpperInvariant(drvLetter))
-                                {
-                                    systemInfo.Disks[di].PhysicalDiskIndex = pi;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Œ¬∂»¥´∏–∆˜
-                systemInfo.Temperatures.Clear();
-                if (sharedData.temperatures != null)
-                {
-                    for (int i = 0; i < Math.Min(sharedData.tempCount, sharedData.temperatures.Length); i++)
-                    {
-                        var t = sharedData.temperatures[i];
-                        systemInfo.Temperatures.Add(new TemperatureData
-                        {
-                            SensorName = SafeWideCharArrayToString(t.sensorName) ?? $"¥´∏–∆˜{i}",
-                            Temperature = t.temperature
-                        });
-                    }
-                }
-                // TPM –≈œ¢£®ÕÍ’˚£©
-                systemInfo.HasTpm = sharedData.hasTpm;
-                if (sharedData.hasTpm)
-                {
-                    var tpm = sharedData.tpm;
-                    systemInfo.TpmManufacturer = SafeWideCharArrayToString(tpm.manufacturerName) ?? string.Empty;
-                    systemInfo.TpmManufacturerId = SafeWideCharArrayToString(tpm.manufacturerId) ?? string.Empty;
-                    systemInfo.TpmVersion = SafeWideCharArrayToString(tpm.version) ?? string.Empty;
-                    systemInfo.TpmFirmwareVersion = SafeWideCharArrayToString(tpm.firmwareVersion) ?? string.Empty;
-                    systemInfo.TpmStatus = SafeWideCharArrayToString(tpm.status) ?? string.Empty;
-                    systemInfo.TpmEnabled = tpm.isEnabled;
-                    systemInfo.TpmIsActivated = tpm.isActivated;
-                    systemInfo.TpmIsOwned = tpm.isOwned;
-                    systemInfo.TpmReady = tpm.isReady;
-                    systemInfo.TpmTbsAvailable = tpm.tbsAvailable;
-                    systemInfo.TpmPhysicalPresenceRequired = tpm.physicalPresenceRequired;
-                    systemInfo.TpmSpecVersion = tpm.specVersion;
-                    systemInfo.TpmTbsVersion = tpm.tbsVersion;
-                    systemInfo.TpmErrorMessage = SafeWideCharArrayToString(tpm.errorMessage) ?? string.Empty;
-                }
-                systemInfo.LastUpdate = DateTime.Now;
-                Log.Debug($"Ω‚Œˆπ≤œÌƒ⁄¥Ê≥…π¶: CPU={systemInfo.CpuName}, GPU ˝={systemInfo.Gpus.Count}, TPM={systemInfo.HasTpm}");
-                return systemInfo;
+                si.LastUpdate = DateTime.Now;
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "◊™ªªπ≤œÌƒ⁄¥Ê ˝æ› ß∞‹£¨ªÿÕÀºÚªØƒ£ Ω");
-                return ReadSimplifiedSystemInfo();
+                Log.Warning(ex, "Ëß£ÊûêÂÖ±‰∫´ÂÜÖÂ≠òÂá∫Áé∞ÂºÇÂ∏∏ÔºåËøîÂõûÈÉ®ÂàÜ‰ø°ÊÅØ");
             }
+            return si;
         }
 
-        private string? SafeWideCharArrayToString(ushort[]? wcharArray)
+        private string? DecodeUtf8(byte[] raw, int offset, int max)
         {
-            if (wcharArray == null || wcharArray.Length == 0) return null;
-            try
+            int len = 0; while (len < max && raw[offset + len] != 0) len++;
+            if (len == 0) return null;
+            try { return Encoding.UTF8.GetString(raw, offset, len); } catch { return null; }
+        }
+        private string BytesToHex(byte[] raw, int offset, int count)
+        {
+            var sb = new StringBuilder(count * 2);
+            for (int i = 0; i < count; i++) sb.Append(raw[offset + i].ToString("X2"));
+            return sb.ToString();
+        }
+
+        private string BuildOffsetSummary(byte[] raw)
+        {
+            var sb = new StringBuilder();
+            void add(string name, int off, int len)
             {
-                int len = 0;
-                while (len < wcharArray.Length && wcharArray[len] != 0) len++;
-                if (len == 0) return null;
-                var chars = new char[len];
-                for (int i = 0; i < len; i++) chars[i] = (char)wcharArray[i];
-                var s = new string(chars).Trim();
-                return string.IsNullOrWhiteSpace(s) ? null : s;
+                sb.Append(name).Append(" @").Append(off).Append(" len=").Append(len).Append(" -> ");
+                int show = Math.Min(len,16);
+                for (int i =0; i < show && off + i < raw.Length; i++) sb.Append(raw[off + i].ToString("X2"));
+                if (len > show) sb.Append("...");
+                sb.AppendLine();
             }
-            catch { return null; }
+            add("abiVersion", OFF_abiVersion,4);
+            add("writeSequence", OFF_writeSequence,4);
+            add("snapshotVersion", OFF_snapshotVersion,4);
+            add("cpuLogicalCores", OFF_cpuLogicalCores,2);
+            add("cpuUsagePercent_x10", OFF_cpuUsagePercent_x10,2);
+            add("memoryTotalMB", OFF_memoryTotalMB,8);
+            add("memoryUsedMB", OFF_memoryUsedMB,8);
+            add("tempSensors[0]", OFF_tempSensors, TEMP_SENSOR_SIZE);
+            add("tempSensorCount", OFF_tempSensorCount,2);
+            add("smartDisks[0]", OFF_smartDisks, SMART_DISK_SIZE);
+            add("smartDiskCount", OFF_smartDiskCount,1);
+            add("baseboardManufacturer", OFF_baseboardManufacturer,128);
+            add("baseboardProduct", OFF_baseboardProduct,64);
+            add("biosVendor", OFF_biosVendor,64);
+            add("biosVersion", OFF_biosVersion,64);
+            add("biosDate", OFF_biosDate,32);
+            add("secureBootEnabled", OFF_secureBootEnabled,1);
+            add("tpmPresent", OFF_tpmPresent,1);
+            add("memorySlotsTotal", OFF_memorySlotsTotal,2);
+            add("memorySlotsUsed", OFF_memorySlotsUsed,2);
+            add("futureReserved", OFF_futureReserved,64);
+            add("sharedmemHash", OFF_sharedmemHash,32);
+            add("extensionPad", OFF_extensionPad,128);
+            sb.Append("TotalSize=").Append(raw.Length).Append(" Expected=").Append(ExpectedSize);
+            return sb.ToString();
         }
 
         public void Dispose()
@@ -555,7 +283,173 @@ namespace WPF_UI1.Services
             }
             GC.SuppressFinalize(this);
         }
-
         ~SharedMemoryService() => Dispose();
+    }
+
+    public class SharedMemoryDiagnostics
+    {
+        public uint AbiVersion { get; set; }
+        public uint WriteSequence { get; set; }
+        public uint SnapshotVersion { get; set; }
+        public bool IsSequenceStable { get; set; }
+        public ushort LogicalCores { get; set; }
+        public short CpuUsagePercentX10 { get; set; }
+        public ulong MemoryTotalMB { get; set; }
+        public ulong MemoryUsedMB { get; set; }
+        public ushort TempSensorCount { get; set; }
+        public byte SmartDiskCount { get; set; }
+        public bool SecureBootEnabled { get; set; }
+        public bool TpmPresent { get; set; }
+        public ushort MemorySlotsTotal { get; set; }
+        public ushort MemorySlotsUsed { get; set; }
+        public int ViewSize { get; set; }
+        public int ExpectedSize { get; set; }
+        public bool SizeMatches { get; set; }
+        public string SharedMemHashHex { get; set; } = string.Empty;
+        public string FutureReservedFlags { get; set; } = string.Empty;
+        public string OffsetSummary { get; set; } = string.Empty; // Êñ∞Â¢ûÔºöÂÅèÁßªÊëòË¶ÅÊñπ‰æøÂú®UIÂÜÖÂ±ïÁ§∫
+    }
+}
+
+// ÂêàÂπ∂ÁöÑÂÖ±‰∫´ÂÜÖÂ≠òÁªìÊûÑÂÆö‰πâÔºàÂéü Models\SharedMemoryBlock.csÔºâ
+namespace WPF_UI1.Models
+{
+    using System.Runtime.InteropServices;
+
+    // Ê∏©Â∫¶‰º†ÊÑüÂô®ÁªìÊûÑ
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    public struct TemperatureSensor
+    {
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)]
+        public byte[] name; // UTF-8Ôºå‰∏çË∂≥Â°´0
+        public short valueC_x10; // Ê∏©Â∫¶*10 (0.1¬∞C)Ôºå‰∏çÂèØÁî® -1
+        public byte flags; // bit0=valid, bit1=urgentLast
+
+        public static TemperatureSensor CreateDefault()
+        {
+            return new TemperatureSensor
+            {
+                name = new byte[32],
+                valueC_x10 = -1,
+                flags = 0
+            };
+        }
+    }
+
+    // SMARTÁ£ÅÁõòËØÑÂàÜÁªìÊûÑ
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    public struct SmartDiskScore
+    {
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)]
+        public byte[] diskId;
+        public short score; //0-100Ôºå-1 ‰∏çÂèØÁî®
+        public int hoursOn;
+        public short wearPercent; //0-100Ôºå-1 ‰∏çÂèØÁî®
+        public ushort reallocated;
+        public ushort pending;
+        public ushort uncorrectable;
+        public short temperatureC; // -1 ‰∏çÂèØÁî®
+        public byte recentGrowthFlags; // bit0=reallocatedÂ¢û, bit1=wearÁ™ÅÂ¢û
+
+        public static SmartDiskScore CreateDefault()
+        {
+            return new SmartDiskScore
+            {
+                diskId = new byte[32],
+                score = -1,
+                hoursOn = 0,
+                wearPercent = -1,
+                reallocated = 0,
+                pending = 0,
+                uncorrectable = 0,
+                temperatureC = -1,
+                recentGrowthFlags = 0
+            };
+        }
+    }
+
+    //ÂÖ±‰∫´ÂÜÖÂ≠ò‰∏ªÁªìÊûÑ
+    [StructLayout(LayoutKind.Sequential, Pack =1)]
+    public struct SharedMemoryBlock
+    {
+        public uint abiVersion;
+        public uint writeSequence;
+        public uint snapshotVersion;
+        public uint reservedHeader;
+
+        public ushort cpuLogicalCores;
+        public short cpuUsagePercent_x10;
+        public ulong memoryTotalMB;
+        public ulong memoryUsedMB;
+
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst =32)]
+        public TemperatureSensor[] tempSensors;
+        public ushort tempSensorCount;
+
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst =16)]
+        public SmartDiskScore[] smartDisks;
+        public byte smartDiskCount;
+
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst =128)]
+        public byte[] baseboardManufacturer;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst =64)]
+        public byte[] baseboardProduct;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst =64)]
+        public byte[] baseboardVersion;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst =64)]
+        public byte[] baseboardSerial;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst =64)]
+        public byte[] biosVendor;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst =64)]
+        public byte[] biosVersion;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst =32)]
+        public byte[] biosDate;
+        public byte secureBootEnabled;
+        public byte tpmPresent;
+        public ushort memorySlotsTotal;
+        public ushort memorySlotsUsed;
+
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst =64)]
+        public byte[] futureReserved;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst =32)]
+        public byte[] sharedmemHash;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst =128)]
+        public byte[] extensionPad;
+
+        public static SharedMemoryBlock CreateDefault()
+        {
+            var block = new SharedMemoryBlock
+            {
+                abiVersion =0x00010014,
+                writeSequence =0,
+                snapshotVersion =0,
+                reservedHeader =0,
+                cpuLogicalCores =0,
+                cpuUsagePercent_x10 = -1,
+                memoryTotalMB =0,
+                memoryUsedMB =0,
+                tempSensors = new TemperatureSensor[32],
+                tempSensorCount =0,
+                smartDisks = new SmartDiskScore[16],
+                smartDiskCount =0,
+                baseboardManufacturer = new byte[128],
+                baseboardProduct = new byte[64],
+                baseboardVersion = new byte[64],
+                baseboardSerial = new byte[64],
+                biosVendor = new byte[64],
+                biosVersion = new byte[64],
+                biosDate = new byte[32],
+                secureBootEnabled =0,
+                tpmPresent =0,
+                memorySlotsTotal =0,
+                memorySlotsUsed =0,
+                futureReserved = new byte[64],
+                sharedmemHash = new byte[32],
+                extensionPad = new byte[128]
+            };
+            for (int i =0; i <32; i++) block.tempSensors[i] = TemperatureSensor.CreateDefault();
+            for (int i =0; i <16; i++) block.smartDisks[i] = SmartDiskScore.CreateDefault();
+            return block;
+        }
     }
 }

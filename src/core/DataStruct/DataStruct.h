@@ -3,8 +3,29 @@
 #include <windows.h>
 #include <string>
 #include <vector>
+#include <stdint.h>
 
 #pragma pack(push, 1) // 确保内存对齐
+
+// 温度传感器结构
+struct TemperatureSensor {
+ char name[32]; // UTF-8，不足填0
+ int16_t valueC_x10; // 温度*10 (0.1°C)，不可用 -1
+ uint8_t flags; // bit0=valid, bit1=urgentLast
+};
+
+// SMART磁盘评分结构
+struct SmartDiskScore {
+ char diskId[32];
+ int16_t score; //0-100，-1 不可用
+ int32_t hoursOn;
+ int16_t wearPercent; //0-100，-1 不可用
+ uint16_t reallocated;
+ uint16_t pending;
+ uint16_t uncorrectable;
+ int16_t temperatureC; // -1 不可用
+ uint8_t recentGrowthFlags; // bit0=reallocated增, bit1=wear突增
+};
 
 // SMART属性信息
 struct SmartAttributeData {
@@ -147,6 +168,8 @@ struct SystemInfo {
     double cpuTemperature; // 新增：CPU温度
     double gpuTemperature; // 新增：GPU温度
     double cpuUsageSampleIntervalMs = 0.0; // 新增：CPU使用率采样间隔（毫秒）
+    // USB信息
+    std::vector<USBDeviceInfo> usbDevices; // 新增：USB设备列表
     // TPM信息（扩展）
     bool hasTpm = false;            // 是否存在TPM
     std::string tpmManufacturer;    // TPM制造商
@@ -171,57 +194,55 @@ struct SystemInfo {
 
 // 共享内存主结构
 struct SharedMemoryBlock {
-    wchar_t cpuName[128];       // CPU名称 - wchar_t array
-    int physicalCores;        // 物理核心数
-    int logicalCores;         // 逻辑核心数
-    double cpuUsage;          // 改为double类型，提高精度
-    int performanceCores;     // 性能核心数
-    int efficiencyCores;      // 能效核心数
-    double pCoreFreq;         // 性能核心频率（GHz）
-    double eCoreFreq;         // 能效核心频率（GHz）
-    double cpuBaseFrequencyMHz; // 新增：CPU 基准频率（MHz）
-    double cpuCurrentFrequencyMHz; // 新增：CPU 即时频率（MHz）
-    bool hyperThreading;      // 超线程是否启用
-    bool virtualization;      // 虚拟化是否启用
-    uint64_t totalMemory;     // 总内存（字节）
-    uint64_t usedMemory;      // 已用内存（字节）
-    uint64_t availableMemory; // 可用内存（字节）
-    double cpuTemperature; // 新增：CPU温度
-    double gpuTemperature; // 新增：GPU温度
-    double cpuUsageSampleIntervalMs; // 新增：CPU使用率采样间隔（毫秒）
+    uint32_t abiVersion; //0x00010014
+    uint32_t writeSequence; // 奇偶协议：启动0
+    uint32_t snapshotVersion; // 完整刷新+1
+    uint32_t reservedHeader; // 对齐
 
-    // GPU信息（支持最多2个GPU）
-    GPUData gpus[2];
+    uint16_t cpuLogicalCores;
+    int16_t cpuUsagePercent_x10; // 未实现 -1
+    uint64_t memoryTotalMB;
+    uint64_t memoryUsedMB;
 
-    // 网络适配器（支持最多4个适配器）
-    NetworkAdapterData adapters[4];
+    TemperatureSensor tempSensors[32];
+    uint16_t tempSensorCount;
 
-    // 逻辑磁盘信息（支持最多8个磁盘）
-    struct SharedDiskData {
-        char letter;             // 盘符（如'C'）
-        wchar_t label[128];      // 卷标 - Using wchar_t array for shared memory
-        wchar_t fileSystem[32];  // 文件系统 - Using wchar_t array for shared memory
-        uint64_t totalSize;      // 总容量（字节）
-        uint64_t usedSpace;      // 已用空间（字节）
-        uint64_t freeSpace;      // 可用空间（字节）
-    } disks[8];
+    SmartDiskScore smartDisks[16];
+    uint8_t smartDiskCount;
 
-    // 物理磁盘SMART信息（支持最多8个物理磁盘）
-    PhysicalDiskSmartData physicalDisks[8];
+    char baseboardManufacturer[128];
+    char baseboardProduct[64];
+    char baseboardVersion[64];
+    char baseboardSerial[64];
+    char biosVendor[64];
+    char biosVersion[64];
+    char biosDate[32];
+    uint8_t secureBootEnabled;
+    uint8_t tpmPresent;
+    uint16_t memorySlotsTotal;
+    uint16_t memorySlotsUsed;
 
-    // 温度数据（支持10个传感器）
-    TemperatureData temperatures[10];
+    uint8_t futureReserved[64]; // bit0=degradeMode bit1=hashMismatch bit2=sequenceStallWarn
+    uint8_t sharedmemHash[32]; // SHA256(结构除自身)
 
-    // TPM信息
-    TpmData tpm;
+    // USB设备信息
+    struct USBDeviceData {
+        char drivePath[4];        // 驱动器路径 (如 "E:\\")
+        char volumeLabel[32];     // 卷标名称
+        uint64_t totalSize;       // 总容量（字节）
+        uint64_t freeSpace;       // 可用空间（字节）
+        uint8_t isUpdateReady;    // 是否包含update文件夹
+        uint8_t state;            // 状态 (0=Removed, 1=Inserted, 2=UpdateReady)
+        uint8_t reserved;         // 对齐
+        SYSTEMTIME lastUpdate;    // 最后更新时间
+    };
+    
+    USBDeviceData usbDevices[8];  // 最多8个USB设备
+    uint8_t usbDeviceCount;       // USB设备数量
 
-    int adapterCount;
-    int tempCount;
-    int gpuCount;
-    int diskCount;
-    int physicalDiskCount;       // 新增：物理磁盘数量
-    bool hasTpm;                 // 新增：是否存在TPM
-    SYSTEMTIME lastUpdate;
-    CRITICAL_SECTION lock;
+    uint8_t extensionPad[118]; //预留 (调整为128-10=118)
 };
+
 #pragma pack(pop)
+
+// static_assert(sizeof(SharedMemoryBlock) ==125818, "Size mismatch");

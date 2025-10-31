@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
@@ -16,7 +16,7 @@ public:
         std::wstring mac;
         std::wstring ip;
         std::wstring description;
-        std::wstring adapterType; // 新增：网卡类型（无线/有线）
+        std::wstring adapterType;
         bool isEnabled;
         bool isConnected;
         uint64_t speed;
@@ -38,8 +38,8 @@ private:
     std::wstring FormatMacAddress(const unsigned char* address, size_t length) const;
     std::wstring FormatSpeed(uint64_t bitsPerSecond) const;  // 添加声明
     bool IsVirtualAdapter(const std::wstring& name) const;
-    std::wstring DetermineAdapterType(const std::wstring& name, const std::wstring& description, DWORD ifType) const; // 新增：网卡类型识别
     void SafeRelease(IUnknown* pInterface);
+    std::wstring DetermineAdapterType(const std::wstring& name, const std::wstring& description, DWORD ifType) const;
 
     WmiManager& wmiManager;
     std::vector<AdapterInfo> adapters;

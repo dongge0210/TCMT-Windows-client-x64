@@ -5,8 +5,8 @@
 #include <utility>
 #include <vcclr.h> // 必须包含以使用 gcroot
 
-// 使用相对路径，并统一使用net472版本以匹配项目配置
-#using "..\src\third_party\LibreHardwareMonitor\bin\Debug\net472\LibreHardwareMonitorLib.dll"
+// DLL引用已在项目文件中正确配置，无需在此重复引用
+// #using "..\src\third_party\LibreHardwareMonitor\bin\Debug\net472\LibreHardwareMonitorLib.dll"
 
 // 添加对 .NET 类型的前向声明
 namespace LibreHardwareMonitor {

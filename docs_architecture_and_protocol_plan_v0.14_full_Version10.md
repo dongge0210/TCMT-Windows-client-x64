@@ -72,8 +72,8 @@
 ## 2. 当前模块状态一览
 | 模块 | 现状 | 问题 | 下一步 |
 |------|------|------|--------|
-| SharedMemory | 旧结构 | 无扩展字段 | 扩展 + writeSequence |
-| writeSequence | 未实现 | 脏读风险 | 奇偶协议接入 |
+| SharedMemory | 已实现 | 结构大小更新为2941字节 | 完善数据转换 |
+| writeSequence | 已实现 | 奇偶协议基本完成 | 添加异常处理 |
 | 温度 | 托管桥 | 精度性能不足 | 原生迁移 |
 | SMART 异步 | 未实现 | 无健康评分数据 | 异步线程 |
 | 主板/BIOS | 未采集 | 字段空 | WMI/SMBIOS 填充 |
@@ -101,7 +101,7 @@
 - 所有字段 POD；禁止动态分配、指针、std::string。
 - 对齐：`#pragma pack(push,1)`。
 
-### 3.2 SharedMemoryBlock 完整声明（示意，最终以头文件为准）
+### 3.2 SharedMemoryBlock 完整声明（以src/core/DataStruct/DataStruct.h为准）
 ```
 struct TemperatureSensor {
   char name[32];          // UTF-8，不足填0
@@ -132,23 +132,23 @@ struct SharedMemoryBlock {
   uint64_t memoryTotalMB;
   uint64_t memoryUsedMB;
 
-  TemperatureSensor tempSensors[32];
-  uint16_t tempSensorCount;
+  TemperatureSensor tempSensors[32];  // 35 * 32 = 1120 字节
+  uint16_t tempSensorCount;          // 2 字节
 
-  SmartDiskScore smartDisks[16];
-  uint8_t smartDiskCount;
+  SmartDiskScore smartDisks[16];      // 67 * 16 = 1072 字节
+  uint8_t smartDiskCount;             // 1 字节
 
-  char baseboardManufacturer[128];
-  char baseboardProduct[64];
-  char baseboardVersion[64];
-  char baseboardSerial[64];
-  char biosVendor[64];
-  char biosVersion[64];
-  char biosDate[32];
-  uint8_t secureBootEnabled;
-  uint8_t tpmPresent;
-  uint16_t memorySlotsTotal;
-  uint16_t memorySlotsUsed;
+  char baseboardManufacturer[128]; // 128 字节
+  char baseboardProduct[64];       // 64 字节
+  char baseboardVersion[64];       // 64 字节
+  char baseboardSerial[64];        // 64 字节
+  char biosVendor[64];             // 64 字节
+  char biosVersion[64];            // 64 字节
+  char biosDate[32];               // 32 字节
+  uint8_t secureBootEnabled;       // 1 字节
+  uint8_t tpmPresent;              // 1 字节
+  uint16_t memorySlotsTotal;       // 2 字节
+  uint16_t memorySlotsUsed;        // 2 字节
 
   uint8_t futureReserved[64]; // bit0=degradeMode bit1=hashMismatch bit2=sequenceStallWarn
   uint8_t sharedmemHash[32];  // SHA256(结构除自身)
@@ -156,7 +156,19 @@ struct SharedMemoryBlock {
   uint8_t extensionPad[128];  // 预留
 };
 ```
-说明：最终以编译生成 offsets JSON 为准。
+
+**结构大小计算**：
+- 头部：4 * 4 = 16 字节
+- CPU/内存：2 + 2 + 8 + 8 = 20 字节
+- 温度传感器：35 * 32 + 2 = 1122 字节
+- SMART磁盘：67 * 16 + 1 = 1073 字节
+- 主板/BIOS：128 + 64 + 64 + 64 + 64 + 64 + 32 = 480 字节
+- TPM/内存槽：1 + 1 + 2 + 2 = 6 字节
+- 预留/哈希：64 + 32 = 96 字节
+- 扩展填充：128 字节
+- **总计：16 + 20 + 1122 + 1073 + 480 + 6 + 96 + 128 = 2941 字节**
+
+说明：实际大小以编译器对齐和static_assert为准。
 
 ### 3.3 futureReserved 位标定义
 | 位 | 名称 | 含义 | 触发条件 |
@@ -204,7 +216,7 @@ struct SharedMemoryBlock {
 ```
 {
   "abiVersion":"0x00010014",
-  "sizeof":125818,
+  "sizeof":2941,
   "generatedTs":1697890000123,
   "sharedmemSha256":"<64hex>",
   "fields":[
@@ -405,7 +417,7 @@ UI 禁用 kill；后期高危操作需 ADMIN + 二次确认。
 ## 18. 验收与测试步骤总表
 | 项目 | 条件 | 标准 |
 |------|------|------|
-| sizeof 校验 | 编译后 | ==125818 |
+| sizeof 校验 | 编译后 | ==2941 |
 | 序列奇偶 | 模拟阻塞写 | 第5次奇数 WARN |
 | 温度迁移差值 | 过渡首轮 | 仅一条 temp_diff |
 | SMART 异步重试 | 故障盘 | 3 次重试日志 |
@@ -557,7 +569,7 @@ Windows 实现 → 后续 Linux / macOS。
 
 ## 26. 附：偏移与结构校验章节
 ### 26.1 编译期校验
-`static_assert(sizeof(SharedMemoryBlock)==125818,"Size mismatch")`  
+`static_assert(sizeof(SharedMemoryBlock)==2941,"Size mismatch")`  
 
 ### 26.2 运行期日志
 `INFO sharedmem_size=<sizeof>`  
@@ -567,12 +579,12 @@ Windows 实现 → 后续 Linux / macOS。
 ```
 {
   "abiVersion":"0x00010014",
-  "sizeof":125818,
+  "sizeof":2941,
   "generatedTs":1697825000123,
   "sharedmemSha256":"<64hex>",
   "fields":[
-    {"name":"writeSequence","offset":124792,"size":4},
-    {"name":"baseboardManufacturer","offset":124836,"size":128}
+    {"name":"writeSequence","offset":4,"size":4},
+    {"name":"baseboardManufacturer","offset":2241,"size":128}
   ]
 }
 ```

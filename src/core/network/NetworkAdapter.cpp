@@ -17,6 +17,7 @@
 
 NetworkAdapter::NetworkAdapter(WmiManager& manager)
     : wmiManager(manager), initialized(false) {
+    Logger::Debug("NetworkAdapter: Initializing network adapter");
     Initialize();
 }
 
@@ -25,9 +26,12 @@ NetworkAdapter::~NetworkAdapter() {
 }
 
 void NetworkAdapter::Initialize() {
+    Logger::Debug("NetworkAdapter: Starting initialization");
     if (wmiManager.IsInitialized()) {
+        Logger::Debug("NetworkAdapter: WMI initialized, querying adapter information");
         QueryAdapterInfo();
         initialized = true;
+        Logger::Debug("NetworkAdapter: Initialization completed");
     }
     else {
         Logger::Error("WMI not initialized, cannot get network information");
@@ -35,18 +39,22 @@ void NetworkAdapter::Initialize() {
 }
 
 void NetworkAdapter::Cleanup() {
+    Logger::Debug("NetworkAdapter: Cleaning network adapter data");
     adapters.clear();
     initialized = false;
 }
 
 void NetworkAdapter::Refresh() {
+    Logger::Debug("NetworkAdapter: Refreshing network adapter information");
     Cleanup();
     Initialize();
 }
 
 void NetworkAdapter::QueryAdapterInfo() {
+    Logger::Debug("NetworkAdapter: Querying adapter information");
     QueryWmiAdapterInfo();
     UpdateAdapterAddresses();
+    Logger::Debug("NetworkAdapter: Adapter information query completed");
 }
 
 bool NetworkAdapter::IsVirtualAdapter(const std::wstring& name) const {
@@ -70,6 +78,7 @@ bool NetworkAdapter::IsVirtualAdapter(const std::wstring& name) const {
 }
 
 void NetworkAdapter::QueryWmiAdapterInfo() {
+    Logger::Debug("NetworkAdapter: Starting WMI adapter query");
     IEnumWbemClassObject* pEnumerator = nullptr;
     HRESULT hres = wmiManager.GetWmiService()->ExecQuery(
         bstr_t("WQL"),
@@ -86,6 +95,7 @@ void NetworkAdapter::QueryWmiAdapterInfo() {
 
     ULONG uReturn = 0;
     IWbemClassObject* pclsObj = nullptr;
+    int adapterCount = 0;
     while (pEnumerator && pEnumerator->Next(WBEM_INFINITE, 1, &pclsObj, &uReturn) == S_OK) {
         AdapterInfo info;
         info.isEnabled = false;
@@ -115,6 +125,9 @@ void NetworkAdapter::QueryWmiAdapterInfo() {
 
         // Filter virtual adapters
         if (IsVirtualAdapter(info.name) || IsVirtualAdapter(info.description)) {
+            std::wstring msg = L"NetworkAdapter: Skipping virtual adapter: ";
+            msg += info.name;
+            Logger::Debug(msg);
             SafeRelease(pclsObj);
             continue;
         }
@@ -131,11 +144,19 @@ void NetworkAdapter::QueryWmiAdapterInfo() {
         info.adapterType = L"Unknown";
 
         if (!info.name.empty() && !info.mac.empty()) {
+            std::wstring msg = L"NetworkAdapter: Added adapter - Name: ";
+            msg += info.name;
+            msg += L", MAC: ";
+            msg += info.mac;
+            Logger::Debug(msg);
             adapters.push_back(info);
+            adapterCount++;
         }
 
         SafeRelease(pclsObj);
     }
+    
+    Logger::Debug("NetworkAdapter: WMI adapter query completed, found " + std::to_string(adapterCount) + " physical adapters");
 
     SafeRelease(pEnumerator);
 }
@@ -151,6 +172,7 @@ std::wstring NetworkAdapter::FormatMacAddress(const unsigned char* address, size
 }
 
 void NetworkAdapter::UpdateAdapterAddresses() {
+    Logger::Debug("NetworkAdapter: Updating adapter address information");
     ULONG bufferSize = 15000;
     std::vector<BYTE> buffer(bufferSize);
     PIP_ADAPTER_ADDRESSES pAddresses = reinterpret_cast<PIP_ADAPTER_ADDRESSES>(&buffer[0]);
@@ -162,6 +184,7 @@ void NetworkAdapter::UpdateAdapterAddresses() {
         &bufferSize);
 
     if (result == ERROR_BUFFER_OVERFLOW) {
+        Logger::Debug("NetworkAdapter: Buffer size insufficient, reallocating");
         buffer.resize(bufferSize);
         pAddresses = reinterpret_cast<PIP_ADAPTER_ADDRESSES>(&buffer[0]);
         result = GetAdaptersAddresses(AF_INET,
@@ -176,6 +199,7 @@ void NetworkAdapter::UpdateAdapterAddresses() {
         return;
     }
 
+    int updatedCount = 0;
     for (PIP_ADAPTER_ADDRESSES adapter = pAddresses; adapter; adapter = adapter->Next) {
         if (adapter->IfType != IF_TYPE_ETHERNET_CSMACD &&
             adapter->IfType != IF_TYPE_IEEE80211) {
@@ -188,14 +212,24 @@ void NetworkAdapter::UpdateAdapterAddresses() {
 
         for (auto& adapterInfo : adapters) {
             if (adapterInfo.mac == macAddress) {
+                std::wstring msg = L"NetworkAdapter: Updating adapter ";
+                msg += adapterInfo.name;
+                msg += L" information";
+                Logger::Debug(msg);
                 // Update connection status
                 adapterInfo.isConnected = (adapter->OperStatus == IfOperStatusUp);
+                std::wstring statusMsg = L"NetworkAdapter: Adapter connection status - ";
+                statusMsg += (adapterInfo.isConnected ? L"Connected" : L"Disconnected");
+                Logger::Debug(statusMsg);
 
                 // Update network speed - fix for disconnected adapters showing abnormal speeds
                 if (adapterInfo.isConnected) {
                     // Only record real speed when connected
                     adapterInfo.speed = adapter->TransmitLinkSpeed;
                     adapterInfo.speedString = FormatSpeed(adapter->TransmitLinkSpeed);
+                    std::wstring speedMsg = L"NetworkAdapter: Adapter speed - ";
+                    speedMsg += adapterInfo.speedString;
+                    Logger::Debug(speedMsg);
                 }
                 else {
                     // Set to 0 when not connected
@@ -209,6 +243,9 @@ void NetworkAdapter::UpdateAdapterAddresses() {
                     adapterInfo.description,
                     adapter->IfType
                 );
+                std::wstring typeMsg = L"NetworkAdapter: Adapter type - ";
+                typeMsg += adapterInfo.adapterType;
+                Logger::Debug(typeMsg);
 
                 // Update IP address (only when connected)
                 if (adapterInfo.isConnected) {
@@ -219,6 +256,9 @@ void NetworkAdapter::UpdateAdapterAddresses() {
                             sockaddr_in* ipv4 = reinterpret_cast<sockaddr_in*>(address->Address.lpSockaddr);
                             inet_ntop(AF_INET, &(ipv4->sin_addr), ipStr, INET_ADDRSTRLEN);
                             adapterInfo.ip = std::wstring(ipStr, ipStr + strlen(ipStr));
+                            std::wstring ipMsg = L"NetworkAdapter: Adapter IP address - ";
+                            ipMsg += adapterInfo.ip;
+                            Logger::Debug(ipMsg);
                             break;
                         }
                         address = address->Next;
@@ -227,10 +267,13 @@ void NetworkAdapter::UpdateAdapterAddresses() {
                 else {
                     adapterInfo.ip = L"Not connected";
                 }
+                updatedCount++;
                 break;
             }
         }
     }
+    
+    Logger::Debug("NetworkAdapter: Adapter address update completed, updated " + std::to_string(updatedCount) + " adapters");
 }
 
 // Helper method to format network speed

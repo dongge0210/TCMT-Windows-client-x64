@@ -1,262 +1,227 @@
-﻿#include "stdafx.h"
 #include "Logger.h"
-#include <chrono>
-#include <ctime>
-#include <iomanip>
 #include <sstream>
-#include <iostream>
+#include <iomanip>
 #include <stdexcept>
-#include <io.h>
-#include <fcntl.h>
-#include <windows.h> // For MultiByteToWideChar
-#include <algorithm> // For std::transform
-#include <vector> // For std::vector used in UTF-8 to UTF-16 conversion
+#include <algorithm>
+#include <filesystem>
+#include <codecvt>
 
-std::ofstream Logger::logFile;
-std::mutex Logger::logMutex;
-bool Logger::consoleOutputEnabled = true; // Initialize console output flag
-LogLevel Logger::currentLogLevel = LOG_DEBUG; // 默认日志等级为INFO
-HANDLE Logger::hConsole = GetStdHandle(STD_OUTPUT_HANDLE); // 初始化控制台句柄
-
-void Logger::Initialize(const std::string& logFilePath) {
-    logFile.open(logFilePath, std::ios::binary | std::ios::app);
-    if (!logFile.is_open()) {
-        throw std::runtime_error("无法打开日志文件");
-    }
-
-    // Write UTF-8 BOM if the file is empty
-    if (logFile.tellp() == 0) {
-        const unsigned char bom[] = {0xEF, 0xBB, 0xBF};
-        logFile.write(reinterpret_cast<const char*>(bom), sizeof(bom));
-    }
-
-    // 设置控制台编码为UTF-8，确保中文显示正确
-    SetConsoleCP(65001);
-    SetConsoleOutputCP(65001);
-    
-    // 启用控制台虚拟终端序列处理（如果支持）
-    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (hOut != INVALID_HANDLE_VALUE) {
-        DWORD dwMode = 0;
-        GetConsoleMode(hOut, &dwMode);
-        dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
-        SetConsoleMode(hOut, dwMode);
-    }
-}
-
-void Logger::EnableConsoleOutput(bool enable) {
-    consoleOutputEnabled = enable;
-}
-
-void Logger::SetLogLevel(LogLevel level) {
-    currentLogLevel = level;
-}
-
-LogLevel Logger::GetLogLevel() {
-    return currentLogLevel;
-}
-
-[[nodiscard]] bool Logger::IsInitialized() {
-    return logFile.is_open();
-}
-
-void Logger::SetConsoleColor(ConsoleColor color) {
-    if (hConsole != INVALID_HANDLE_VALUE) {
-        SetConsoleTextAttribute(hConsole, static_cast<WORD>(color));
-    }
-}
-
-void Logger::ResetConsoleColor() {
-    if (hConsole != INVALID_HANDLE_VALUE) {
-        SetConsoleTextAttribute(hConsole, static_cast<WORD>(7)); // 默认白色，显式转换WORD，消除C4365
-    }
-}
-
-std::wstring Logger::ConvertToWideString(const std::string& utf8Str) {
-    // Handle empty string case
-    if (utf8Str.empty()) {
-        return std::wstring();
-    }
-    // Get required buffer size
-    int bufferSize = MultiByteToWideChar(
-        CP_UTF8, 0, utf8Str.c_str(), static_cast<int>(utf8Str.length()), nullptr, 0);
-    if (bufferSize == 0) {
-        throw std::runtime_error("Failed to convert UTF-8 string to wide string");
-    }
-    // Create buffer to hold the wide string
-    std::wstring wideStr(bufferSize, L'\0');
-    // Convert the string
-    if (!MultiByteToWideChar(
-        CP_UTF8, 0, utf8Str.c_str(), static_cast<int>(utf8Str.length()), &wideStr[0], bufferSize)) {
-        throw std::runtime_error("Failed to convert UTF-8 string to wide string");
-    }
-    return wideStr;
-}
+std::mutex Logger::mutex;
+std::ofstream Logger::stream;
+bool Logger::consoleEnabled = true;
+LogLevel Logger::currentLevel = LOG_DEBUG;
+HANDLE Logger::consoleHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+size_t Logger::maxFileSize = 0;
+int Logger::maxFileCount = 0;
+std::string Logger::basePath;
+std::vector<LogEntry> Logger::ring;
+size_t Logger::ringCapacity = 0;
+size_t Logger::ringIndex = 0;
 
 static bool IsValidUTF8(const std::string& s) {
     const unsigned char* bytes = reinterpret_cast<const unsigned char*>(s.data());
     size_t len = s.size();
-    size_t i = 0;
-    while (i < len) {
+    for (size_t i = 0; i < len; ) {
         unsigned char c = bytes[i];
-        if (c <= 0x7F) {
-            i += 1;
-        } else if ((c >> 5) == 0x6) {
-            if (i + 1 >= len) return false;
-            if ((bytes[i + 1] & 0xC0) != 0x80) return false;
-            i += 2;
-        } else if ((c >> 4) == 0xE) {
-            if (i + 2 >= len) return false;
-            if ((bytes[i + 1] & 0xC0) != 0x80 || (bytes[i + 2] & 0xC0) != 0x80) return false;
-            i += 3;
-        } else if ((c >> 3) == 0x1E) {
-            if (i + 3 >= len) return false;
-            if ((bytes[i + 1] & 0xC0) != 0x80 || (bytes[i + 2] & 0xC0) != 0x80 || (bytes[i + 3] & 0xC0) != 0x80) return false;
-            i += 4;
-        } else {
-            return false;
-        }
+        size_t seq = 0;
+        if (c <= 0x7F) seq = 1;
+        else if ((c >> 5) == 0x6) seq = 2;
+        else if ((c >> 4) == 0xE) seq = 3;
+        else if ((c >> 3) == 0x1E) seq = 4;
+        else return false;
+        if (i + seq > len) return false;
+        for (size_t j = 1; j < seq; ++j) if ((bytes[i + j] & 0xC0) != 0x80) return false;
+        i += seq;
     }
     return true;
 }
 
-std::string Logger::NormalizeToUTF8(const std::string& input) {
-    if (input.empty()) return input;
-    // 如果已经是有效 UTF-8，直接返回
-    if (IsValidUTF8(input)) {
-        return input;
-    }
-    // 否则，按本地 ANSI 代码页解码为宽字符串，再转为 UTF-8
-    // Step 1: ANSI -> Wide
-    int wideLen = MultiByteToWideChar(CP_ACP, MB_ERR_INVALID_CHARS, input.data(), static_cast<int>(input.size()), nullptr, 0);
-    if (wideLen <= 0) {
-        // 回退：不使用 MB_ERR_INVALID_CHARS 再试一次
-        wideLen = MultiByteToWideChar(CP_ACP, 0, input.data(), static_cast<int>(input.size()), nullptr, 0);
-        if (wideLen <= 0) {
-            // 转换失败，返回原文，避免崩溃
-            return input;
-        }
-    }
-    std::wstring wide(static_cast<size_t>(wideLen), L'\0');
-    MultiByteToWideChar(CP_ACP, 0, input.data(), static_cast<int>(input.size()), wide.data(), wideLen);
-
-    // Step 2: Wide -> UTF-8
-    int utf8Len = WideCharToMultiByte(CP_UTF8, 0, wide.data(), wideLen, nullptr, 0, nullptr, nullptr);
-    if (utf8Len <= 0) {
-        return input; // 回退
-    }
-    std::string utf8(static_cast<size_t>(utf8Len), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, wide.data(), wideLen, utf8.data(), utf8Len, nullptr, nullptr);
-    return utf8;
+std::string Logger::NormalizeToUTF8(std::string_view input) {
+    if (input.empty()) return std::string();
+    std::string s(input);
+    if (IsValidUTF8(s)) return s;
+    int wideLen = MultiByteToWideChar(CP_ACP, 0, s.c_str(), (int)s.size(), nullptr, 0);
+    if (wideLen <= 0) return s;
+    std::wstring wide(wideLen, L'\0');
+    MultiByteToWideChar(CP_ACP, 0, s.c_str(), (int)s.size(), wide.data(), wideLen);
+    int utf8Len = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), (int)wide.size(), nullptr, 0, nullptr, nullptr);
+    if (utf8Len <= 0) return s;
+    std::string out(utf8Len, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), (int)wide.size(), out.data(), utf8Len, nullptr, nullptr);
+    return out;
 }
 
-void Logger::WriteLog(const std::string& level, const std::string& message, LogLevel msgLevel, ConsoleColor color) {
-    // 检查日志等级过滤
-    if (msgLevel < currentLogLevel) {
-        return; // 跳过低于当前等级的日志
-    }
-    std::lock_guard<std::mutex> lock(logMutex);
-    // 限制日志消息长度，防止极端内存占用
-    constexpr size_t MAX_LOG_LENGTH = 4096;
-    if (message.empty()) {
-        throw std::invalid_argument("日志消息不能为空");
-    }
-    if (message.length() > MAX_LOG_LENGTH) {
-        throw std::invalid_argument("日志消息过长");
-    }
+std::string Logger::WStringToUtf8(const std::wstring& w) {
+    if (w.empty()) return {};
+    int len = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), nullptr, 0, nullptr, nullptr);
+    std::string s(len, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), s.data(), len, nullptr, nullptr);
+    return s;
+}
 
-    // 规范化消息为 UTF-8，避免中文乱码（源字符串若为 ANSI/本地代码页，会被转换到 UTF-8）
-    const std::string normalizedMessage = NormalizeToUTF8(message);
+bool Logger::Initialize(const std::string& filePath) {
+    std::lock_guard<std::mutex> lock(mutex);
+    stream.open(filePath, std::ios::binary | std::ios::app);
+    if (!stream.is_open()) return false;
+    if (stream.tellp() == 0) {
+        const unsigned char bom[] = {0xEF,0xBB,0xBF};
+        stream.write(reinterpret_cast<const char*>(bom), sizeof(bom));
+    }
+    basePath = filePath;
+    return true;
+}
 
-    if (logFile.is_open()) {
-        if (!logFile.good()) {
-            throw std::runtime_error("日志文件流状态无效");
-        }
-        // Get current time
-        auto now = std::chrono::system_clock::now();
-        auto time_now = std::chrono::system_clock::to_time_t(now);
-        std::tm timeinfo;
-        if (localtime_s(&timeinfo, &time_now) != 0) {
-            throw std::runtime_error("localtime_s 失败");
-        }
-        std::stringstream ss;
-        ss << "[" << std::put_time(&timeinfo, "%Y-%m-%d %H:%M:%S") << "]"
-           << "[" << level << "] "
-           << normalizedMessage
-           << std::endl;
-        std::string logEntry = ss.str();
-        try {
-            logFile.write(logEntry.c_str(), logEntry.size());
-            logFile.flush();
-        } catch (const std::exception& ex) {
-            // 日志写入异常，输出到标准错误
-            std::cerr << "日志写入异常: " << ex.what() << std::endl;
-        }
-        // Enhanced console output with proper UTF-8 support and selective coloring
-        if (consoleOutputEnabled) {
-            HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-            if (hConsole != INVALID_HANDLE_VALUE) {
-                std::stringstream timeStamp;
-                timeStamp << "[" << std::put_time(&timeinfo, "%Y-%m-%d %H:%M:%S") << "]";
-                std::string timeStr = timeStamp.str();
-                std::string levelTag = "[" + level + "]";
-                DWORD written;
-                int timeWideLength = MultiByteToWideChar(CP_UTF8, 0, timeStr.c_str(), -1, nullptr, 0);
-                if (timeWideLength > 0) {
-                    std::vector<wchar_t> timeWideText(static_cast<size_t>(timeWideLength));
-                    if (MultiByteToWideChar(CP_UTF8, 0, timeStr.c_str(), -1, timeWideText.data(), timeWideLength)) {
-                        WriteConsoleW(hConsole, timeWideText.data(), static_cast<DWORD>(timeWideLength - 1), &written, NULL);
-                    }
-                }
-                SetConsoleColor(color);
-                int levelWideLength = MultiByteToWideChar(CP_UTF8, 0, levelTag.c_str(), -1, nullptr, 0);
-                if (levelWideLength > 0) {
-                    std::vector<wchar_t> levelWideText(static_cast<size_t>(levelWideLength));
-                    if (MultiByteToWideChar(CP_UTF8, 0, levelTag.c_str(), -1, levelWideText.data(), levelWideLength)) {
-                        WriteConsoleW(hConsole, levelWideText.data(), static_cast<DWORD>(levelWideLength - 1), &written, NULL);
-                    }
-                }
-                ResetConsoleColor();
-                WriteConsoleW(hConsole, L" ", 1, &written, NULL);
-                int msgWideLength = MultiByteToWideChar(CP_UTF8, 0, normalizedMessage.c_str(), -1, nullptr, 0);
-                if (msgWideLength > 0) {
-                    std::vector<wchar_t> msgWideText(static_cast<size_t>(msgWideLength));
-                    if (MultiByteToWideChar(CP_UTF8, 0, normalizedMessage.c_str(), -1, msgWideText.data(), msgWideLength)) {
-                        WriteConsoleW(hConsole, msgWideText.data(), static_cast<DWORD>(msgWideLength - 1), &written, NULL);
-                    }
-                }
-                WriteConsoleW(hConsole, L"\n", 1, &written, NULL);
+bool Logger::InitializeWithRotation(const std::string& baseFilePath, size_t maxFileSizeBytes, int maxFiles) {
+    if (!Initialize(baseFilePath)) return false;
+    maxFileSize = maxFileSizeBytes;
+    maxFileCount = maxFiles;
+    return true;
+}
+
+void Logger::SetLogLevel(LogLevel level) { currentLevel = level; }
+LogLevel Logger::GetLogLevel() { return currentLevel; }
+void Logger::EnableConsole(bool enable) { consoleEnabled = enable; }
+bool Logger::IsInitialized() { return stream.is_open(); }
+void Logger::SetRingBufferSize(size_t capacity) {
+    std::lock_guard<std::mutex> lock(mutex);
+    ringCapacity = capacity;
+    ring.clear();
+    ringIndex = 0;
+}
+
+std::string Logger::LevelToString(LogLevel l) {
+    switch(l){
+        case LOG_TRACE: return "TRACE"; case LOG_DEBUG: return "DEBUG"; case LOG_INFO: return "INFO";
+        case LOG_WARNING: return "WARN"; case LOG_ERROR: return "ERROR"; case LOG_CRITICAL: return "CRITICAL"; case LOG_FATAL: return "FATAL";
+    }
+    return "UNKNOWN";
+}
+
+ConsoleColor Logger::LevelToColor(LogLevel l) {
+    switch(l){
+        case LOG_TRACE: return ConsoleColor::TRACE_COLOR;
+        case LOG_DEBUG: return ConsoleColor::DEBUG_COLOR;
+        case LOG_INFO: return ConsoleColor::INFO_COLOR;
+        case LOG_WARNING: return ConsoleColor::WARN_COLOR;
+        case LOG_ERROR: return ConsoleColor::ERROR_COLOR;
+        case LOG_CRITICAL: return ConsoleColor::CRITICAL_COLOR;
+        case LOG_FATAL: return ConsoleColor::FATAL_COLOR;
+    }
+    return ConsoleColor::DEFAULT;
+}
+
+void Logger::RotateIfNeeded() {
+    if (!maxFileSize || !stream.is_open()) return;
+    auto size = stream.tellp();
+    if (size < 0 || static_cast<size_t>(size) < maxFileSize) return;
+    stream.close();
+    // Shift old files
+    for (int i = maxFileCount - 1; i >= 0; --i) {
+        std::filesystem::path old = basePath + (i == 0 ? std::string() : ("." + std::to_string(i)));
+        if (std::filesystem::exists(old)) {
+            std::filesystem::path target = basePath + "." + std::to_string(i+1);
+            if (i + 1 > maxFileCount) {
+                std::error_code ec; std::filesystem::remove(old, ec);
+            } else {
+                std::error_code ec; std::filesystem::rename(old, target, ec);
             }
         }
+    }
+    stream.open(basePath, std::ios::binary | std::ios::trunc);
+    const unsigned char bom[] = {0xEF,0xBB,0xBF};
+    stream.write(reinterpret_cast<const char*>(bom), sizeof(bom));
+}
+
+void Logger::PushRing(const LogEntry& e) {
+    if (!ringCapacity) return;
+    if (ring.size() < ringCapacity) {
+        ring.push_back(e);
     } else {
-        throw std::runtime_error("日志文件未打开");
+        ring[ringIndex] = e;
+        ringIndex = (ringIndex + 1) % ringCapacity;
     }
 }
 
-void Logger::Trace(const std::string& message) {
-    WriteLog("TRACE", message, LOG_TRACE, ConsoleColor::PURPLE);
+void Logger::WriteInternal(const LogEntry& entry) {
+    if (!stream.is_open()) return;
+    RotateIfNeeded();
+    auto tt = std::chrono::system_clock::to_time_t(entry.timestamp);
+    std::tm tm{}; localtime_s(&tm, &tt);
+    std::ostringstream oss;
+    oss << '[' << std::put_time(&tm, "%Y-%m-%d %H:%M:%S") << "]";
+    oss << '[' << LevelToString(entry.level) << "]";
+    if (!entry.category.empty()) oss << '[' << entry.category << "]";
+    if (!entry.file.empty()) oss << '[' << entry.file << ':' << entry.line << "]";
+    oss << ' ' << entry.message << '\n';
+    std::string line = oss.str();
+    stream.write(line.c_str(), line.size());
+    stream.flush();
+
+    PushRing(entry);
+
+    if (consoleEnabled && consoleHandle != INVALID_HANDLE_VALUE) {
+        SetConsoleTextAttribute(consoleHandle, static_cast<WORD>(LevelToColor(entry.level)));
+        // Convert UTF-8 to wide for proper output
+        int wlen = MultiByteToWideChar(CP_UTF8, 0, line.c_str(), (int)line.size(), nullptr, 0);
+        if (wlen > 0) {
+            std::wstring wbuf(wlen, L'\0');
+            MultiByteToWideChar(CP_UTF8, 0, line.c_str(), (int)line.size(), wbuf.data(), wlen);
+            DWORD written; WriteConsoleW(consoleHandle, wbuf.c_str(), (DWORD)wlen, &written, NULL);
+        }
+        SetConsoleTextAttribute(consoleHandle, (WORD)ConsoleColor::DEFAULT);
+    }
 }
 
-void Logger::Debug(const std::string& message) {
-    WriteLog("DEBUG", message, LOG_DEBUG, ConsoleColor::PURPLE);
+void Logger::Log(LogLevel level, std::string_view category, std::string_view message,
+                 std::string_view file, int line) {
+    if (level < currentLevel) return;
+    LogEntry e;
+    e.timestamp = std::chrono::system_clock::now();
+    e.level = level;
+    e.category = std::string(category);
+    e.message = NormalizeToUTF8(message);
+    e.file = std::string(file);
+    e.line = line;
+    std::lock_guard<std::mutex> lock(mutex);
+    WriteInternal(e);
 }
 
-void Logger::Info(const std::string& message) {
-    WriteLog("INFO", message, LOG_INFO, ConsoleColor::LIGHT_GREEN);
+void Logger::LogKV(LogLevel level, std::string_view category, std::string_view message,
+                   std::initializer_list<std::pair<std::string_view, std::string_view>> kv,
+                   std::string_view file, int line) {
+    if (level < currentLevel) return;
+    std::ostringstream extra;
+    extra << message;
+    for (auto& p : kv) {
+        extra << ' ' << p.first << '=' << p.second;
+    }
+    Log(level, category, extra.str(), file, line);
 }
 
-void Logger::Warn(const std::string& message) {
-    WriteLog("WARN", message, LOG_WARNING, ConsoleColor::YELLOW);
+std::vector<LogEntry> Logger::GetRecentEntries() {
+    std::lock_guard<std::mutex> lock(mutex);
+    std::vector<LogEntry> out;
+    if (!ringCapacity || ring.empty()) return out;
+    // If full, return in chronological order
+    if (ring.size() == ringCapacity) {
+        for (size_t i = ringIndex; i < ring.size(); ++i) out.push_back(ring[i]);
+        for (size_t i = 0; i < ringIndex; ++i) out.push_back(ring[i]);
+    } else {
+        out = ring; // not yet wrapped
+    }
+    return out;
 }
 
-void Logger::Error(const std::string& message) {
-    WriteLog("ERROR", message, LOG_ERROR, ConsoleColor::ORANGE);
-}
+// Backward compatibility simple wrappers (category="default")
+#define SIMPLE_LOG_WRAPPER(fnName, lvl) \
+    void Logger::fnName(const std::string& m){ Log(lvl, "default", m, {}, 0);} \
+    void Logger::fnName(const std::wstring& m){ Log(lvl, "default", WStringToUtf8(m), {}, 0);} 
 
-void Logger::Critical(const std::string& message) {
-    WriteLog("CRITICAL", message, LOG_CRITICAL, ConsoleColor::RED);//我不知道为什么Critical和Fatal意思一样，之前也看过，但是AI就是给它们分开了?
-}
+SIMPLE_LOG_WRAPPER(Trace, LOG_TRACE)
+SIMPLE_LOG_WRAPPER(Debug, LOG_DEBUG)
+SIMPLE_LOG_WRAPPER(Info, LOG_INFO)
+SIMPLE_LOG_WRAPPER(Warn, LOG_WARNING)
+SIMPLE_LOG_WRAPPER(Error, LOG_ERROR)
+SIMPLE_LOG_WRAPPER(Critical, LOG_CRITICAL)
+SIMPLE_LOG_WRAPPER(Fatal, LOG_FATAL)
 
-void Logger::Fatal(const std::string& message) {
-    WriteLog("FATAL", message, LOG_FATAL, ConsoleColor::DARK_RED);
-}

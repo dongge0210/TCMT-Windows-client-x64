@@ -114,4 +114,8 @@
       <Filter>源文件</Filter>
     </ClCompile>
   </ItemGroup>
+  <ItemGroup>
+    <None Include="WPF-UI1\Services\SharedMemoryService.cs" />
+    <None Include="WPF-UI1\Models\SharedMemoryBlock.cs" />
+  </ItemGroup>
 </Project>

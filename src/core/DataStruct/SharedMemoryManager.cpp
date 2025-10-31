@@ -32,16 +32,21 @@
 #include <cctype>
 
 // Make sure Windows.h is included before any other headers that might redefine GetLastError
-#include <Windows.h>
+#include <windows.h>
+#include <wincrypt.h>
 
 #include "SharedMemoryManager.h"
 // Fix the include path case sensitivity
 #include "../Utils/WinUtils.h"
 #include "../Utils/Logger.h"
 #include "../Utils/WmiManager.h"
+#include "../Utils/MotherboardInfo.h"
+#include "../usb/USBInfo.h"
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
+#define SHARED_MEMORY_MANAGER_INCLUDED
+#include "DiagnosticsPipe.h"
 
 #ifndef WINUTILS_IMPLEMENTED
 // Fallback implementation for FormatWindowsErrorMessage
@@ -57,13 +62,31 @@ inline std::string FallbackFormatWindowsErrorMessage(DWORD errorCode) {
 HANDLE SharedMemoryManager::hMapFile = NULL;
 SharedMemoryBlock* SharedMemoryManager::pBuffer = nullptr;
 std::string SharedMemoryManager::lastError = "";
+WmiManager* SharedMemoryManager::wmiManager = nullptr;
+USBInfoManager* SharedMemoryManager::usbManager = nullptr;
 // 跨进程互斥体用于同步共享内存
 static HANDLE g_hMutex = NULL;
 
 bool SharedMemoryManager::InitSharedMemory() {
     // Clear any previous error
     lastError.clear();
-        
+    
+    // 初始化WMI管理器
+    if (!wmiManager) {
+        wmiManager = new WmiManager();
+    }
+    
+    // 初始化USB监控管理器
+    if (!usbManager) {
+        usbManager = new USBInfoManager();
+        if (usbManager->Initialize()) {
+            usbManager->StartMonitoring();
+            Logger::Info("USB监控管理器初始化成功");
+        } else {
+            Logger::Warn("USB监控管理器初始化失败");
+        }
+    }
+    
     try {
         // Try to enable privileges needed for creating global objects
         bool hasPrivileges = WinUtils::EnablePrivilege(L"SeCreateGlobalPrivilege");
@@ -221,10 +244,13 @@ bool SharedMemoryManager::InitSharedMemory() {
     }
 
     Logger::Info("共享内存成功初始化.");
+    StartDiagnosticsPipeThread();
+    DiagnosticsPipeAppendLog("SharedMemory initialized");
     return true;
 }
 
 void SharedMemoryManager::CleanupSharedMemory() {
+    StopDiagnosticsPipeThread();
     if (pBuffer) {
         UnmapViewOfFile(pBuffer);
         pBuffer = nullptr;
@@ -232,6 +258,16 @@ void SharedMemoryManager::CleanupSharedMemory() {
     if (hMapFile) {
         CloseHandle(hMapFile);
         hMapFile = NULL;
+    }
+    if (wmiManager) {
+        delete wmiManager;
+        wmiManager = nullptr;
+    }
+    
+    if (usbManager) {
+        usbManager->Cleanup();
+        delete usbManager;
+        usbManager = nullptr;
     }
 }
 
@@ -251,205 +287,250 @@ void SharedMemoryManager::WriteToSharedMemory(const SystemInfo& systemInfo) {
         Logger::Critical("未能获取共享内存互斥体");
         return;
     }
-    auto SafeCopyWideString = [](wchar_t* dest, size_t destSize, const std::wstring& src) {
-        try {
-            if (dest == nullptr || destSize == 0) return;
-            memset(dest, 0, destSize * sizeof(wchar_t));
-            if (src.empty()) { dest[0] = L'\0'; return; }
-            size_t copyLen = std::min(src.length(), destSize - 1);
-            for (size_t i = 0; i < copyLen; ++i) dest[i] = src[i];
-            dest[copyLen] = L'\0';
-        } catch (...) { if (dest && destSize > 0) dest[0] = L'\0'; }
-    };
-    auto SafeCopyFromWideArray = [](wchar_t* dest, size_t destSize, const wchar_t* src, size_t srcCapacity) {
-        if (!dest || destSize == 0) return;
-        memset(dest, 0, destSize * sizeof(wchar_t));
-        if (!src) return;
-        size_t len = 0;
-        while (len < srcCapacity && src[len] != L'\0') ++len;
-        if (len >= destSize) len = destSize - 1;
-        for (size_t i = 0; i < len; ++i) dest[i] = src[i];
-        dest[len] = L'\0';
-    };
+
     try {
-        // 清零主要字符串/数组区域
-        memset(pBuffer->cpuName, 0, sizeof(pBuffer->cpuName));
-        for (int i = 0; i < 2; ++i) { memset(pBuffer->gpus[i].name, 0, sizeof(pBuffer->gpus[i].name)); memset(pBuffer->gpus[i].brand, 0, sizeof(pBuffer->gpus[i].brand)); }
-        for (int i = 0; i < 8; ++i) { memset(&pBuffer->disks[i], 0, sizeof(pBuffer->disks[i])); memset(&pBuffer->physicalDisks[i], 0, sizeof(pBuffer->physicalDisks[i])); }
-        for (int i = 0; i < 10; ++i) { memset(pBuffer->temperatures[i].sensorName, 0, sizeof(pBuffer->temperatures[i].sensorName)); }
-        memset(&pBuffer->tpm, 0, sizeof(pBuffer->tpm));
-
-        // CPU
-        SafeCopyWideString(pBuffer->cpuName, 128, WinUtils::StringToWstring(systemInfo.cpuName));
-        pBuffer->physicalCores = systemInfo.physicalCores;
-        pBuffer->logicalCores = systemInfo.logicalCores;
-        pBuffer->cpuUsage = systemInfo.cpuUsage;
-        pBuffer->performanceCores = systemInfo.performanceCores;
-        pBuffer->efficiencyCores = systemInfo.efficiencyCores;
-        pBuffer->pCoreFreq = systemInfo.performanceCoreFreq;
-        pBuffer->eCoreFreq = systemInfo.efficiencyCoreFreq;
-        // 新增：CPU 基准/即时频率（MHz）
-        pBuffer->cpuBaseFrequencyMHz = systemInfo.cpuBaseFrequencyMHz;
-        pBuffer->cpuCurrentFrequencyMHz = systemInfo.cpuCurrentFrequencyMHz;
-        pBuffer->hyperThreading = systemInfo.hyperThreading;
-        pBuffer->virtualization = systemInfo.virtualization;
-
-        // 内存
-        pBuffer->totalMemory = systemInfo.totalMemory;
-        pBuffer->usedMemory = systemInfo.usedMemory;
-        pBuffer->availableMemory = systemInfo.availableMemory;
-
-        // GPU（兼容旧字段）
-        pBuffer->gpuCount = 0;
-        if (!systemInfo.gpuName.empty()) {
-            SafeCopyWideString(pBuffer->gpus[0].name, 128, WinUtils::StringToWstring(systemInfo.gpuName));
-            SafeCopyWideString(pBuffer->gpus[0].brand, 64, WinUtils::StringToWstring(systemInfo.gpuBrand));
-            pBuffer->gpus[0].memory = systemInfo.gpuMemory;
-            pBuffer->gpus[0].coreClock = systemInfo.gpuCoreFreq;
-            pBuffer->gpus[0].isVirtual = systemInfo.gpuIsVirtual;
-            pBuffer->gpuCount = 1;
-        }
-        // 如后续要支持 vector<GPUData> 可在此扩展
-
-        // 网络适配器（SystemInfo.adapters 里的 NetworkAdapterData 为 wchar_t 数组字段）
-        pBuffer->adapterCount = 0;
-        int adapterWriteCount = static_cast<int>(std::min(systemInfo.adapters.size(), size_t(4)));
-        for (int i = 0; i < adapterWriteCount; ++i) {
-            const auto& src = systemInfo.adapters[i];
-            SafeCopyFromWideArray(pBuffer->adapters[i].name, 128, src.name, 128);
-            SafeCopyFromWideArray(pBuffer->adapters[i].mac, 32, src.mac, 32);
-            SafeCopyFromWideArray(pBuffer->adapters[i].ipAddress, 64, src.ipAddress, 64);
-            SafeCopyFromWideArray(pBuffer->adapters[i].adapterType, 32, src.adapterType, 32);
-            pBuffer->adapters[i].speed = src.speed;
-        }
-        pBuffer->adapterCount = adapterWriteCount;
-        if (adapterWriteCount == 0 && !systemInfo.networkAdapterName.empty()) {
-            SafeCopyWideString(pBuffer->adapters[0].name, 128, WinUtils::StringToWstring(systemInfo.networkAdapterName));
-            SafeCopyWideString(pBuffer->adapters[0].mac, 32, WinUtils::StringToWstring(systemInfo.networkAdapterMac));
-            SafeCopyWideString(pBuffer->adapters[0].ipAddress, 64, WinUtils::StringToWstring(systemInfo.networkAdapterIp));
-            SafeCopyWideString(pBuffer->adapters[0].adapterType, 32, WinUtils::StringToWstring(systemInfo.networkAdapterType));
-            pBuffer->adapters[0].speed = systemInfo.networkAdapterSpeed;
-            pBuffer->adapterCount = 1;
+        // --- writeSequence 奇偶协议：写入前设置为奇数 ---
+        if (pBuffer->writeSequence % 2 == 0) {
+            pBuffer->writeSequence++;
+        } else {
+            pBuffer->writeSequence += 2; // 保证为奇数
         }
 
-        // 逻辑磁盘（SystemInfo.disks 中 label / fileSystem 是 std::string）
-        pBuffer->diskCount = static_cast<int>(std::min(systemInfo.disks.size(), static_cast<size_t>(8)));
-        for (int i = 0; i < pBuffer->diskCount; ++i) {
-            const auto& disk = systemInfo.disks[i];
-            pBuffer->disks[i].letter = disk.letter;
-            std::string safeLabel = disk.label;
-            if (safeLabel.empty()) safeLabel = ""; // 未命名允许为空，在UI端替换
-            else if (!WinUtils::IsLikelyUtf8(safeLabel)) {
-                // 退化处理：按当前ACP转 wide 再回 UTF-8，尽量 salvage
-                std::wstring w = WinUtils::Utf8ToWstring(safeLabel); // 若不是utf8会得到空
-                if (w.empty()) {
-                    int len = MultiByteToWideChar(CP_ACP, 0, safeLabel.c_str(), (int)safeLabel.size(), nullptr, 0);
-                    if (len > 0) { w.resize(len); MultiByteToWideChar(CP_ACP, 0, safeLabel.c_str(), (int)safeLabel.size(), w.data(), len); }
-                }
-                safeLabel = WinUtils::WstringToUtf8(w);
+        // 保存旧的snapshotVersion用于比较
+        uint32_t oldSnapshotVersion = pBuffer->snapshotVersion;
+        
+        // --- 从SystemInfo转换数据到SharedMemoryBlock ---
+        
+        // 基础头部信息
+        pBuffer->abiVersion = 0x00010014;
+        pBuffer->reservedHeader = 0;
+
+        // CPU信息
+        pBuffer->cpuLogicalCores = static_cast<uint16_t>(systemInfo.logicalCores);
+        if (systemInfo.cpuUsage >= 0.0 && systemInfo.cpuUsage <= 100.0) {
+            pBuffer->cpuUsagePercent_x10 = static_cast<int16_t>(systemInfo.cpuUsage * 10);
+        } else {
+            pBuffer->cpuUsagePercent_x10 = -1; // 未实现或异常值
+        }
+
+        // 内存信息（转换为MB）
+        pBuffer->memoryTotalMB = systemInfo.totalMemory / (1024 * 1024);
+        pBuffer->memoryUsedMB = systemInfo.usedMemory / (1024 * 1024);
+
+        // 温度传感器数据
+        pBuffer->tempSensorCount = 0;
+        memset(pBuffer->tempSensors, 0, sizeof(pBuffer->tempSensors));
+        
+        // 转换温度数据到TemperatureSensor结构
+        for (const auto& temp : systemInfo.temperatures) {
+            if (pBuffer->tempSensorCount >= 32) break; // 最多32个传感器
+            
+            TemperatureSensor& sensor = pBuffer->tempSensors[pBuffer->tempSensorCount];
+            
+            // 复制传感器名称（限制长度）
+            size_t nameLen = std::min(temp.first.length(), sizeof(sensor.name) - 1);
+            strncpy_s(sensor.name, sizeof(sensor.name), temp.first.c_str(), nameLen);
+            sensor.name[nameLen] = '\0';
+            
+            // 设置温度值（转换为0.1°C精度）
+            if (temp.second >= -50.0 && temp.second <= 150.0) {
+                sensor.valueC_x10 = static_cast<int16_t>(temp.second * 10);
+                sensor.flags = 0x01; // bit0=valid
+            } else {
+                sensor.valueC_x10 = -1; // 无效值
+                sensor.flags = 0x00;
             }
-            SafeCopyWideString(pBuffer->disks[i].label, 128, WinUtils::StringToWstring(safeLabel));
-            SafeCopyWideString(pBuffer->disks[i].fileSystem, 32, WinUtils::StringToWstring(disk.fileSystem));
-            pBuffer->disks[i].totalSize = disk.totalSize;
-            pBuffer->disks[i].usedSpace = disk.usedSpace;
-            pBuffer->disks[i].freeSpace = disk.freeSpace;
+            
+            pBuffer->tempSensorCount++;
         }
 
-        // 物理磁盘 + SMART（SystemInfo.physicalDisks 里字段已为 wchar_t 数组）
-        pBuffer->physicalDiskCount = static_cast<int>(std::min(systemInfo.physicalDisks.size(), static_cast<size_t>(8)));
-        for (int i = 0; i < pBuffer->physicalDiskCount; ++i) {
-            const auto& src = systemInfo.physicalDisks[i];
-            SafeCopyFromWideArray(pBuffer->physicalDisks[i].model, 128, src.model, 128);
-            SafeCopyFromWideArray(pBuffer->physicalDisks[i].serialNumber, 64, src.serialNumber, 64);
-            SafeCopyFromWideArray(pBuffer->physicalDisks[i].firmwareVersion, 32, src.firmwareVersion, 32);
-            SafeCopyFromWideArray(pBuffer->physicalDisks[i].interfaceType, 32, src.interfaceType, 32);
-            SafeCopyFromWideArray(pBuffer->physicalDisks[i].diskType, 16, src.diskType, 16);
-            pBuffer->physicalDisks[i].capacity = src.capacity;
-            pBuffer->physicalDisks[i].temperature = src.temperature;
-            pBuffer->physicalDisks[i].healthPercentage = src.healthPercentage;
-            pBuffer->physicalDisks[i].isSystemDisk = src.isSystemDisk;
-            pBuffer->physicalDisks[i].smartEnabled = src.smartEnabled;
-            pBuffer->physicalDisks[i].smartSupported = src.smartSupported;
-            pBuffer->physicalDisks[i].powerOnHours = src.powerOnHours;
-            pBuffer->physicalDisks[i].powerCycleCount = src.powerCycleCount;
-            pBuffer->physicalDisks[i].reallocatedSectorCount = src.reallocatedSectorCount;
-            pBuffer->physicalDisks[i].currentPendingSector = src.currentPendingSector;
-            pBuffer->physicalDisks[i].uncorrectableErrors = src.uncorrectableErrors;
-            pBuffer->physicalDisks[i].wearLeveling = src.wearLeveling;
-            pBuffer->physicalDisks[i].totalBytesWritten = src.totalBytesWritten;
-            pBuffer->physicalDisks[i].totalBytesRead = src.totalBytesRead;
-            int ldCount = 0;
-            for (char l : src.logicalDriveLetters) {
-                if (ldCount >= 8 || l == 0) break;
-                if (std::isalpha(static_cast<unsigned char>(l))) pBuffer->physicalDisks[i].logicalDriveLetters[ldCount++] = l;
+        // SMART磁盘数据（暂时为空，等待SMART模块实现）
+        pBuffer->smartDiskCount = 0;
+        memset(pBuffer->smartDisks, 0, sizeof(pBuffer->smartDisks));
+
+        // 主板/BIOS信息采集
+        try {
+            MotherboardInfo motherboardInfo = MotherboardInfoCollector::CollectMotherboardInfo(GetWmiService());
+            if (motherboardInfo.isValid) {
+                strncpy_s(pBuffer->baseboardManufacturer, sizeof(pBuffer->baseboardManufacturer), 
+                           motherboardInfo.manufacturer.c_str(), _TRUNCATE);
+                strncpy_s(pBuffer->baseboardProduct, sizeof(pBuffer->baseboardProduct), 
+                           motherboardInfo.product.c_str(), _TRUNCATE);
+                strncpy_s(pBuffer->baseboardVersion, sizeof(pBuffer->baseboardVersion), 
+                           motherboardInfo.version.c_str(), _TRUNCATE);
+                strncpy_s(pBuffer->baseboardSerial, sizeof(pBuffer->baseboardSerial), 
+                           motherboardInfo.serialNumber.c_str(), _TRUNCATE);
+                strncpy_s(pBuffer->biosVendor, sizeof(pBuffer->biosVendor), 
+                           motherboardInfo.biosVendor.c_str(), _TRUNCATE);
+                strncpy_s(pBuffer->biosVersion, sizeof(pBuffer->biosVersion), 
+                           motherboardInfo.biosVersion.c_str(), _TRUNCATE);
+                strncpy_s(pBuffer->biosDate, sizeof(pBuffer->biosDate), 
+                           motherboardInfo.biosReleaseDate.c_str(), _TRUNCATE);
+            } else {
+                // 采集失败时使用默认值
+                strcpy_s(pBuffer->baseboardManufacturer, sizeof(pBuffer->baseboardManufacturer), "未知");
+                strcpy_s(pBuffer->baseboardProduct, sizeof(pBuffer->baseboardProduct), "未知");
+                strcpy_s(pBuffer->baseboardVersion, sizeof(pBuffer->baseboardVersion), "未知");
+                strcpy_s(pBuffer->baseboardSerial, sizeof(pBuffer->baseboardSerial), "未知");
+                strcpy_s(pBuffer->biosVendor, sizeof(pBuffer->biosVendor), "未知");
+                strcpy_s(pBuffer->biosVersion, sizeof(pBuffer->biosVersion), "未知");
+                strcpy_s(pBuffer->biosDate, sizeof(pBuffer->biosDate), "未知");
             }
-            pBuffer->physicalDisks[i].logicalDriveCount = ldCount;
-            int attrCount = src.attributeCount;
-            if (attrCount < 0) attrCount = 0; if (attrCount > 32) attrCount = 32;
-            pBuffer->physicalDisks[i].attributeCount = attrCount;
-            for (int a = 0; a < attrCount; ++a) {
-                const auto& sa = src.attributes[a];
-                auto& dst = pBuffer->physicalDisks[i].attributes[a];
-                dst.id = sa.id;
-                dst.flags = sa.flags;
-                dst.current = sa.current;
-                dst.worst = sa.worst;
-                dst.threshold = sa.threshold;
-                dst.rawValue = sa.rawValue;
-                dst.isCritical = sa.isCritical;
-                dst.physicalValue = sa.physicalValue;
-                SafeCopyFromWideArray(dst.name, 64, sa.name, 64);
-                SafeCopyFromWideArray(dst.description, 128, sa.description, 128);
-                SafeCopyFromWideArray(dst.units, 16, sa.units, 16);
-            }
+        } catch (const std::exception& e) {
+            Logger::Error("采集主板/BIOS信息异常: " + std::string(e.what()));
+            // 异常时使用默认值
+            strcpy_s(pBuffer->baseboardManufacturer, sizeof(pBuffer->baseboardManufacturer), "异常");
+            strcpy_s(pBuffer->baseboardProduct, sizeof(pBuffer->baseboardProduct), "异常");
+            strcpy_s(pBuffer->baseboardVersion, sizeof(pBuffer->baseboardVersion), "异常");
+            strcpy_s(pBuffer->baseboardSerial, sizeof(pBuffer->baseboardSerial), "异常");
+            strcpy_s(pBuffer->biosVendor, sizeof(pBuffer->biosVendor), "异常");
+            strcpy_s(pBuffer->biosVersion, sizeof(pBuffer->biosVersion), "异常");
+            strcpy_s(pBuffer->biosDate, sizeof(pBuffer->biosDate), "异常");
         }
-
-        // 温度数组（传感器名字在 vector<pair<string,double>> 中）
-        pBuffer->tempCount = static_cast<int>(std::min(systemInfo.temperatures.size(), static_cast<size_t>(10)));
-        for (int i = 0; i < pBuffer->tempCount; ++i) {
-            const auto& temp = systemInfo.temperatures[i];
-            SafeCopyWideString(pBuffer->temperatures[i].sensorName, 64, WinUtils::StringToWstring(temp.first));
-            pBuffer->temperatures[i].temperature = temp.second;
-        }
-
-        // 独立 CPU / GPU 温度
-        pBuffer->cpuTemperature = systemInfo.cpuTemperature;
-        pBuffer->gpuTemperature = systemInfo.gpuTemperature;
-        pBuffer->cpuUsageSampleIntervalMs = systemInfo.cpuUsageSampleIntervalMs;
 
         // TPM信息
-        pBuffer->hasTpm = systemInfo.hasTpm;
-        if (systemInfo.hasTpm) {
-            SafeCopyWideString(pBuffer->tpm.manufacturerName, 128, WinUtils::StringToWstring(systemInfo.tpmManufacturer));
-            SafeCopyWideString(pBuffer->tpm.manufacturerId, 32, WinUtils::StringToWstring(systemInfo.tpmManufacturerId));
-            SafeCopyWideString(pBuffer->tpm.version, 32, WinUtils::StringToWstring(systemInfo.tpmVersion));
-            SafeCopyWideString(pBuffer->tpm.firmwareVersion, 32, WinUtils::StringToWstring(systemInfo.tpmFirmwareVersion));
-            SafeCopyWideString(pBuffer->tpm.status, 64, WinUtils::StringToWstring(systemInfo.tpmStatus));
-            SafeCopyWideString(pBuffer->tpm.errorMessage, 256, WinUtils::StringToWstring(systemInfo.tpmErrorMessage));
-            // 使用 SystemInfo 的 tmp* 字段（检测方法与标记）
-            SafeCopyWideString(pBuffer->tpm.detectionMethod, 64, WinUtils::StringToWstring(systemInfo.tmpDetectionMethod));
-            pBuffer->tpm.wmiDetectionWorked = systemInfo.tmpWmiDetectionWorked;
-            pBuffer->tpm.tbsDetectionWorked = systemInfo.tmpTbsDetectionWorked;
-            pBuffer->tpm.isEnabled = systemInfo.tpmEnabled;
-            pBuffer->tpm.isReady = systemInfo.tpmReady;
-            pBuffer->tpm.isActivated = systemInfo.tpmIsActivated;
-            pBuffer->tpm.isOwned = systemInfo.tpmIsOwned;
-            pBuffer->tpm.tbsAvailable = systemInfo.tpmTbsAvailable;
-            pBuffer->tpm.physicalPresenceRequired = systemInfo.tpmPhysicalPresenceRequired;
-            pBuffer->tpm.specVersion = systemInfo.tpmSpecVersion;
-            pBuffer->tpm.tbsVersion = systemInfo.tpmTbsVersion;
-        } else {
-            memset(&pBuffer->tpm, 0, sizeof(pBuffer->tpm));
+        pBuffer->secureBootEnabled = 0; // 待实现
+        pBuffer->tpmPresent = systemInfo.hasTpm ? 1 : 0;
+        pBuffer->memorySlotsTotal = 0; // 待实现
+        pBuffer->memorySlotsUsed = 0;  // 待实现
+
+        // USB设备信息
+        pBuffer->usbDeviceCount = 0;
+        memset(pBuffer->usbDevices, 0, sizeof(pBuffer->usbDevices));
+        
+        if (usbManager) {
+            try {
+                auto usbDevices = usbManager->GetCurrentUSBDevices();
+                pBuffer->usbDeviceCount = static_cast<uint8_t>(std::min(usbDevices.size(), size_t(8)));
+                
+                for (size_t i = 0; i < pBuffer->usbDeviceCount; ++i) {
+                    const auto& usbDevice = usbDevices[i];
+                    auto& usbData = pBuffer->usbDevices[i];
+                    
+                    // 复制驱动器路径
+                    strncpy_s(usbData.drivePath, sizeof(usbData.drivePath), 
+                              usbDevice.drivePath.c_str(), _TRUNCATE);
+                    
+                    // 复制卷标名称
+                    strncpy_s(usbData.volumeLabel, sizeof(usbData.volumeLabel), 
+                              usbDevice.volumeLabel.c_str(), _TRUNCATE);
+                    
+                    // 设置容量信息
+                    usbData.totalSize = usbDevice.totalSize;
+                    usbData.freeSpace = usbDevice.freeSpace;
+                    
+                    // 设置状态
+                    usbData.isUpdateReady = usbDevice.isUpdateReady ? 1 : 0;
+                    usbData.state = static_cast<uint8_t>(usbDevice.state);
+                    usbData.reserved = 0;
+                    
+                    // 设置时间
+                    usbData.lastUpdate = usbDevice.lastUpdate;
+                }
+            } catch (const std::exception& e) {
+                Logger::Error("获取USB设备信息异常: " + std::string(e.what()));
+                pBuffer->usbDeviceCount = 0;
+            }
         }
 
-        GetSystemTime(&pBuffer->lastUpdate);
-        Logger::Trace("成功写入系统/磁盘/SMART 信息到共享内存");
-    } catch (const std::exception& e) {
+        // 预留字段
+        memset(pBuffer->futureReserved, 0, sizeof(pBuffer->futureReserved));
+        memset(pBuffer->extensionPad, 0, sizeof(pBuffer->extensionPad));
+
+        // 计算SHA256哈希
+        try {
+            // 使用Windows Cryptography API计算SHA256
+            HCRYPTPROV hCryptProv = NULL;
+            HCRYPTHASH hHash = NULL;
+            BYTE hash[32];
+            DWORD hashLen = sizeof(hash);
+            
+            // 获取加密服务提供者
+            if (CryptAcquireContext(&hCryptProv, NULL, NULL, PROV_RSA_AES, CRYPT_VERIFYCONTEXT)) {
+                // 创建哈希对象
+                if (CryptCreateHash(hCryptProv, CALG_SHA_256, 0, 0, &hHash)) {
+                    // 计算哈希值（排除哈希字段本身）
+                    DWORD dataSize = sizeof(SharedMemoryBlock) - sizeof(pBuffer->sharedmemHash);
+                    if (CryptHashData(hHash, (BYTE*)pBuffer, dataSize, 0)) {
+                        // 获取哈希值
+                        if (CryptGetHashParam(hHash, HP_HASHVAL, hash, &hashLen, 0)) {
+                            // 复制哈希值到共享内存结构
+                            memcpy(pBuffer->sharedmemHash, hash, sizeof(pBuffer->sharedmemHash));
+                        } else {
+                            Logger::Error("获取SHA256哈希值失败");
+                        }
+                    } else {
+                        Logger::Error("计算SHA256哈希失败");
+                    }
+                    
+                    CryptDestroyHash(hHash);
+                } else {
+                    Logger::Error("创建SHA256哈希对象失败");
+                }
+                
+                CryptReleaseContext(hCryptProv, 0);
+            } else {
+                Logger::Error("获取加密服务提供者失败");
+            }
+        }
+        catch (const std::exception& e) {
+            Logger::Error("SHA256计算异常: " + std::string(e.what()));
+            // 异常时保持哈希字段为0
+            memset(pBuffer->sharedmemHash, 0, sizeof(pBuffer->sharedmemHash));
+        }
+        catch (...) {
+            Logger::Error("SHA256计算未知异常");
+            memset(pBuffer->sharedmemHash, 0, sizeof(pBuffer->sharedmemHash));
+        }
+
+        // 检查是否有实际数据更新，如果有则增加snapshotVersion
+        bool hasDataUpdate = false;
+        // 简单的更新检测：CPU使用率、内存使用、温度传感器数量或数据变化
+        if (pBuffer->cpuUsagePercent_x10 != -1 || 
+            pBuffer->memoryUsedMB > 0 || 
+            pBuffer->tempSensorCount > 0) {
+            hasDataUpdate = true;
+        }
+
+        if (hasDataUpdate) {
+            pBuffer->snapshotVersion = oldSnapshotVersion + 1;
+        }
+
+        // --- 写入完成后设置为偶数 ---
+        if (pBuffer->writeSequence % 2 == 1) {
+            pBuffer->writeSequence++;
+        }
+
+        Logger::Trace("共享内存数据更新完成");
+        DiagnosticsPipeAppendLog("Write sequence=" + std::to_string(pBuffer->writeSequence) + 
+                                " Snapshot=" + std::to_string(pBuffer->snapshotVersion) +
+                                " TempSensors=" + std::to_string(pBuffer->tempSensorCount));
+    }
+    catch (const std::exception& e) {
         lastError = std::string("WriteToSharedMemory 中的异常: ") + e.what();
         Logger::Error(lastError);
-    } catch (...) {
+        
+        // 异常情况下恢复偶数序列
+        if (pBuffer->writeSequence % 2 == 1) {
+            pBuffer->writeSequence++;
+        }
+    }
+    catch (...) {
         lastError = "WriteToSharedMemory 中的未知异常";
         Logger::Error(lastError);
+        
+        // 异常情况下恢复偶数序列
+        if (pBuffer->writeSequence % 2 == 1) {
+            pBuffer->writeSequence++;
+        }
     }
+    
     ReleaseMutex(g_hMutex);
+}
+
+IWbemServices* SharedMemoryManager::GetWmiService() {
+    if (wmiManager && wmiManager->IsInitialized()) {
+        return wmiManager->GetWmiService();
+    }
+    return nullptr;
 }
