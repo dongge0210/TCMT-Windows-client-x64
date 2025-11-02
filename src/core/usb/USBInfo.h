@@ -1,4 +1,5 @@
 #pragma once
+#include <windows.h>
 #include <string>
 #include <vector>
 #include <functional>
@@ -57,6 +58,9 @@ public:
 private:
     class USBMonitorImpl;
     std::unique_ptr<USBMonitorImpl> pImpl;
+    
+    // 状态变化回调
+    USBStateCallback stateCallback;
     
     // 内部状态变化处理
     void OnUSBStateChanged(USBState state, const std::string& drivePath);

@@ -371,7 +371,7 @@ namespace WPF_UI1.ViewModels
  if (value <=0)
  {
  Log.Debug($"{fieldName} 数据异常: {value}，使用默认值0");
- return0;
+ return 0;
  }
  return value;
  }
@@ -380,7 +380,7 @@ namespace WPF_UI1.ViewModels
  if (double.IsNaN(value) || double.IsInfinity(value) || value <0)
  {
  Log.Debug($"{fieldName} 数据异常: {value} 使用默认值0");
- return0.0;
+ return 0.0;
  }
  return value;
  }

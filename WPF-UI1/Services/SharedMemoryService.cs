@@ -20,8 +20,10 @@ namespace WPF_UI1.Services
         private const string LOCAL_NAME = "Local\\SystemMonitorSharedMemory";
         private const string FALLBACK_NAME = "SystemMonitorSharedMemory";
 
-        // 根据 C++ pack(1)结构精确计算后的尺寸 (末尾 extensionPad 起始2525 +128 =2653)
-        public const int ExpectedSize = 2653;
+        // 根据 C++ pack(1)结构精确计算后的尺寸 (包含USB设备信息)
+        // 计算方式：原有结构2525字节 + USB设备数组8*71=568字节 + usbDeviceCount(1字节) + extensionPad调整118字节 = 3212字节
+        // 但C++结构中extensionPad实际为118字节，总大小应为：2525 + 568 + 1 + 118 = 3212字节
+        public const int ExpectedSize = 3212;
 
         // 字段偏移
         private const int OFF_abiVersion = 0;
@@ -51,7 +53,9 @@ namespace WPF_UI1.Services
         private const int OFF_memorySlotsUsed = 2427; // +2
         private const int OFF_futureReserved = 2429; //64 bytes
         private const int OFF_sharedmemHash = 2493; //2429+64
-        private const int OFF_extensionPad = 2525; //2493+32
+        private const int OFF_usbDevices = 2525; //2493+32
+        private const int OFF_usbDeviceCount = 3093; //2525 + 8*71 (USBDeviceData结构大小)
+        private const int OFF_extensionPad = 3094; //3093+1，调整后的扩展区域
 
         public bool IsInitialized { get; private set; }
         public string LastError { get; private set; } = string.Empty;
@@ -107,6 +111,7 @@ namespace WPF_UI1.Services
                     byte tpm = raw[OFF_tpmPresent];
                     ushort slotsTotal = BitConverter.ToUInt16(raw, OFF_memorySlotsTotal);
                     ushort slotsUsed = BitConverter.ToUInt16(raw, OFF_memorySlotsUsed);
+                    byte usbCount = raw[OFF_usbDeviceCount];
                     var diag = new SharedMemoryDiagnostics
                     {
                         AbiVersion = abi,
@@ -122,6 +127,7 @@ namespace WPF_UI1.Services
                         TpmPresent = tpm !=0,
                         MemorySlotsTotal = slotsTotal,
                         MemorySlotsUsed = slotsUsed,
+                        UsbDeviceCount = usbCount,
                         IsSequenceStable = (seq %2) ==0,
                         ViewSize = raw.Length,
                         ExpectedSize = ExpectedSize,
@@ -202,10 +208,12 @@ namespace WPF_UI1.Services
                     if ((name.ToLowerInvariant().Contains("gpu") || name.ToLowerInvariant().Contains("graphics")) && double.IsNaN(si.GpuTemperature)) si.GpuTemperature = temp;
                 }
 
-                // 主板和 BIOS 字符串
-                si.TpmManufacturer = DecodeUtf8(raw, OFF_baseboardManufacturer, 128) ?? string.Empty;
-                si.TpmVersion = DecodeUtf8(raw, OFF_biosVendor, 64) ?? string.Empty;
-                si.TpmFirmwareVersion = DecodeUtf8(raw, OFF_biosVersion, 64) ?? string.Empty;
+                // 主板和 BIOS 字符串（这些字段确实存储主板/BIOS信息，不是TPM信息）
+                // 注意：当前共享内存结构中没有专门的TPM信息字段，只有tpmPresent标志
+                // 主板信息暂时不解析，因为WPF端没有对应的主板信息字段
+                // si.TpmManufacturer = DecodeUtf8(raw, OFF_baseboardManufacturer, 128) ?? string.Empty;
+                // si.TpmVersion = DecodeUtf8(raw, OFF_biosVendor, 64) ?? string.Empty;
+                // si.TpmFirmwareVersion = DecodeUtf8(raw, OFF_biosVersion, 64) ?? string.Empty;
                 si.TpmStatus = (raw[OFF_tpmPresent] != 0) ? "TPM Present" : "TPM Absent";
                 si.HasTpm = raw[OFF_tpmPresent] != 0;
 
@@ -264,7 +272,9 @@ namespace WPF_UI1.Services
             add("memorySlotsUsed", OFF_memorySlotsUsed,2);
             add("futureReserved", OFF_futureReserved,64);
             add("sharedmemHash", OFF_sharedmemHash,32);
-            add("extensionPad", OFF_extensionPad,128);
+            add("usbDevices[0]", OFF_usbDevices, 71); // USBDeviceData结构大小
+            add("usbDeviceCount", OFF_usbDeviceCount, 1);
+            add("extensionPad", OFF_extensionPad,118);
             sb.Append("TotalSize=").Append(raw.Length).Append(" Expected=").Append(ExpectedSize);
             return sb.ToString();
         }
@@ -302,6 +312,7 @@ namespace WPF_UI1.Services
         public bool TpmPresent { get; set; }
         public ushort MemorySlotsTotal { get; set; }
         public ushort MemorySlotsUsed { get; set; }
+        public byte UsbDeviceCount { get; set; }
         public int ViewSize { get; set; }
         public int ExpectedSize { get; set; }
         public bool SizeMatches { get; set; }
@@ -368,6 +379,37 @@ namespace WPF_UI1.Models
         }
     }
 
+    // USB设备数据结构 (对应C++的USBDeviceData)
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    public struct USBDeviceData
+    {
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 4)]
+        public byte[] drivePath;        // 驱动器路径 (如 "E:\\")
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)]
+        public byte[] volumeLabel;     // 卷标名称
+        public ulong totalSize;       // 总容量（字节）
+        public ulong freeSpace;       // 可用空间（字节）
+        public byte isUpdateReady;    // 是否包含update文件夹
+        public byte state;            // 状态 (0=Removed, 1=Inserted, 2=UpdateReady)
+        public byte reserved;         // 对齐
+        public long lastUpdateFileTime; // SYSTEMTIME转换为FILETIME
+
+        public static USBDeviceData CreateDefault()
+        {
+            return new USBDeviceData
+            {
+                drivePath = new byte[4],
+                volumeLabel = new byte[32],
+                totalSize = 0,
+                freeSpace = 0,
+                isUpdateReady = 0,
+                state = 0,
+                reserved = 0,
+                lastUpdateFileTime = 0
+            };
+        }
+    }
+
     //共享内存主结构
     [StructLayout(LayoutKind.Sequential, Pack =1)]
     public struct SharedMemoryBlock
@@ -413,7 +455,13 @@ namespace WPF_UI1.Models
         public byte[] futureReserved;
         [MarshalAs(UnmanagedType.ByValArray, SizeConst =32)]
         public byte[] sharedmemHash;
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst =128)]
+
+        // USB设备信息
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst =8)]
+        public USBDeviceData[] usbDevices;  // 最多8个USB设备
+        public byte usbDeviceCount;       // USB设备数量
+
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst =118)] // 调整为128-10=118
         public byte[] extensionPad;
 
         public static SharedMemoryBlock CreateDefault()
@@ -445,10 +493,13 @@ namespace WPF_UI1.Models
                 memorySlotsUsed =0,
                 futureReserved = new byte[64],
                 sharedmemHash = new byte[32],
-                extensionPad = new byte[128]
+                usbDevices = new USBDeviceData[8],
+                usbDeviceCount =0,
+                extensionPad = new byte[118]
             };
             for (int i =0; i <32; i++) block.tempSensors[i] = TemperatureSensor.CreateDefault();
             for (int i =0; i <16; i++) block.smartDisks[i] = SmartDiskScore.CreateDefault();
+            for (int i =0; i <8; i++) block.usbDevices[i] = USBDeviceData.CreateDefault();
             return block;
         }
     }

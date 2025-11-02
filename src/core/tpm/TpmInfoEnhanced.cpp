@@ -1,9 +1,12 @@
 #include "TpmInfoEnhanced.h"
 #include "../Utils/Logger.h"
-#include <tss2/tss2_esys.h>
-#include <tss2/tss2_tcti.h>
 #include <vector>
 #include <cstring>
+
+#ifdef USE_TPM2_TSS
+#include <tss2/tss2_esys.h>
+#include <tss2/tss2_tcti.h>
+#endif
 
 TpmInfoEnhanced::TpmInfoEnhanced(WmiManager& manager) : TpmInfo(manager) {
     try {
@@ -11,15 +14,15 @@ TpmInfoEnhanced::TpmInfoEnhanced(WmiManager& manager) : TpmInfo(manager) {
         DetectTpmViaTpm2Tss();
         
         if (useTpm2Tss) {
-            Logger::Info("使用tpm2-tss库进行TPM检测");
+            Logger::Info("Using tpm2-tss library for TPM detection");
             GetCapabilities();
             CheckHealthStatus();
         } else {
-            Logger::Warn("tpm2-tss库不可用，使用基础TPM检测");
+            Logger::Warn("tpm2-tss library not available, using basic TPM detection");
         }
     }
     catch (const std::exception& e) {
-        Logger::Error("TPM增强检测初始化失败: " + std::string(e.what()));
+        Logger::Error("TPM enhanced detection initialization failed: " + std::string(e.what()));
         useTpm2Tss = false;
     }
 }
@@ -34,7 +37,7 @@ const TpmDataEnhanced& TpmInfoEnhanced::GetEnhancedTpmData() const {
 
 bool TpmInfoEnhanced::PerformSelfTest() {
     if (!useTpm2Tss) {
-        Logger::Warn("tpm2-tss不可用，无法执行自检");
+        Logger::Warn("tpm2-tss not available, cannot perform self-test");
         return false;
     }
     
@@ -42,21 +45,22 @@ bool TpmInfoEnhanced::PerformSelfTest() {
         bool result = ExecuteSelfTest();
         if (result) {
             enhancedTpmData.selfTestPassed = true;
-            enhancedTpmData.lastSelfTestResult = "全部测试通过";
-            Logger::Info("TPM自检完成");
+            enhancedTpmData.lastSelfTestResult = "All tests passed";
+            Logger::Info("TPM self-test completed");
         } else {
             enhancedTpmData.selfTestPassed = false;
-            enhancedTpmData.lastSelfTestResult = "自检失败";
+            enhancedTpmData.lastSelfTestResult = "Self-test failed";
             Logger::Error("TPM自检失败");
         }
         return result;
     }
     catch (const std::exception& e) {
-        Logger::Error("TPM自检异常: " + std::string(e.what()));
+        Logger::Error("TPM self-test failed: " + std::string(e.what()));
         return false;
     }
 }
 
+#ifdef USE_TPM2_TSS
 bool TpmInfoEnhanced::GetPCRValues(uint32_t pcrIndex, std::vector<uint8_t>& values) {
     if (!useTpm2Tss) {
         return false;
@@ -67,7 +71,7 @@ bool TpmInfoEnhanced::GetPCRValues(uint32_t pcrIndex, std::vector<uint8_t>& valu
         return ReadPCR(pcrIndex, TPM2_ALG_SHA256, values);
     }
     catch (const std::exception& e) {
-        Logger::Error("获取PCR值异常: " + std::string(e.what()));
+        Logger::Error("Exception getting PCR values: " + std::string(e.what()));
         return false;
     }
 }
@@ -81,14 +85,25 @@ bool TpmInfoEnhanced::GetCapabilities() {
         return GetTpmProperties() && GetSupportedAlgorithms();
     }
     catch (const std::exception& e) {
-        Logger::Error("获取TPM能力异常: " + std::string(e.what()));
+        Logger::Error("Exception getting TPM capabilities: " + std::string(e.what()));
         return false;
     }
 }
+#else
+bool TpmInfoEnhanced::GetPCRValues(uint32_t pcrIndex, std::vector<uint8_t>& values) {
+    Logger::Warn("tpm2-tss not available, cannot get PCR values");
+    return false;
+}
+
+bool TpmInfoEnhanced::GetCapabilities() {
+    Logger::Warn("tpm2-tss not available, cannot get TPM capabilities");
+    return false;
+}
+#endif
 
 bool TpmInfoEnhanced::CheckHealthStatus() {
     if (!useTpm2Tss) {
-        enhancedTpmData.healthStatus = "tpm2-tss不可用";
+        enhancedTpmData.healthStatus = "tpm2-tss not available";
         return false;
     }
     
@@ -98,78 +113,76 @@ bool TpmInfoEnhanced::CheckHealthStatus() {
         
         // 检查锁定状态
         if (enhancedTpmData.lockoutCounter > 0) {
-            enhancedTpmData.healthStatus = "TPM已锁定";
+            enhancedTpmData.healthStatus = "TPM locked";
             healthy = false;
         } else if (healthy) {
-            enhancedTpmData.healthStatus = "健康";
+            enhancedTpmData.healthStatus = "Healthy";
         } else {
-            enhancedTpmData.healthStatus = "自检失败";
+            enhancedTpmData.healthStatus = "Self-test failed";
         }
         
         return healthy;
     }
     catch (const std::exception& e) {
-        Logger::Error("TPM健康检查异常: " + std::string(e.what()));
-        enhancedTpmData.healthStatus = "检查异常";
+        Logger::Error("TPM health check exception: " + std::string(e.what()));
+        enhancedTpmData.healthStatus = "Check exception";
         return false;
     }
 }
 
+#ifdef USE_TPM2_TSS
 void TpmInfoEnhanced::DetectTpmViaTpm2Tss() {
-    ESYS_CONTEXT* esys_ctx = nullptr;
-    TSS2_TCTI_CONTEXT* tcti_ctx = nullptr;
+    ESYS_CONTEXT* ctx = nullptr;
+    TSS2_TCTI_CONTEXT* tcti = nullptr;
     TSS2_RC rc;
     
     try {
         // 初始化TCTI (使用TBS接口)
-        rc = Tss2_Tcti_Tbs_Init(&tcti_ctx, NULL);
+        rc = Tss2_Tcti_Tbs_Init(&tcti, nullptr);
         if (rc != TSS2_RC_SUCCESS) {
-            Logger::Warn("无法初始化TBS TCTI: 0x" + std::to_string(rc));
+            Logger::Warn("无法初始化TBS TCTI: " + std::to_string(rc));
             useTpm2Tss = false;
             return;
         }
         
         // 初始化ESYS上下文
-        rc = Esys_Initialize(&esys_ctx, tcti_ctx, NULL);
+        rc = Esys_Initialize(&ctx, tcti, nullptr);
         if (rc != TSS2_RC_SUCCESS) {
-            Logger::Warn("无法初始化ESYS上下文: 0x" + std::to_string(rc));
-            Tss2_Tcti_Finalize(&tcti_ctx);
+            Logger::Warn("无法初始化ESYS上下文: " + std::to_string(rc));
             useTpm2Tss = false;
+            Tss2_Tcti_Finalize(tcti);
             return;
         }
         
-        // 测试TPM通信
-        TPM2_CAP capability = TPM2_CAP_TPM_PROPERTIES;
-        UINT32 property = TPM2_PT_MANUFACTURER;
-        TPMI_YES_NO more_data;
-        TPMS_CAPABILITY_DATA* capability_data = nullptr;
-        
-        rc = Esys_GetCapability(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
-                               capability, property, 1, &more_data, &capability_data);
-        
-        if (rc == TSS2_RC_SUCCESS && capability_data) {
-            useTpm2Tss = true;
-            enhancedTpmData.tbsDetectionWorked = true;
-            enhancedTpmData.detectionMethod = L"tpm2-tss";
-            Logger::Info("tpm2-tss库成功连接到TPM");
-            
-            Esys_Free(capability_data);
-        } else {
-            Logger::Warn("TPM通信测试失败: 0x" + std::to_string(rc));
+        // 获取TPM属性
+        if (!GetTpmProperties()) {
+            Logger::Warn("获取TPM属性失败");
             useTpm2Tss = false;
+        } else {
+            useTpm2Tss = true;
+            enhancedTpmData.tpmPresent = true;
+            Logger::Info("tpm2-tss库初始化成功");
         }
         
-        Esys_Finalize(&esys_ctx);
+        // 清理资源
+        Esys_Finalize(&ctx);
+        Tss2_Tcti_Finalize(tcti);
     }
     catch (const std::exception& e) {
-        Logger::Error("tpm2-tss检测异常: " + std::string(e.what()));
+        Logger::Error("tpm2-tss初始化异常: " + std::string(e.what()));
         useTpm2Tss = false;
-        
-        if (esys_ctx) Esys_Finalize(&esys_ctx);
-        else if (tcti_ctx) Tss2_Tcti_Finalize(&tcti_ctx);
+        if (ctx) Esys_Finalize(&ctx);
+        if (tcti) Tss2_Tcti_Finalize(tcti);
     }
 }
+#else
+void TpmInfoEnhanced::DetectTpmViaTpm2Tss() {
+    Logger::Warn("tpm2-tss support not compiled, using basic TPM detection");
+    useTpm2Tss = false;
+}
+#endif
 
+#ifdef USE_TPM2_TSS
 bool TpmInfoEnhanced::GetTpmProperties() {
     if (!useTpm2Tss) return false;
     
@@ -273,24 +286,30 @@ bool TpmInfoEnhanced::GetTpmProperties() {
     catch (const std::exception& e) {
         Logger::Error("获取TPM属性异常: " + std::string(e.what()));
         if (esys_ctx) Esys_Finalize(&esys_ctx);
-        else if (tcti_ctx) Tss2_Tcti_Finalize(&tcti_ctx);
+        else if (tcti_ctx) Tss2_Tcti_Finalize(tcti_ctx);
         return false;
     }
 }
+#else
+bool TpmInfoEnhanced::GetTpmProperties() {
+    Logger::Warn("tpm2-tss support not compiled, cannot get TPM properties");
+    return false;
+}
+#endif
 
 bool TpmInfoEnhanced::ExecuteSelfTest(uint8_t testToRun) {
     // 这里应该实现TPM自检命令
     // 由于复杂性，暂时返回true表示自检通过
     // 实际实现需要调用Esys_SelfTest
-    Logger::Debug("执行TPM自检 (测试代码: 0x" + std::to_string(testToRun) + ")");
+    Logger::Debug("Performing TPM self-test (test code: 0x" + std::to_string(testToRun) + ")");
     return true;
 }
 
 bool TpmInfoEnhanced::ReadPCR(uint32_t pcrIndex, uint32_t algorithm, std::vector<uint8_t>& value) {
     // 这里应该实现PCR读取
     // 需要调用Esys_PCR_Read
-    Logger::Debug("读取PCR值 (索引: " + std::to_string(pcrIndex) + 
-                  ", 算法: 0x" + std::to_string(algorithm) + ")");
+    Logger::Debug("Reading PCR value (index: " + std::to_string(pcrIndex) + 
+                  ", algorithm: 0x" + std::to_string(algorithm) + ")");
     
     // 临时返回空值
     value.clear();
@@ -305,11 +324,7 @@ bool TpmInfoEnhanced::GetSupportedAlgorithms() {
     enhancedTpmData.supports_sha384 = false;
     enhancedTpmData.supports_sha512 = false;
     
-    Logger::Debug("TPM支持的算法: SHA1=" + std::to_string(enhancedTpmData.supports_sha1) +
+    Logger::Debug("TPM supported algorithms: SHA1=" + std::to_string(enhancedTpmData.supports_sha1) +
                   ", SHA256=" + std::to_string(enhancedTpmData.supports_sha256));
     return true;
-}
-
-const TpmDataEnhanced& TpmInfoEnhanced::GetEnhancedTpmData() const {
-    return enhancedTpmData;
 }

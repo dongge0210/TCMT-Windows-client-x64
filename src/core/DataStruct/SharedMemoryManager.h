@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <string>
 #include "../usb/USBInfo.h"
+#include "../Utils/WmiManager.h"
 
 // Shared memory management class to avoid multiple definitions
 class SharedMemoryManager {

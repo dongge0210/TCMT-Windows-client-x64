@@ -7,6 +7,7 @@
 #include <atomic>
 #include <mutex>
 #include <chrono>
+#include <bitset>
 
 namespace fs = std::filesystem;
 using namespace std::chrono_literals;
@@ -25,14 +26,14 @@ public:
         
         stopFlag = false;
         monitorThread = std::thread(&USBMonitorImpl::MonitorLoop, this);
-        Logger::Info("USB监控线程已启动");
+        Logger::Info("USB monitoring thread started");
     }
     
     void StopMonitoring() {
         stopFlag = true;
         if (monitorThread.joinable()) {
             monitorThread.join();
-            Logger::Info("USB监控线程已停止");
+            Logger::Info("USB monitoring thread stopped");
         }
     }
     
@@ -49,7 +50,7 @@ private:
                 std::this_thread::sleep_for(500ms); // 每500ms检查一次
             }
             catch (const std::exception& e) {
-                Logger::Error("USB监控循环异常: " + std::string(e.what()));
+                Logger::Error("USB monitoring loop exception: " + std::string(e.what()));
                 std::this_thread::sleep_for(1s); // 异常时等待更长时间
             }
         }
@@ -84,9 +85,9 @@ private:
                         deviceInfo.state = USBState::Inserted;
                         if (deviceInfo.isUpdateReady) {
                             deviceInfo.state = USBState::UpdateReady;
-                            Logger::Info("检测到更新U盘插入: " + path);
+                            Logger::Info("Update USB drive detected: " + path);
                         } else {
-                            Logger::Info("检测到USB设备插入: " + path);
+                            Logger::Info("USB device inserted: " + path);
                         }
                         
                         currentDevices.push_back(deviceInfo);
@@ -104,7 +105,7 @@ private:
             for (auto it = currentDevices.begin(); it != currentDevices.end();) {
                 if (newUSBPaths.find(it->drivePath) == newUSBPaths.end()) {
                     // 设备拔出
-                    Logger::Info("USB设备已拔出: " + it->drivePath);
+                    Logger::Info("USB device removed: " + it->drivePath);
                     
                     USBDeviceInfo removedDevice = *it;
                     removedDevice.state = USBState::Removed;
@@ -146,18 +147,18 @@ USBInfoManager::~USBInfoManager() {
 
 bool USBInfoManager::Initialize() {
     try {
-        Logger::Info("初始化USB监控管理器");
+        Logger::Info("Initializing USB monitoring manager");
         return true;
     }
     catch (const std::exception& e) {
-        Logger::Error("USB监控管理器初始化失败: " + std::string(e.what()));
+        Logger::Error("USB monitoring manager initialization failed: " + std::string(e.what()));
         return false;
     }
 }
 
 void USBInfoManager::Cleanup() {
     StopMonitoring();
-    Logger::Info("USB监控管理器已清理");
+    Logger::Info("USB monitoring manager cleaned up");
 }
 
 void USBInfoManager::StartMonitoring() {
@@ -215,7 +216,7 @@ bool USBInfoManager::GetDriveInfo(const std::string& drivePath, USBDeviceInfo& i
         return true;
     }
     catch (const std::exception& e) {
-        Logger::Error("获取驱动器信息失败: " + std::string(e.what()));
+        Logger::Error("Failed to get drive information: " + std::string(e.what()));
         return false;
     }
 }
@@ -231,7 +232,7 @@ bool USBInfoManager::HasUpdateFolder(const std::string& drivePath) {
         return false;
     }
     catch (const std::exception& e) {
-        Logger::Warn("检查update文件夹时发生异常: " + std::string(e.what()));
+        Logger::Warn("Exception when checking update folder: " + std::string(e.what()));
         return false;
     }
 }

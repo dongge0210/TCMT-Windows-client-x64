@@ -78,52 +78,52 @@ MotherboardInfo MotherboardInfoCollector::CollectMotherboardInfo(IWbemServices* 
     MotherboardInfo info;
     
     if (!pSvc) {
-        Logger::Error("WMI服务未初始化，无法采集主板信息");
+        Logger::Error("WMI service not initialized, cannot collect motherboard information");
         return info;
     }
     
     try {
         // 采集主板信息
         if (QueryWmiProperty(pSvc, L"Win32_BaseBoard", L"Manufacturer", info.manufacturer)) {
-            Logger::Debug("主板制造商: " + info.manufacturer);
+            Logger::Debug("Motherboard manufacturer: " + info.manufacturer);
         }
         
         if (QueryWmiProperty(pSvc, L"Win32_BaseBoard", L"Product", info.product)) {
-            Logger::Debug("主板型号: " + info.product);
+            Logger::Debug("Motherboard model: " + info.product);
         }
         
         if (QueryWmiProperty(pSvc, L"Win32_BaseBoard", L"Version", info.version)) {
-            Logger::Debug("主板版本: " + info.version);
+            Logger::Debug("Motherboard version: " + info.version);
         }
         
         if (QueryWmiProperty(pSvc, L"Win32_BaseBoard", L"SerialNumber", info.serialNumber)) {
-            Logger::Debug("主板序列号: " + info.serialNumber);
+            Logger::Debug("Motherboard serial number: " + info.serialNumber);
         }
         
         // 采集BIOS信息
         if (QueryWmiProperty(pSvc, L"Win32_BIOS", L"Manufacturer", info.biosVendor)) {
-            Logger::Debug("BIOS厂商: " + info.biosVendor);
+            Logger::Debug("BIOS vendor: " + info.biosVendor);
         }
         
         if (QueryWmiProperty(pSvc, L"Win32_BIOS", L"Version", info.biosVersion)) {
-            Logger::Debug("BIOS版本: " + info.biosVersion);
+            Logger::Debug("BIOS version: " + info.biosVersion);
         }
         
         if (QueryWmiProperty(pSvc, L"Win32_BIOS", L"ReleaseDate", info.biosReleaseDate)) {
-            Logger::Debug("BIOS发布日期: " + info.biosReleaseDate);
+            Logger::Debug("BIOS release date: " + info.biosReleaseDate);
         }
         
         // 检查是否至少获取到了一些有效信息
         if (!info.manufacturer.empty() || !info.product.empty() || 
             !info.biosVendor.empty() || !info.biosVersion.empty()) {
             info.isValid = true;
-            Logger::Info("主板/BIOS信息采集完成");
+            Logger::Info("Motherboard/BIOS information collection completed");
         } else {
-            Logger::Warn("未能获取到有效的主板/BIOS信息");
+            Logger::Warn("Failed to get valid motherboard/BIOS information");
         }
     }
     catch (...) {
-        Logger::Error("采集主板信息时发生异常");
+        Logger::Error("Exception occurred while collecting motherboard information");
     }
     
     return info;

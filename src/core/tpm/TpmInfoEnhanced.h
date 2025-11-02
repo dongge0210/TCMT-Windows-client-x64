@@ -1,9 +1,14 @@
 #pragma once
 #include "TpmInfo.h"
 #include <memory>
+#include <vector>
+#include <string>
 
 // 增强的TPM信息结构，包含tpm2-tss库提供的详细信息
 struct TpmDataEnhanced : public TpmInfo::TpmData {
+    // 基础TPM信息
+    bool tpmPresent = false;                  // TPM是否存在
+    
     // TPM 2.0 特有信息
     uint32_t pcrCount = 0;                    // PCR寄存器数量
     uint32_t pcrSelectSize = 0;               // PCR选择大小
@@ -48,7 +53,7 @@ struct TpmDataEnhanced : public TpmInfo::TpmData {
 class TpmInfoEnhanced : public TpmInfo {
 public:
     TpmInfoEnhanced(WmiManager& manager);
-    ~TpmInfoEnhanced() override;
+    ~TpmInfoEnhanced();
     
     // 获取增强的TPM数据
     const TpmDataEnhanced& GetEnhancedTpmData() const;
@@ -80,9 +85,6 @@ private:
     
     // 获取支持算法
     bool GetSupportedAlgorithms();
-    
-    // 获取增强的TPM数据
-    const TpmDataEnhanced& GetEnhancedTpmData() const;
     
     TpmDataEnhanced enhancedTpmData;
     bool useTpm2Tss = false;  // 是否使用tpm2-tss库

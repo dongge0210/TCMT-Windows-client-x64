@@ -46,6 +46,7 @@
 #include <sstream>
 #include <stdexcept>
 #define SHARED_MEMORY_MANAGER_INCLUDED
+#define SHARED_MEMORY_MANAGER_INCLUDED
 #include "DiagnosticsPipe.h"
 
 #ifndef WINUTILS_IMPLEMENTED

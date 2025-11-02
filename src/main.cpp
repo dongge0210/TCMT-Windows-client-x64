@@ -755,7 +755,6 @@ int main(int argc, char* argv[]) {
         
         // 创建CPU对象一次，重复使用（避免重复初始化性能计数器）- 增强异常处理
         std::unique_ptr<CpuInfo> cpuInfo;
-        std::unique_ptr<WmiManager> wmiManager;
         try {
             cpuInfo = std::make_unique<CpuInfo>();
             if (!cpuInfo) {
@@ -792,9 +791,6 @@ int main(int argc, char* argv[]) {
         catch (...) {
             Logger::Error("WMI管理器创建失败 - 未知异常");
         }
-        
-        // 线程安全的GPU缓存
-        ThreadSafeGpuCache gpuCache;
         
         // 线程安全的GPU缓存
         ThreadSafeGpuCache gpuCache;
@@ -849,10 +845,11 @@ int main(int argc, char* argv[]) {
                             
                             // 更新SystemInfo中的TPM字段
                             sysInfo.hasTpm = (tpmData.tpmPresent != 0);
-                            sysInfo.tpmManufacturer = tpmData.manufacturerName;
-                            sysInfo.tpmManufacturerId = tpmData.manufacturerId;
-                            sysInfo.tpmVersion = tpmData.version;
-                            sysInfo.tpmFirmwareVersion = tpmData.firmwareVersion;
+                            // Convert wstring to string
+                            sysInfo.tpmManufacturer = std::string(tpmData.manufacturerName.begin(), tpmData.manufacturerName.end());
+                            sysInfo.tpmManufacturerId = std::string(tpmData.manufacturerId.begin(), tpmData.manufacturerId.end());
+                            sysInfo.tpmVersion = std::string(tpmData.version.begin(), tpmData.version.end());
+                            sysInfo.tpmFirmwareVersion = std::string(tpmData.firmwareVersion.begin(), tpmData.firmwareVersion.end());
                             sysInfo.tpmEnabled = tpmData.isEnabled;
                             sysInfo.tpmIsActivated = tpmData.isActivated;
                             sysInfo.tpmIsOwned = tpmData.isOwned;
@@ -860,8 +857,8 @@ int main(int argc, char* argv[]) {
                             sysInfo.tpmTbsAvailable = tpmData.tbsAvailable;
                             sysInfo.tpmSpecVersion = tpmData.specVersion;
                             sysInfo.tpmTbsVersion = tpmData.tbsVersion;
-                            sysInfo.tpmErrorMessage = tpmData.errorMessage;
-                            sysInfo.tmpDetectionMethod = tpmData.detectionMethod;
+                            sysInfo.tpmErrorMessage = std::string(tpmData.errorMessage.begin(), tpmData.errorMessage.end());
+                            sysInfo.tmpDetectionMethod = std::string(tpmData.detectionMethod.begin(), tpmData.detectionMethod.end());
                             sysInfo.tmpWmiDetectionWorked = tpmData.wmiDetectionWorked;
                             sysInfo.tmpTbsDetectionWorked = tpmData.tbsDetectionWorked;
                             
