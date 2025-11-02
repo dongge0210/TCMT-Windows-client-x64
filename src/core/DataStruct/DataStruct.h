@@ -246,4 +246,4 @@ struct SharedMemoryBlock {
 
 #pragma pack(pop)
 
-// static_assert(sizeof(SharedMemoryBlock) ==125818, "Size mismatch");
+static_assert(sizeof(SharedMemoryBlock) ==3212, "SharedMemoryBlock size mismatch – update C# offsets if this fails");
