@@ -221,14 +221,16 @@ jobs:
       run: |
         $exitCode = 0
         try {
-          # Build the solution but exclude LibreHardwareMonitor since it's built separately
-          # Use /t:Project1 to only build the main project and its dependencies (excluding LibreHardwareMonitor)
+          # Build the solution but skip LibreHardwareMonitor since it's built separately
+          # LibreHardwareMonitor requires x64 platform but the solution tries to build it with AnyCPU
+          # We build it separately in a previous step with correct Platform=x64 configuration
           msbuild ${{ env.SOLUTION_FILE_PATH }} `
             /t:Project1 `
             /p:Configuration=${{ env.BUILD_CONFIGURATION }} `
             /p:Platform=${{ env.BUILD_PLATFORM }} `
             /p:PlatformToolset=v143 `
             /p:WindowsTargetPlatformVersion=10.0 `
+            /p:BuildProjectReferences=false `
             /m /verbosity:minimal 2>&1 | Tee-Object -FilePath main_build.log
           $exitCode = $LASTEXITCODE
         } catch {
