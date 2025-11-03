@@ -230,7 +230,7 @@ jobs:
 
     # ================= iFlow 分析（决策） =================
     - name: Run iFlow CLI Analysis
-      if: steps.check-build.outputs.status == 'success'
+      if: steps.build-solution.outcome == 'success'
       uses: iflow-ai/iflow-cli-action@v2.0.0
       with:
         api_key: ${{ secrets.IFLOW_API_KEY }}
