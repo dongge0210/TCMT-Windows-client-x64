@@ -11,6 +11,9 @@ env:
   SOLUTION_FILE_PATH: Project1/Project1.sln
   BUILD_CONFIGURATION: Release
   BUILD_PLATFORM: x64
+  ERROR_KEYWORDS: "error|warning|fatal|undefined"
+  FAIL_ERROR_REGEX: "(?i)(: error | fatal error| fatal: |\\berror LNK[0-9]{4}\\b|\\bLNK[0-9]{4}\\b|unresolved external symbol|undefined reference|LINK : fatal error)"
+  MAIN_EXE: ""
 
 jobs:
   full-build:
@@ -22,15 +25,14 @@ jobs:
         submodules: recursive
         fetch-depth: 0
 
-    ### S.A.E.R 环境报告
+    # S.A.E.R 环境报告
     - name: Generate S.A.E.R System Report
-      id: report
       shell: pwsh
       run: |
         echo "=== SYSTEM AND ENVIRONMENT REPORT ===" | Out-File saer.txt
-        Get-CimInstance -ClassName Win32_ComputerSystem | Select-Object TotalPhysicalMemory, @{Name="RAM(GB)"; Expression={[math]::Round($_.TotalPhysicalMemory / 1GB, 2)}} | Format-Table | Out-File -FilePath saer.txt -Append
+        Get-CimInstance -ClassName Win32_ComputerSystem | Select-Object TotalPhysicalMemory,@{Name="RAM(GB)";Expression={[math]::Round($_.TotalPhysicalMemory/1GB,2)}} | Format-Table | Out-File -FilePath saer.txt -Append
         Get-CimInstance -ClassName Win32_Processor | Select-Object Name,NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed | Format-Table | Out-File -FilePath saer.txt -Append
-        Get-ChildItem Env: | Where-Object { $_.Name -match "PATH|CUDA|MSBUILD|VISUAL" } | Select-Object Name, Value | Format-Table | Out-File saer.txt -Append
+        Get-ChildItem Env: | Where-Object { $_.Name -match "PATH|CUDA|MSBUILD|VISUAL" } | Select-Object Name,Value | Format-Table | Out-File saer.txt -Append
         git --version | Out-File saer.txt -Append
 
     - name: Upload S.A.E.R Report
@@ -39,7 +41,7 @@ jobs:
         name: saer-report
         path: saer.txt
 
-    ### 环境装配
+    # .NET & MSBuild 环境
     - name: Setup .NET
       uses: actions/setup-dotnet@v5
       with:
@@ -48,7 +50,7 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
-    #### CUDA缓存+下载
+    # CUDA 缓存与装配
     - name: Cache CUDA
       id: cache-cuda
       uses: actions/cache@v4
@@ -63,15 +65,13 @@ jobs:
         cuda: '12.6.0'
         method: 'network'
 
-    #### NuGet包和MSBuild缓存
+    # NuGet 依赖缓存与还原
     - name: Cache NuGet packages
-      id: cache-nuget
       uses: actions/cache@v4
       with:
         path: ~/.nuget/packages
         key: nuget-${{ runner.os }}-${{ hashFiles('**/*.sln','**/*.csproj','**/packages.config') }}
-        restore-keys: |
-          nuget-${{ runner.os }}-
+        restore-keys: nuget-${{ runner.os }}-
 
     - name: NuGet restore
       shell: pwsh
@@ -79,35 +79,15 @@ jobs:
         nuget restore ${{ env.SOLUTION_FILE_PATH }}
         dotnet restore ${{ env.SOLUTION_FILE_PATH }}
 
+    # MSBuild 缓存
     - name: Cache MSBuild
       uses: actions/cache@v4
       with:
         path: C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\MSBuild
         key: msbuild-${{ runner.os }}-${{ hashFiles('**/*.sln') }}
-        restore-keys: |
-          msbuild-${{ runner.os }}-
+        restore-keys: msbuild-${{ runner.os }}-
 
-    #### iflow-cli缓存+下载/安装
-    - name: Cache iflow-cli
-      id: cache-iflow
-      uses: actions/cache@v4
-      with:
-        path: C:\npm\prefix\node_modules\@iflow-ai\iflow-cli
-        key: iflow-cli-${{ runner.os }}-v2.0.0
-
-    - name: Install iflow-cli
-      shell: pwsh
-      run: |
-        # 如果缓存未命中，则安装
-        if ("${{steps.cache-iflow.outputs.cache-hit}}" -eq "true") {
-          Write-Host "已命中iflow-cli缓存，跳过安装"
-        } else {
-          Write-Host "未命中iflow-cli缓存，执行安装"
-          npm install -g @iflow-ai/iflow-cli
-        }
-        iflow --version
-
-    ### 编译各模块
+    # 编译各模块
     - name: Build LibreHardwareMonitor
       shell: pwsh
       run: |
@@ -161,14 +141,9 @@ jobs:
           main_build.log
           main_build.errors.txt
 
-    ### iFlow分析阶段
+    # iFlow Analysis
     - name: Run iFlow CLI Analysis
       uses: iflow-ai/iflow-cli-action@v2.0.0
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        REPOSITORY: ${{ github.repository }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
-        RUN_ID: ${{ github.run_id }}
       with:
         api_key: ${{ secrets.IFLOW_API_KEY }}
         model: "Qwen3-Coder"
@@ -188,6 +163,7 @@ jobs:
              - src/core/ 或 src/main.cpp → cpp模块需要编译
              - WPF-UI1/ → wpf模块需要编译
              - src/third_party/ → lib模块需要编译
+          3. 创建编译决策文件 build_decision.json
           ## 注意事项
           - 优先考虑编译效率和资源利用
           - 确保依赖关系正确
@@ -200,12 +176,6 @@ jobs:
 
     - name: Run iFlow CLI Summary
       uses: iflow-ai/iflow-cli-action@v2.0.0
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        REPOSITORY: ${{ github.repository }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
-        RUN_ID: ${{ github.run_id }}
-        BUILD_STATUS: ${{ job.status }}
       with:
         api_key: ${{ secrets.IFLOW_API_KEY }}
         model: "Qwen3-Coder"
@@ -232,7 +202,7 @@ jobs:
         name: build-summary
         path: build_summary.json
 
-    ### PR反馈推送 by iflow-summary
+    # PR反馈
     - name: PR Feedback
       if: github.event_name == 'pull_request'
       shell: pwsh
@@ -244,7 +214,7 @@ jobs:
       run: |
         if (Test-Path "build_summary.json") {
           $summaryJson = Get-Content "build_summary.json" | ConvertFrom-Json
-          $comment = $summaryJson.summary_text # summary_text 是 iFlow CLI 提供的人类可读总结
+          $comment = $summaryJson.summary_text
         } else {
           $comment = "本次编译流程未能获得Ifow总结数据，请检查 workflow 日志。"
         }
