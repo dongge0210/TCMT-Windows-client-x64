@@ -14,26 +14,57 @@ env:
   ERROR_KEYWORDS: "error|warning|fatal|undefined"
   FAIL_ERROR_REGEX: "(?i)(: error | fatal error| fatal: |\\berror LNK[0-9]{4}\\b|\\bLNK[0-9]{4}\\b|unresolved external symbol|undefined reference|LINK : fatal error)"
   MAIN_EXE: ""
+  # 统一的时间格式用于日志（可选）
+  TZ: Asia/Shanghai
 
 jobs:
   full-build:
     runs-on: windows-latest
+    timeout-minutes: 90
+
     steps:
-    - uses: actions/checkout@v5
+    - name: Checkout (with submodules)
+      uses: actions/checkout@v5
       with:
-        ref: dev
+        ref: feature/iflow-cli-integration
         submodules: recursive
         fetch-depth: 0
 
-    # S.A.E.R 环境报告
+    # ================= S.A.E.R 系统环境报告 =================
     - name: Generate S.A.E.R System Report
       shell: pwsh
       run: |
-        echo "=== SYSTEM AND ENVIRONMENT REPORT ===" | Out-File saer.txt
-        Get-CimInstance -ClassName Win32_ComputerSystem | Select-Object TotalPhysicalMemory,@{Name="RAM(GB)";Expression={[math]::Round($_.TotalPhysicalMemory/1GB,2)}} | Format-Table | Out-File -FilePath saer.txt -Append
-        Get-CimInstance -ClassName Win32_Processor | Select-Object Name,NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed | Format-Table | Out-File -FilePath saer.txt -Append
-        Get-ChildItem Env: | Where-Object { $_.Name -match "PATH|CUDA|MSBUILD|VISUAL" } | Select-Object Name,Value | Format-Table | Out-File saer.txt -Append
-        git --version | Out-File saer.txt -Append
+        $report = "saer.txt"
+        "=== SYSTEM AND ENVIRONMENT REPORT ===" | Out-File $report
+        "" | Out-File $report -Append
+        "Timestamp (UTC): $(Get-Date -AsUTC)" | Out-File $report -Append
+        "" | Out-File $report -Append
+        "== Hardware ==" | Out-File $report -Append
+        Get-CimInstance -ClassName Win32_ComputerSystem |
+          Select-Object Manufacturer, Model, TotalPhysicalMemory,
+            @{Name="RAM(GB)";Expression={[math]::Round($_.TotalPhysicalMemory/1GB,2)}} |
+          Format-Table | Out-File $report -Append
+        "" | Out-File $report -Append
+        "== CPU ==" | Out-File $report -Append
+        Get-CimInstance -ClassName Win32_Processor |
+          Select-Object Name, NumberOfCores, NumberOfLogicalProcessors, MaxClockSpeed |
+          Format-Table | Out-File $report -Append
+        "" | Out-File $report -Append
+        "== OS & Arch ==" | Out-File $report -Append
+        "OS: $env:OS" | Out-File $report -Append
+        "PROCESSOR_ARCHITECTURE: $env:PROCESSOR_ARCHITECTURE" | Out-File $report -Append
+        "" | Out-File $report -Append
+        "== Git Version ==" | Out-File $report -Append
+        (git --version) | Out-File $report -Append
+        "" | Out-File $report -Append
+        "== Selected Environment Variables ==" | Out-File $report -Append
+        Get-ChildItem Env: |
+          Where-Object { $_.Name -match 'PATH|CUDA|MSBUILD|VISUAL|GITHUB|RUNNER' } |
+          Select-Object Name, Value |
+          Format-Table | Out-File $report -Append
+        "" | Out-File $report -Append
+        "== Repo File Tree (Top 200) ==" | Out-File $report -Append
+        (git ls-tree -r --name-only HEAD | Select-Object -First 200) | Out-File $report -Append
 
     - name: Upload S.A.E.R Report
       uses: actions/upload-artifact@v4
@@ -41,7 +72,7 @@ jobs:
         name: saer-report
         path: saer.txt
 
-    # .NET & MSBuild 环境
+    # ================= 环境准备 (.NET / MSBuild / CUDA 缓存) =================
     - name: Setup .NET
       uses: actions/setup-dotnet@v5
       with:
@@ -50,7 +81,6 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
-    # CUDA 缓存与装配
     - name: Cache CUDA
       id: cache-cuda
       uses: actions/cache@v4
@@ -65,21 +95,22 @@ jobs:
         cuda: '12.6.0'
         method: 'network'
 
-    # NuGet 依赖缓存与还原
     - name: Cache NuGet packages
+      id: cache-nuget
       uses: actions/cache@v4
       with:
         path: ~/.nuget/packages
         key: nuget-${{ runner.os }}-${{ hashFiles('**/*.sln','**/*.csproj','**/packages.config') }}
-        restore-keys: nuget-${{ runner.os }}-
+        restore-keys: |
+          nuget-${{ runner.os }}-
 
-    - name: NuGet restore
+    - name: NuGet & Dotnet Restore
       shell: pwsh
       run: |
+        Write-Host "Restoring solution: ${{ env.SOLUTION_FILE_PATH }}"
         nuget restore ${{ env.SOLUTION_FILE_PATH }}
         dotnet restore ${{ env.SOLUTION_FILE_PATH }}
 
-    # MSBuild 缓存
     - name: Cache MSBuild
       uses: actions/cache@v4
       with:
@@ -87,12 +118,16 @@ jobs:
         key: msbuild-${{ runner.os }}-${{ hashFiles('**/*.sln') }}
         restore-keys: msbuild-${{ runner.os }}-
 
-    # 编译各模块
+    # ================= 构建各模块 =================
     - name: Build LibreHardwareMonitor
       shell: pwsh
       run: |
         cd src/third_party/LibreHardwareMonitor
-        dotnet build LibreHardwareMonitorLib/LibreHardwareMonitorLib.csproj -c Release -f net472 --no-restore 2>&1 | Tee-Object -FilePath build_lib.log
+        dotnet build LibreHardwareMonitorLib/LibreHardwareMonitorLib.csproj `
+          -c Release -f net472 --no-restore `
+          2>&1 | Tee-Object -FilePath build_lib.log
+        if (!(Test-Path build_lib.log)) { Write-Error "build_lib.log missing" }
+
     - name: Upload LibreHardwareMonitor Build Log
       uses: actions/upload-artifact@v4
       with:
@@ -103,7 +138,10 @@ jobs:
       shell: pwsh
       run: |
         cd WPF-UI1
-        dotnet build WPF-UI1.csproj -c Release --no-restore 2>&1 | Tee-Object -FilePath wpfui1_build.log
+        dotnet build WPF-UI1.csproj -c Release --no-restore `
+          2>&1 | Tee-Object -FilePath wpfui1_build.log
+        if (!(Test-Path wpfui1_build.log)) { Write-Error "wpfui1_build.log missing" }
+
     - name: Upload WPF-UI1 Build Log
       uses: actions/upload-artifact@v4
       with:
@@ -113,26 +151,40 @@ jobs:
     - name: Build CPP-parsers
       shell: pwsh
       run: |
-        msbuild src/CPP-parsers/CPP-parsers/CPP-parsers.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m /verbosity:minimal 2>&1 | Tee-Object -FilePath cpp_parsers_build.log
+        msbuild src/CPP-parsers/CPP-parsers/CPP-parsers.vcxproj `
+          /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 `
+          /p:WindowsTargetPlatformVersion=10.0 /m /verbosity:minimal `
+          2>&1 | Tee-Object -FilePath cpp_parsers_build.log
+        if (!(Test-Path cpp_parsers_build.log)) { Write-Error "cpp_parsers_build.log missing" }
+
     - name: Upload CPP-parsers Build Log
       uses: actions/upload-artifact@v4
       with:
         name: cpp-build-log
         path: cpp_parsers_build.log
 
-    - name: Build Main Project
+    - name: Build Main Solution
       shell: pwsh
       run: |
-        msbuild ${{ env.SOLUTION_FILE_PATH }} /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ env.BUILD_PLATFORM }} /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m /verbosity:minimal 2>&1 | Tee-Object -FilePath main_build.log
-        # 扫描致命错误
-        $lines = Get-Content main_build.log | Select-String -Pattern "${{ env.FAIL_ERROR_REGEX }}"
-        $lines = $lines | Where-Object { $_.Line -notmatch '0 Error\\(s\\)' }
-        if ($lines){
-          Set-Content main_build.errors.txt ($lines | ForEach-Object {$_.Line} | Out-String)
+        msbuild ${{ env.SOLUTION_FILE_PATH }} `
+          /p:Configuration=${{ env.BUILD_CONFIGURATION }} `
+          /p:Platform=${{ env.BUILD_PLATFORM }} `
+          /p:PlatformToolset=v143 `
+          /p:WindowsTargetPlatformVersion=10.0 `
+          /m /verbosity:minimal 2>&1 | Tee-Object -FilePath main_build.log
+
+        # 扫描致命错误（排除汇总行）
+        $pattern = "${{ env.FAIL_ERROR_REGEX }}"
+        $hits = Get-Content main_build.log | Select-String -Pattern $pattern
+        $hits = $hits | Where-Object { $_.Line -notmatch '0 Error\\(s\\)' }
+        if ($hits) {
+          $hits | ForEach-Object { $_.Line } | Out-File main_build.errors.txt
+          Write-Host "Fatal errors detected in main build. Failing step."
           exit 1
         } else {
-          Set-Content main_build.errors.txt "未发现致命错误(main_build)。"
+          "未发现致命错误(main_build)。" | Out-File main_build.errors.txt
         }
+
     - name: Upload Main Build Log
       uses: actions/upload-artifact@v4
       with:
@@ -141,32 +193,61 @@ jobs:
           main_build.log
           main_build.errors.txt
 
-    # iFlow Analysis
+    # ================= iFlow 分析（决策） =================
     - name: Run iFlow CLI Analysis
       uses: iflow-ai/iflow-cli-action@v2.0.0
       with:
         api_key: ${{ secrets.IFLOW_API_KEY }}
-        model: "Qwen3-Coder"
+        model: "glm-4.6"
         timeout: "1800"
         working_directory: "."
         prompt: |
-          ## Role
-          你是一个CI/CD智能决策助手，负责分析代码变更并制定最优的编译策略。
-          ## 任务
-          1. 分析当前代码变更情况
-          2. 根据变更内容决定哪些模块需要编译
-          3. 评估缓存策略的有效性
-          4. 制定编译优先级和依赖关系
-          ## 步骤
-          1. 运行 `git diff --name-only HEAD~1 HEAD` 获取变更文件
-          2. 分析变更文件对应的模块：
-             - src/core/ 或 src/main.cpp → cpp模块需要编译
-             - WPF-UI1/ → wpf模块需要编译
-             - src/third_party/ → lib模块需要编译
-          3. 创建编译决策文件 build_decision.json
-          ## 注意事项
-          - 优先考虑编译效率和资源利用
-          - 确保依赖关系正确
+          ## 角色
+          你是一个CI/CD智能决策助手，需根据增量代码变更决定本次构建应编译哪些模块并给出原因。
+          
+          ## 输入资源
+          - Git 仓库当前工作副本
+          - 需判断的模块目录：
+            * C++: src/core/, src/main.cpp, src/CPP-parsers/
+            * WPF: WPF-UI1/
+            * 第三方库: src/third_party/
+          - 构建日志（稍后步骤生成，当前可仅基于代码差异）
+          
+          ## 目标输出
+          写出一个 JSON 文件 build_decision.json（UTF-8，无 BOM），结构：
+          {
+            "build_cpp": <true|false>,
+            "build_wpf": <true|false>,
+            "build_lib": <true|false>,
+            "use_cache": <true|false>,
+            "priority": ["cpp","wpf","lib"]  // 按实际需要的优先顺序
+            "reason": "用简洁中文说明判定逻辑，列出触发编译的关键文件或目录"
+          }
+          
+          ## 行为要求
+          1. 运行: git diff --name-only HEAD~1 HEAD （如 HEAD~1 不存在则比较最近一次提交与其父或仅列出当前快照重要文件）
+          2. 根据文件路径命中上述模块分类；只要目录/文件前缀匹配就标记对应模块需编译。
+          3. 如果 main.cpp 或核心头/源 (src/core/) 有变更 → build_cpp 必须为 true。
+          4. 如果 WPF-UI1/ 下任何 .xaml / .cs 变更 → build_wpf = true。
+          5. 如果 src/third_party/ 下有变更 → build_lib = true。
+          6. use_cache 判断：若变更只影响少量非核心文件且缓存命中，可设为 true；否则 false。
+          7. priority：若多个模块都需要编译，优先级规则：
+             - 若 cpp 需要编译：它第一
+             - 若 lib 与 cpp 同时需要：lib 在 cpp 之前仅当其更新会影响 cpp 链接
+             - WPF 始终排在最后（除非只变更 WPF）
+          8. 输出 JSON 时保证字段顺序与示例一致，不加额外字段。
+          
+          ## 校验
+          - JSON 必须是合法对象、字段类型正确。
+          - reason 不超过 400 中文字符。
+          
+          ## 仅输出
+          直接生成 build_decision.json 文件，不在控制台输出 JSON 内容。
+          
+          ## 如果无法获取 diff
+          - 回退策略：扫描工作区上述目录是否存在 → 推断可能需要编译的模块并在 reason 中标注“无 diff，采用全量推断”。
+          
+          现在执行你的分析并生成文件。
 
     - name: Upload Build Decision
       uses: actions/upload-artifact@v4
@@ -174,27 +255,61 @@ jobs:
         name: build-decision
         path: build_decision.json
 
+    # ================= iFlow 汇总（总结） =================
     - name: Run iFlow CLI Summary
       uses: iflow-ai/iflow-cli-action@v2.0.0
       with:
         api_key: ${{ secrets.IFLOW_API_KEY }}
-        model: "Qwen3-Coder"
+        model: "glm-4.6"
         timeout: "1200"
         working_directory: "."
         prompt: |
-          ## Role
-          你是一个CI/CD结果总结助手，负责分析编译结果并生成专业的总结报告。
-          ## 任务
-          1. 分析所有构建日志
-          2. 评估编译成功率和质量
-          3. 识别关键问题和建议
-          4. 生成结构化的总结报告
-          ## 步骤
-          1. 分析 build_lib.log、wpfui1_build.log、cpp_parsers_build.log、main_build.log、saer.txt
-          2. 生成 build_summary.json 并提供人类可读总结文本
-          ## 注意事项
-          - 优先识别阻塞性错误
-          - 提供具体的修复建议
+          ## 角色
+          你是一个CI/CD结果分析与质量评估助手，基于构建日志与环境信息生成结构化与人类可读总结。
+          
+          ## 可用文件
+          - saer.txt
+          - build_lib.log
+          - wpfui1_build.log
+          - cpp_parsers_build.log
+          - main_build.log
+          - main_build.errors.txt
+          - build_decision.json
+          
+          ## 需要输出的文件
+          生成 build_summary.json，结构：
+          {
+            "overall_status": "success|failure|partial",
+            "components": {
+              "lib": {"status":"success|failure","errors":0,"warnings":0},
+              "wpf": {"status":"success|failure","errors":0,"warnings":0},
+              "cpp": {"status":"success|failure","errors":0,"warnings":0},
+              "main":{"status":"success|failure","errors":0,"warnings":0}
+            },
+            "key_issues": ["列出影响质量或阻塞的问题, 无则空数组"],
+            "recommendations": ["改进建议, 无则空数组"],
+            "summary_text": "面向PR评论的一段整洁中文总结（不超过600中文字符，包含总体结论、模块状态、关键错误、建议）"
+          }
+          
+          ## 解析与判断规则
+          1. 从各日志中提取错误与警告：匹配模式 (?i)\\berror\\b / \\bwarning\\b 及特定 LNK/NETSDK 关键词。
+          2. 若某模块日志存在致命构建失败（构建命令非零退出或含 fatal / NETSDK / LNK 错误）→ status=failure。
+          3. overall_status 规则：
+             - 所有模块 success → success
+             - 至少一个 failure 且至少一个 success → partial
+             - 全失败或 main 失败 → failure
+          4. key_issues 中优先列：阻塞编译错误、链接错误、缺失依赖、NETSDK100x、unresolved external symbol。
+          5. recommendations 给出具体行动：例如“检查包还原”、“优化并行构建顺序”、“补充缺少的第三方库”等。
+          6. 若 main_build.errors.txt 存在内容并非‘未发现致命错误’ → 将对应行归类到 key_issues。
+          
+          ## 输出要求
+          - 严格生成合法 JSON 文件 build_summary.json。
+          - summary_text 要精炼、可直接复制到 PR 评论，不含 Markdown 标题，换行不超过 3 处。
+          
+          ## 仅输出
+          直接写入 build_summary.json，不在控制台回显 JSON 正文。
+          
+          开始执行分析并生成 build_summary.json。
 
     - name: Upload Summary
       uses: actions/upload-artifact@v4
@@ -202,7 +317,7 @@ jobs:
         name: build-summary
         path: build_summary.json
 
-    # PR反馈
+    # ================= PR 自动反馈 =================
     - name: PR Feedback
       if: github.event_name == 'pull_request'
       shell: pwsh
@@ -212,19 +327,20 @@ jobs:
         PR_NUMBER: ${{ github.event.pull_request.number }}
         RUN_ID: ${{ github.run_id }}
       run: |
-        if (Test-Path "build_summary.json") {
-          $summaryJson = Get-Content "build_summary.json" | ConvertFrom-Json
-          $comment = $summaryJson.summary_text
+        if (Test-Path build_summary.json) {
+          $json = Get-Content build_summary.json -Raw | ConvertFrom-Json
+          $comment = $json.summary_text
+          if (-not $comment) {
+            $comment = "未生成 summary_text 字段，检查 iFlow Summary 步骤。"
+          }
         } else {
-          $comment = "本次编译流程未能获得Ifow总结数据，请检查 workflow 日志。"
+          $comment = "未找到 build_summary.json，可能汇总步骤失败。"
         }
         $headers = @{
           Authorization = "token $env:GITHUB_TOKEN"
-          "User-Agent" = "github-actions-powershell"
+          "User-Agent" = "github-actions-pwsh"
           "Accept" = "application/vnd.github+json"
         }
         $body = @{ body = $comment } | ConvertTo-Json -Depth 4
-        $repo = $env:REPOSITORY
-        $prNumber = $env:PR_NUMBER
-        $url = "https://api.github.com/repos/$repo/issues/$prNumber/comments"
+        $url = "https://api.github.com/repos/$env:REPOSITORY/issues/$env:PR_NUMBER/comments"
         Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $body
