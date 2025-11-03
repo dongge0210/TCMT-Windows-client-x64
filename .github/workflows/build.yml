@@ -30,6 +30,16 @@ jobs:
         submodules: recursive
         fetch-depth: 0
 
+    - name: Sync LibreHardwareMonitor Submodule to Fork
+      shell: pwsh
+      run: |
+        Write-Host "Syncing LibreHardwareMonitor submodule to use forked repository..."
+        cd src/third_party/LibreHardwareMonitor
+        git remote set-url origin https://github.com/dongge0210/LibreHardwareMonitor
+        git fetch origin
+        git checkout master
+        git pull origin master
+
     # ================= S.A.E.R 系统环境报告 =================
     - name: Generate S.A.E.R System Report
       shell: pwsh
@@ -118,185 +128,71 @@ jobs:
         key: msbuild-${{ runner.os }}-${{ hashFiles('**/*.sln') }}
         restore-keys: msbuild-${{ runner.os }}-
 
-    # ================= 构建各模块 =================
-    - name: Build LibreHardwareMonitor
-      id: build-lib
-      continue-on-error: true
-      shell: pwsh
-      run: |
-        cd src/third_party/LibreHardwareMonitor
-        $exitCode = 0
-        try {
-          dotnet build LibreHardwareMonitorLib/LibreHardwareMonitorLib.csproj `
-            -c Release -f net472 -p:Platform=x64 --no-restore `
-            2>&1 | Tee-Object -FilePath build_lib.log
-          $exitCode = $LASTEXITCODE
-        } catch {
-          Write-Host "Build failed with exception: $_"
-          $exitCode = 1
-        }
-        if (!(Test-Path build_lib.log)) { 
-          "Build log was not generated" | Out-File build_lib.log
-        }
-        if ($exitCode -ne 0) {
-          Write-Host "##[error]LibreHardwareMonitor build failed with exit code $exitCode"
-          exit $exitCode
-        }
-
-    - name: Upload LibreHardwareMonitor Build Log
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: lib-build-log
-        path: src/third_party/LibreHardwareMonitor/build_lib.log
-        if-no-files-found: warn
-
-    - name: Build WPF-UI1
-      id: build-wpf
-      continue-on-error: true
-      shell: pwsh
-      run: |
-        cd WPF-UI1
-        $exitCode = 0
-        try {
-          dotnet build WPF-UI1.csproj -c Release --no-restore `
-            2>&1 | Tee-Object -FilePath wpfui1_build.log
-          $exitCode = $LASTEXITCODE
-        } catch {
-          Write-Host "Build failed with exception: $_"
-          $exitCode = 1
-        }
-        if (!(Test-Path wpfui1_build.log)) { 
-          "Build log was not generated" | Out-File wpfui1_build.log
-        }
-        if ($exitCode -ne 0) {
-          Write-Host "##[error]WPF-UI1 build failed with exit code $exitCode"
-          exit $exitCode
-        }
-
-    - name: Upload WPF-UI1 Build Log
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: wpf-build-log
-        path: WPF-UI1/wpfui1_build.log
-        if-no-files-found: warn
-
-    - name: Build CPP-parsers
-      id: build-cpp-parsers
+    # ================= 构建解决方案 =================
+    - name: Build Solution
+      id: build-solution
       continue-on-error: true
       shell: pwsh
       run: |
         $exitCode = 0
         try {
-          msbuild src/CPP-parsers/CPP-parsers/CPP-parsers.vcxproj `
-            /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 `
-            /p:WindowsTargetPlatformVersion=10.0 /m /verbosity:minimal `
-            2>&1 | Tee-Object -FilePath cpp_parsers_build.log
-          $exitCode = $LASTEXITCODE
-        } catch {
-          Write-Host "Build failed with exception: $_"
-          $exitCode = 1
-        }
-        if (!(Test-Path cpp_parsers_build.log)) { 
-          "Build log was not generated" | Out-File cpp_parsers_build.log
-        }
-        if ($exitCode -ne 0) {
-          Write-Host "##[error]CPP-parsers build failed with exit code $exitCode"
-          exit $exitCode
-        }
-
-    - name: Upload CPP-parsers Build Log
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: cpp-build-log
-        path: cpp_parsers_build.log
-        if-no-files-found: warn
-
-    - name: Build Main Solution
-      id: build-main
-      continue-on-error: true
-      shell: pwsh
-      run: |
-        $exitCode = 0
-        try {
-          # Build the solution but skip LibreHardwareMonitor since it's built separately
-          # LibreHardwareMonitor requires x64 platform but the solution tries to build it with AnyCPU
-          # We build it separately in a previous step with correct Platform=x64 configuration
+          # Build the entire solution in the order defined by the .sln file
+          # The solution should handle build dependencies correctly
           msbuild ${{ env.SOLUTION_FILE_PATH }} `
-            /t:Project1 `
             /p:Configuration=${{ env.BUILD_CONFIGURATION }} `
             /p:Platform=${{ env.BUILD_PLATFORM }} `
             /p:PlatformToolset=v143 `
             /p:WindowsTargetPlatformVersion=10.0 `
-            /p:BuildProjectReferences=false `
-            /m /verbosity:minimal 2>&1 | Tee-Object -FilePath main_build.log
+            /m /verbosity:minimal 2>&1 | Tee-Object -FilePath solution_build.log
           $exitCode = $LASTEXITCODE
         } catch {
           Write-Host "Build failed with exception: $_"
           $exitCode = 1
         }
 
-        if (!(Test-Path main_build.log)) {
-          "Build log was not generated" | Out-File main_build.log
+        if (!(Test-Path solution_build.log)) {
+          "Build log was not generated" | Out-File solution_build.log
         }
 
         # 扫描致命错误（排除汇总行）
         $pattern = "${{ env.FAIL_ERROR_REGEX }}"
-        $hits = Get-Content main_build.log | Select-String -Pattern $pattern
+        $hits = Get-Content solution_build.log | Select-String -Pattern $pattern
         $hits = $hits | Where-Object { $_.Line -notmatch '0 Error\\(s\\)' }
         if ($hits) {
-          $hits | ForEach-Object { $_.Line } | Out-File main_build.errors.txt
-          Write-Host "##[error]Fatal errors detected in main build"
+          $hits | ForEach-Object { $_.Line } | Out-File solution_build.errors.txt
+          Write-Host "##[error]Fatal errors detected in solution build"
           exit 1
         } else {
-          "未发现致命错误(main_build)。" | Out-File main_build.errors.txt
+          "未发现致命错误(solution_build)。" | Out-File solution_build.errors.txt
         }
         
         if ($exitCode -ne 0) {
-          Write-Host "##[error]Main build failed with exit code $exitCode"
+          Write-Host "##[error]Solution build failed with exit code $exitCode"
           exit $exitCode
         }
 
-    - name: Upload Main Build Log
+    - name: Upload Solution Build Log
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: main-build-log
+        name: solution-build-log
         path: |
-          main_build.log
-          main_build.errors.txt
+          solution_build.log
+          solution_build.errors.txt
         if-no-files-found: warn
 
-    # ================= 检查所有构建结果 =================
+    # ================= 检查构建结果 =================
     - name: Check Build Results
       if: always()
       shell: pwsh
       run: |
-        $failures = @()
-        
-        if ('${{ steps.build-lib.outcome }}' -eq 'failure') {
-          $failures += "LibreHardwareMonitor"
-        }
-        if ('${{ steps.build-wpf.outcome }}' -eq 'failure') {
-          $failures += "WPF-UI1"
-        }
-        if ('${{ steps.build-cpp-parsers.outcome }}' -eq 'failure') {
-          $failures += "CPP-parsers"
-        }
-        if ('${{ steps.build-main.outcome }}' -eq 'failure') {
-          $failures += "Main Solution"
-        }
-        
-        if ($failures.Count -gt 0) {
-          $failedModules = $failures -join ", "
-          Write-Host "##[error]Build failed for: $failedModules"
-          Write-Host "Failed modules: $failedModules" | Out-File build_failures.txt
+        if ('${{ steps.build-solution.outcome }}' -eq 'failure') {
+          Write-Host "##[error]Solution build failed"
+          Write-Host "Solution build failed" | Out-File build_failures.txt
           exit 1
         } else {
-          Write-Host "All builds completed successfully"
-          "All builds completed successfully" | Out-File build_failures.txt
+          Write-Host "Solution build completed successfully"
+          "Solution build completed successfully" | Out-File build_failures.txt
         }
 
     # ================= iFlow 分析（决策） =================
