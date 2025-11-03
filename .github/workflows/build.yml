@@ -105,6 +105,7 @@ jobs:
           nuget-${{ runner.os }}-
 
     - name: NuGet & Dotnet Restore
+      if: steps.cache-nuget.outputs.cache-hit != 'true'
       shell: pwsh
       run: |
         Write-Host "Restoring solution: ${{ env.SOLUTION_FILE_PATH }}"
@@ -112,6 +113,7 @@ jobs:
         dotnet restore ${{ env.SOLUTION_FILE_PATH }}
 
     - name: Cache MSBuild
+      id: cache-msbuild
       uses: actions/cache@v4
       with:
         path: C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\MSBuild
@@ -173,20 +175,46 @@ jobs:
 
     # ================= 检查构建结果 =================
     - name: Check Build Results
+      id: check-build
       if: always()
       shell: pwsh
       run: |
-        if ('${{ steps.build-solution.outcome }}' -eq 'failure') {
+        # 检查构建日志文件是否存在并包含错误
+        $buildFailed = $false
+        if (Test-Path "solution_build.errors.txt") {
+          $errorContent = Get-Content "solution_build.errors.txt" -Raw
+          if ($errorContent -notmatch "未发现致命错误") {
+            $buildFailed = $true
+          }
+        }
+        
+        if ($buildFailed -or !(Test-Path "solution_build.log")) {
           Write-Host "##[error]Solution build failed"
-          Write-Host "Solution build failed" | Out-File build_failures.txt
+          "Solution build failed" | Out-File build_failures.txt
+          "BUILD_STATUS=failed" | Out-File -FilePath build_status.env
           exit 1
         } else {
           Write-Host "Solution build completed successfully"
           "Solution build completed successfully" | Out-File build_failures.txt
+          "BUILD_STATUS=success" | Out-File -FilePath build_status.env
         }
+
+    # ================= 缓存构建结果 =================
+    - name: Cache Build Artifacts
+      id: cache-build-artifacts
+      uses: actions/cache@v4
+      with:
+        path: |
+          **/bin/${{ env.BUILD_CONFIGURATION }}/
+          **/x64/${{ env.BUILD_CONFIGURATION }}/
+          Project1/x64/${{ env.BUILD_CONFIGURATION }}/
+        key: build-artifacts-${{ runner.os }}-${{ hashFiles('**/*.cpp','**/*.h','**/*.cs','**/*.sln') }}
+        restore-keys: |
+          build-artifacts-${{ runner.os }}-
 
     # ================= iFlow 分析（决策） =================
     - name: Run iFlow CLI Analysis
+      if: steps.check-build.outputs.status == 'success'
       uses: iflow-ai/iflow-cli-action@v2.0.0
       with:
         api_key: ${{ secrets.IFLOW_API_KEY }}
@@ -249,6 +277,7 @@ jobs:
 
     # ================= iFlow 汇总（总结） =================
     - name: Run iFlow CLI Summary
+      if: always()
       uses: iflow-ai/iflow-cli-action@v2.0.0
       with:
         api_key: ${{ secrets.IFLOW_API_KEY }}
