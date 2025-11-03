@@ -29,17 +29,7 @@ jobs:
         ref: feature/iflow-cli-integration
         submodules: recursive
         fetch-depth: 0
-
-    - name: Sync LibreHardwareMonitor Submodule to Fork
-      shell: pwsh
-      run: |
-        Write-Host "Syncing LibreHardwareMonitor submodule to use forked repository..."
-        cd src/third_party/LibreHardwareMonitor
-        git remote set-url origin https://github.com/dongge0210/LibreHardwareMonitor
-        git fetch origin
-        git checkout master
-        git pull origin master
-
+        
     # ================= S.A.E.R 系统环境报告 =================
     - name: Generate S.A.E.R System Report
       shell: pwsh
