@@ -221,7 +221,10 @@ jobs:
       run: |
         $exitCode = 0
         try {
+          # Build the solution but exclude LibreHardwareMonitor since it's built separately
+          # Use /t:Project1 to only build the main project and its dependencies (excluding LibreHardwareMonitor)
           msbuild ${{ env.SOLUTION_FILE_PATH }} `
+            /t:Project1 `
             /p:Configuration=${{ env.BUILD_CONFIGURATION }} `
             /p:Platform=${{ env.BUILD_PLATFORM }} `
             /p:PlatformToolset=v143 `
