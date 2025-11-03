@@ -120,58 +120,122 @@ jobs:
 
     # ================= 构建各模块 =================
     - name: Build LibreHardwareMonitor
+      id: build-lib
+      continue-on-error: true
       shell: pwsh
       run: |
         cd src/third_party/LibreHardwareMonitor
-        dotnet build LibreHardwareMonitorLib/LibreHardwareMonitorLib.csproj `
-          -c Release -f net472 --no-restore `
-          2>&1 | Tee-Object -FilePath build_lib.log
-        if (!(Test-Path build_lib.log)) { Write-Error "build_lib.log missing" }
+        $exitCode = 0
+        try {
+          dotnet build LibreHardwareMonitorLib/LibreHardwareMonitorLib.csproj `
+            -c Release -f net472 -p:Platform=x64 --no-restore `
+            2>&1 | Tee-Object -FilePath build_lib.log
+          $exitCode = $LASTEXITCODE
+        } catch {
+          Write-Host "Build failed with exception: $_"
+          $exitCode = 1
+        }
+        if (!(Test-Path build_lib.log)) { 
+          "Build log was not generated" | Out-File build_lib.log
+        }
+        if ($exitCode -ne 0) {
+          Write-Host "##[error]LibreHardwareMonitor build failed with exit code $exitCode"
+          exit $exitCode
+        }
 
     - name: Upload LibreHardwareMonitor Build Log
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: lib-build-log
         path: src/third_party/LibreHardwareMonitor/build_lib.log
+        if-no-files-found: warn
 
     - name: Build WPF-UI1
+      id: build-wpf
+      continue-on-error: true
       shell: pwsh
       run: |
         cd WPF-UI1
-        dotnet build WPF-UI1.csproj -c Release --no-restore `
-          2>&1 | Tee-Object -FilePath wpfui1_build.log
-        if (!(Test-Path wpfui1_build.log)) { Write-Error "wpfui1_build.log missing" }
+        $exitCode = 0
+        try {
+          dotnet build WPF-UI1.csproj -c Release --no-restore `
+            2>&1 | Tee-Object -FilePath wpfui1_build.log
+          $exitCode = $LASTEXITCODE
+        } catch {
+          Write-Host "Build failed with exception: $_"
+          $exitCode = 1
+        }
+        if (!(Test-Path wpfui1_build.log)) { 
+          "Build log was not generated" | Out-File wpfui1_build.log
+        }
+        if ($exitCode -ne 0) {
+          Write-Host "##[error]WPF-UI1 build failed with exit code $exitCode"
+          exit $exitCode
+        }
 
     - name: Upload WPF-UI1 Build Log
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: wpf-build-log
         path: WPF-UI1/wpfui1_build.log
+        if-no-files-found: warn
 
     - name: Build CPP-parsers
+      id: build-cpp-parsers
+      continue-on-error: true
       shell: pwsh
       run: |
-        msbuild src/CPP-parsers/CPP-parsers/CPP-parsers.vcxproj `
-          /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 `
-          /p:WindowsTargetPlatformVersion=10.0 /m /verbosity:minimal `
-          2>&1 | Tee-Object -FilePath cpp_parsers_build.log
-        if (!(Test-Path cpp_parsers_build.log)) { Write-Error "cpp_parsers_build.log missing" }
+        $exitCode = 0
+        try {
+          msbuild src/CPP-parsers/CPP-parsers/CPP-parsers.vcxproj `
+            /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 `
+            /p:WindowsTargetPlatformVersion=10.0 /m /verbosity:minimal `
+            2>&1 | Tee-Object -FilePath cpp_parsers_build.log
+          $exitCode = $LASTEXITCODE
+        } catch {
+          Write-Host "Build failed with exception: $_"
+          $exitCode = 1
+        }
+        if (!(Test-Path cpp_parsers_build.log)) { 
+          "Build log was not generated" | Out-File cpp_parsers_build.log
+        }
+        if ($exitCode -ne 0) {
+          Write-Host "##[error]CPP-parsers build failed with exit code $exitCode"
+          exit $exitCode
+        }
 
     - name: Upload CPP-parsers Build Log
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: cpp-build-log
         path: cpp_parsers_build.log
+        if-no-files-found: warn
 
     - name: Build Main Solution
+      id: build-main
+      continue-on-error: true
       shell: pwsh
       run: |
-        msbuild ${{ env.SOLUTION_FILE_PATH }} `
-          /p:Configuration=${{ env.BUILD_CONFIGURATION }} `
-          /p:Platform=${{ env.BUILD_PLATFORM }} `
-          /p:PlatformToolset=v143 `
-          /p:WindowsTargetPlatformVersion=10.0 `
-          /m /verbosity:minimal 2>&1 | Tee-Object -FilePath main_build.log
+        $exitCode = 0
+        try {
+          msbuild ${{ env.SOLUTION_FILE_PATH }} `
+            /p:Configuration=${{ env.BUILD_CONFIGURATION }} `
+            /p:Platform=${{ env.BUILD_PLATFORM }} `
+            /p:PlatformToolset=v143 `
+            /p:WindowsTargetPlatformVersion=10.0 `
+            /m /verbosity:minimal 2>&1 | Tee-Object -FilePath main_build.log
+          $exitCode = $LASTEXITCODE
+        } catch {
+          Write-Host "Build failed with exception: $_"
+          $exitCode = 1
+        }
+
+        if (!(Test-Path main_build.log)) {
+          "Build log was not generated" | Out-File main_build.log
+        }
 
         # 扫描致命错误（排除汇总行）
         $pattern = "${{ env.FAIL_ERROR_REGEX }}"
@@ -179,19 +243,56 @@ jobs:
         $hits = $hits | Where-Object { $_.Line -notmatch '0 Error\\(s\\)' }
         if ($hits) {
           $hits | ForEach-Object { $_.Line } | Out-File main_build.errors.txt
-          Write-Host "Fatal errors detected in main build. Failing step."
+          Write-Host "##[error]Fatal errors detected in main build"
           exit 1
         } else {
           "未发现致命错误(main_build)。" | Out-File main_build.errors.txt
         }
+        
+        if ($exitCode -ne 0) {
+          Write-Host "##[error]Main build failed with exit code $exitCode"
+          exit $exitCode
+        }
 
     - name: Upload Main Build Log
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: main-build-log
         path: |
           main_build.log
           main_build.errors.txt
+        if-no-files-found: warn
+
+    # ================= 检查所有构建结果 =================
+    - name: Check Build Results
+      if: always()
+      shell: pwsh
+      run: |
+        $failures = @()
+        
+        if ('${{ steps.build-lib.outcome }}' -eq 'failure') {
+          $failures += "LibreHardwareMonitor"
+        }
+        if ('${{ steps.build-wpf.outcome }}' -eq 'failure') {
+          $failures += "WPF-UI1"
+        }
+        if ('${{ steps.build-cpp-parsers.outcome }}' -eq 'failure') {
+          $failures += "CPP-parsers"
+        }
+        if ('${{ steps.build-main.outcome }}' -eq 'failure') {
+          $failures += "Main Solution"
+        }
+        
+        if ($failures.Count -gt 0) {
+          $failedModules = $failures -join ", "
+          Write-Host "##[error]Build failed for: $failedModules"
+          Write-Host "Failed modules: $failedModules" | Out-File build_failures.txt
+          exit 1
+        } else {
+          Write-Host "All builds completed successfully"
+          "All builds completed successfully" | Out-File build_failures.txt
+        }
 
     # ================= iFlow 分析（决策） =================
     - name: Run iFlow CLI Analysis
