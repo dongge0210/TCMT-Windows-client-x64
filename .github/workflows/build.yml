@@ -333,7 +333,8 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
     
-    - name: Build CPP-parsers
+    - name: Build WPF-UI1 (parallel)
+      shell: pwsh
       run: |
         msbuild src/CPP-parsers/CPP-parsers/CPP-parsers.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m /verbosity:minimal 2>&1 | Tee-Object -FilePath cpp_parsers_build.log
     
@@ -354,20 +355,14 @@ jobs:
         submodules: recursive
         fetch-depth: 0
     
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v5
-      with:
-        dotnet-version: '8.x'
-    
-    - name: Setup MSBuild
-      uses: microsoft/setup-msbuild@v2
-    
-    - name: Restore solution
+    - name: Build CPP-parsers (parallel)
+      shell: pwsh
       run: |
         nuget restore ${{ env.SOLUTION_FILE_PATH }}
         dotnet restore ${{ env.SOLUTION_FILE_PATH }}
     
-    - name: Build main project
+    - name: Build main project (parallel)
+      shell: pwsh
       run: |
         msbuild ${{ env.SOLUTION_FILE_PATH }} /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ env.BUILD_PLATFORM }} /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m /verbosity:minimal 2>&1 | Tee-Object -FilePath main_build.log
         
