@@ -198,6 +198,216 @@ jobs:
         name: build-decision
         path: build_decision.json
 
+  # === 并行组4: 智能编译 ===
+  build-lib:
+    name: Build LibreHardwareMonitor
+    runs-on: windows-latest
+    needs: [setup-nuget]
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: dev
+        submodules: recursive
+        fetch-depth: 0
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: '8.x'
+    
+    - name: Build LibreHardwareMonitor
+      run: |
+        cd src/third_party/LibreHardwareMonitor
+        dotnet build LibreHardwareMonitorLib/LibreHardwareMonitorLib.csproj -c Release -f net472 --no-restore 2>&1 | Tee-Object -FilePath build_lib.log
+    
+    - name: Upload Build Log
+      uses: actions/upload-artifact@v4
+      with:
+        name: lib-build-log
+        path: build_lib.log
+
+  build-wpf:
+    name: Build WPF-UI1
+    runs-on: windows-latest
+    needs: [setup-nuget]
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: dev
+        submodules: recursive
+        fetch-depth: 0
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: '8.x'
+    
+    - name: Build WPF-UI1
+      run: |
+        cd WPF-UI1
+        dotnet build WPF-UI1.csproj -c Release --no-restore 2>&1 | Tee-Object -FilePath wpfui1_build.log
+    
+    - name: Upload Build Log
+      uses: actions/upload-artifact@v4
+      with:
+        name: wpf-build-log
+        path: wpfui1_build.log
+
+  build-cpp:
+    name: Build CPP-parsers
+    runs-on: windows-latest
+    needs: [setup-msbuild]
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: dev
+        submodules: recursive
+        fetch-depth: 0
+    
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+    
+    - name: Build CPP-parsers
+      run: |
+        msbuild src/CPP-parsers/CPP-parsers/CPP-parsers.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m /verbosity:minimal 2>&1 | Tee-Object -FilePath cpp_parsers_build.log
+    
+    - name: Upload Build Log
+      uses: actions/upload-artifact@v4
+      with:
+        name: cpp-build-log
+        path: cpp_parsers_build.log
+
+  build-main:
+    name: Build Main Project
+    runs-on: windows-latest
+    needs: [setup-nuget, setup-msbuild, setup-cuda, build-lib, build-wpf, build-cpp]
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: dev
+        submodules: recursive
+        fetch-depth: 0
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: '8.x'
+    
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+    
+    - name: Restore solution
+      run: |
+        nuget restore ${{ env.SOLUTION_FILE_PATH }}
+        dotnet restore ${{ env.SOLUTION_FILE_PATH }}
+    
+    - name: Build main project
+      run: |
+        msbuild ${{ env.SOLUTION_FILE_PATH }} /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ env.BUILD_PLATFORM }} /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m /verbosity:minimal 2>&1 | Tee-Object -FilePath main_build.log
+        
+        # 扫描致命错误
+        $lines = Get-Content main_build.log | Select-String -Pattern "${{ env.FAIL_ERROR_REGEX }}"
+        $lines = $lines | Where-Object { $_.Line -notmatch '0 Error\(s\)' }
+        if ($lines){
+          Set-Content main_build.errors.txt ($lines | ForEach-Object {$_.Line} | Out-String)
+          exit 1
+        } else {
+          Set-Content main_build.errors.txt "未发现致命错误(main_build)。"
+        }
+    
+    - name: Upload Build Log
+      uses: actions/upload-artifact@v4
+      with:
+        name: main-build-log
+        path: |
+          main_build.log
+          main_build.errors.txt
+
+  # === 并行组5: 测试运行（1分钟限时） ===
+  test-application:
+    name: Test Application (1min limited)
+    runs-on: windows-latest
+    needs: build-main
+    timeout-minutes: 1
+    continue-on-error: true
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: dev
+        submodules: recursive
+        fetch-depth: 0
+    
+    - name: Download all build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: "*-build-log"
+        merge-multiple: true
+    
+    - name: Test Application
+      run: |
+        # 查找主程序
+        $exeToRun = $null
+        if ($env:MAIN_EXE -and (Test-Path "Project1/x64/${{ env.BUILD_CONFIGURATION }}/$($env:MAIN_EXE)")) {
+          $exeToRun = (Get-Item "Project1/x64/${{ env.BUILD_CONFIGURATION }}/$($env:MAIN_EXE)").FullName
+        } else {
+          $exes = Get-ChildItem -Path "Project1/x64/${{ env.BUILD_CONFIGURATION }}" -Filter *.exe | Where-Object { $_.Name -notmatch 'vshost' }
+          if ($exes) {
+            $exeToRun = $exes[0].FullName
+          }
+        }
+        
+        if ($exeToRun) {
+          Write-Host "Starting application: $exeToRun"
+          Start-Process -FilePath $exeToRun
+          Start-Sleep -Seconds 30
+          
+          # 截图
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -AssemblyName System.Drawing
+          $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+          $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+          $graphics.CopyFromScreen($bounds.Location, [System.Windows.Point]::Empty, $bounds.Size)
+          $bitmap.Save("test_screenshot.png")
+          $graphics.Dispose(); $bitmap.Dispose()
+          
+          Write-Host "Application test completed"
+        } else {
+          Write-Host "No executable found for testing"
+        }
+    
+    - name: Upload Test Results
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results
+        path: test_screenshot.png
+
+  # === 并行组6: iflow-cli编译总结 ===
+  iflow-summary:
+    name: iFlow CLI Summary
+    runs-on: windows-latest
+    needs: [iflow-analysis, build-lib, build-wpf, build-cpp, build-main, test-application]
+    if: always()
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: dev
+        submodules: recursive
+        fetch-depth: 0
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: '8.x'
+    
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        merge-multiple: true
+    
     - name: Run iFlow CLI Summary
       uses: iflow-ai/iflow-cli-action@v2.0.0
       env:
