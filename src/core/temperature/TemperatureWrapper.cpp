@@ -2,11 +2,9 @@
 #include "../gpu/GpuInfo.h"
 #include "../utils/Logger.h"
 #include "../utils/WmiManager.h"
+#include "../Utils/LibreHardwareMonitorBridge.h"
 #include <algorithm>
 #include <cwctype>
-// 切换到托管代码模式来调用LibreHardwareMonitorBridge
-#pragma managed
-#include "../Utils/LibreHardwareMonitorBridge.h"
 
 // 静态成员定义
 bool TemperatureWrapper::initialized = false;

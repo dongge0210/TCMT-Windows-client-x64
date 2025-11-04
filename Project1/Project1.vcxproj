@@ -33,6 +33,7 @@
     <UseDebugLibraries>true</UseDebugLibraries>
     <PlatformToolset>v143</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
+    <LanguageStandard>stdcpp20</LanguageStandard>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
@@ -40,12 +41,14 @@
     <PlatformToolset>v143</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
+    <LanguageStandard>stdcpp20</LanguageStandard>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
     <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
+    <LanguageStandard>stdcpp20</LanguageStandard>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
@@ -53,6 +56,7 @@
     <PlatformToolset>v143</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
+    <LanguageStandard>stdcpp20</LanguageStandard>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
@@ -205,34 +209,17 @@ _WINSOCK_DEPRECATED_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefiniti
     <ClCompile Include="..\src\core\memory\MemoryInfo.cpp" />
     <ClCompile Include="..\src\core\network\NetworkAdapter.cpp" />
     <ClCompile Include="..\src\core\os\OSInfo.cpp" />
-    <ClCompile Include="..\src\core\temperature\TemperatureWrapper.cpp">
-      <CompileAsManaged Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</CompileAsManaged>
-      <CompileAsManaged Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</CompileAsManaged>
-      <BasicRuntimeChecks Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Default</BasicRuntimeChecks>
-      <BasicRuntimeChecks Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Default</BasicRuntimeChecks>
-      <AdditionalUsingDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(WindowsSDK_MetadataPath);C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.7.2;%(AdditionalUsingDirectories)</AdditionalUsingDirectories>
-      <AdditionalUsingDirectories Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(WindowsSDK_MetadataPath);C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.7.2;%(AdditionalUsingDirectories)</AdditionalUsingDirectories>
-      <AdditionalUsingDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(WindowsSDK_MetadataPath);C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.7.2;%(AdditionalUsingDirectories)</AdditionalUsingDirectories>
-      <AdditionalUsingDirectories Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(WindowsSDK_MetadataPath);C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.7.2;%(AdditionalUsingDirectories)</AdditionalUsingDirectories>
-      <CompileAsManaged Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</CompileAsManaged>
-      <CompileAsManaged Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</CompileAsManaged>
-    </ClCompile>
+    <ClCompile Include="..\src\core\temperature\TemperatureWrapper.cpp" />
     <ClCompile Include="..\src\core\tpm\TpmInfo.cpp" />
     <ClCompile Include="..\src\core\tpm\TpmInfoEnhanced.cpp" />
     <ClCompile Include="..\src\core\usb\USBInfo.cpp" />
     <ClCompile Include="..\src\core\Utils\MotherboardInfo.cpp" />
-    <ClCompile Include="..\src\core\Utils\LibreHardwareMonitorBridge.cpp">
-      <CompileAsManaged Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</CompileAsManaged>
-      <CompileAsManaged Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</CompileAsManaged>
-      <BasicRuntimeChecks Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Default</BasicRuntimeChecks>
-      <BasicRuntimeChecks Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Default</BasicRuntimeChecks>
-      <AdditionalUsingDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(WindowsSDK_MetadataPath);C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.7.2;%(AdditionalUsingDirectories)</AdditionalUsingDirectories>
-      <AdditionalUsingDirectories Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(WindowsSDK_MetadataPath);C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.7.2;%(AdditionalUsingDirectories)</AdditionalUsingDirectories>
-      <AdditionalUsingDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(WindowsSDK_MetadataPath);C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.7.2;%(AdditionalUsingDirectories)</AdditionalUsingDirectories>
-      <AdditionalUsingDirectories Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(WindowsSDK_MetadataPath);C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.7.2;%(AdditionalUsingDirectories)</AdditionalUsingDirectories>
-      <CompileAsManaged Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</CompileAsManaged>
-      <CompileAsManaged Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</CompileAsManaged>
-    </ClCompile>
+    <ClCompile Include="..\src\core\Utils\LibreHardwareMonitorBridge.cpp" />
+    <ClCompile Include="..\src\core\tpm\TpmInfo.cpp" />
+    <ClCompile Include="..\src\core\tpm\TpmInfoEnhanced.cpp" />
+    <ClCompile Include="..\src\core\usb\USBInfo.cpp" />
+    <ClCompile Include="..\src\core\Utils\MotherboardInfo.cpp" />
+    <ClCompile Include="..\src\core\Utils\LibreHardwareMonitorBridge.cpp" />
     <ClCompile Include="..\src\core\Utils\ComInitializationHelper.cpp" />
     <ClCompile Include="..\src\core\Utils\Logger.cpp" />
     <ClCompile Include="..\src\core\Utils\TimeUtils.cpp" />
