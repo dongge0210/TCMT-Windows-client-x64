@@ -87,15 +87,6 @@ jobs:
           cuda: '12.6.0'
           method: 'network'
 
-      - name: Cache NuGet packages
-        id: cache-nuget
-        uses: actions/cache@v4
-        with:
-          path: ~/.nuget/packages
-          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.sln','**/*.csproj','**/packages.config') }}
-          restore-keys: |
-            nuget-${{ runner.os }}-
-
       - name: NuGet & Dotnet Restore
         shell: pwsh
         run: |
