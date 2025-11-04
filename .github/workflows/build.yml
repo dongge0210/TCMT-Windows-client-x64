@@ -106,6 +106,10 @@ jobs:
         shell: pwsh
         continue-on-error: true
         run: |
+          # First build .NET projects with dotnet build (which handles restore automatically)
+          dotnet build ${{ env.SOLUTION_FILE_PATH }} --configuration ${{ env.BUILD_CONFIGURATION }} --verbosity minimal 2>&1 | Tee-Object -FilePath dotnet_build.log
+          
+          # Then build C++ projects with msbuild
           msbuild ${{ env.SOLUTION_FILE_PATH }} `
             /p:Configuration=${{ env.BUILD_CONFIGURATION }} `
             /p:Platform=${{ env.BUILD_PLATFORM }} `
@@ -150,6 +154,7 @@ jobs:
           name: build-logs
           path: |
             saer.txt
+            dotnet_build.log
             solution_build.log
             solution_build.errors.txt
 
