@@ -2,14 +2,10 @@ name: Build TCMT Windows Client
 
 on:
   push:
-    branches: [ main, dev, feature/iflow-cli-integration ]
+    branches: [ main, dev ]
   pull_request:
     branches: [ main, dev, feature/iflow-cli-integration ]
   workflow_dispatch:
-
-permissions:
-  contents: read
-  pull-requests: write
 
 env:
   SOLUTION_FILE_PATH: Project1/Project1.sln
