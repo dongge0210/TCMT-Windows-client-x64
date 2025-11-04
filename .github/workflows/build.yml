@@ -2,10 +2,14 @@ name: Build TCMT Windows Client
 
 on:
   push:
-    branches: [ main, dev ]
+    branches: [ main, dev, feature/iflow-cli-integration ]
   pull_request:
     branches: [ main, dev, feature/iflow-cli-integration ]
   workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
 
 env:
   SOLUTION_FILE_PATH: Project1/Project1.sln
@@ -120,17 +124,14 @@ jobs:
             /p:WindowsTargetPlatformVersion=10.0 `
             /m /verbosity:minimal 2>&1 | Tee-Object -FilePath solution_build.log
           $exitCode = $LASTEXITCODE
-
-          if (!(Test-Path solution_build.log)) {
-            "Build log was not generated" | Out-File solution_build.log
-          }
+          if (!(Test-Path solution_build.log)) { "Build log was not generated" | Out-File solution_build.log }
 
           $fatalErrors = @()
           $warnings = 0
           $errorPatterns = @(
-            'fatal error', 'fatal: ', 'error LNK\d{4}', 'LNK\d{4}',
-            'unresolved external symbol', 'undefined reference',
-            'LINK : fatal error', 'error CS\d+:', 'NETSDK\d+:'
+            'fatal error','fatal: ','error LNK\d{4}','LNK\d{4}',
+            'unresolved external symbol','undefined reference',
+            'LINK : fatal error','error CS\d+:','NETSDK\d+:'
           )
 
           Get-Content solution_build.log | ForEach-Object {
@@ -191,7 +192,7 @@ jobs:
           path: ./build_output
         continue-on-error: true
 
-      # ---------- 决策步骤（独立） ----------
+      # ---------- 决策步骤：生成 build_decision.json (含 should_submit_pr) ----------
       - name: Run iFlow Build Decision
         id: iflow-decision
         uses: iflow-ai/iflow-cli-action@v2.0.0
@@ -201,38 +202,42 @@ jobs:
           timeout: "900"
           working_directory: "."
           prompt: |
-            你现在执行“构建决策”分析。生成 build_decision.json（UTF-8，无 BOM），不要在控制台打印 JSON 正文。
+            现在执行构建决策。生成 build_decision.json（UTF-8，无 BOM），不在控制台打印 JSON 内容。
             模块：
               C++: src/core/, src/main.cpp, src/CPP-parsers/
               WPF: WPF-UI1/ 下 .xaml/.cs
               第三方: src/third_party/
-            获取 diff：git diff --name-only HEAD~1 HEAD；失败或为空 → 视为无 diff。
+            获取 diff：git diff --name-only HEAD~1 HEAD；失败或为空 => 视为无 diff。
             规则：
-              - diff 命中 main.cpp 或 src/core/ 任意文件 → build_cpp=true
-              - diff 命中 WPF-UI1/ .xaml/.cs → build_wpf=true
-              - diff 命中 src/third_party/ → build_lib=true
+              命中 main.cpp 或 src/core/ 任意文件 => build_cpp=true
+              命中 WPF-UI1/ .xaml/.cs => build_wpf=true
+              命中 src/third_party/ => build_lib=true
             use_cache：
-              - diff 文件数 ≤8 且未命中 src/core/ 或 main.cpp 且未命中第三方大型库文件 (.lib/.dll/.h 新增或删除) → true
-              - 否则 false
+              diff 文件数 ≤8 且未命中核心( main.cpp / src/core/ ) 且未命中第三方大型库文件(.lib/.dll/.h 新增或删除) => true；否则 false
             priority：
-              - 仅包含为 true 的模块
-              - build_cpp=true → cpp 排第一
-              - build_lib=true 且其 diff 中含头文件/库文件(.h/.lib/.dll) → lib 在 cpp 前；否则在 cpp 后
-              - wpf 在最后（除非只有 wpf）
-            无 diff 兜底：
-              build_cpp=true, build_wpf=true, build_lib=true, use_cache=false, priority=["cpp","lib","wpf"], reason="无 diff，全量构建"
-            若全部 false → 兜底 build_cpp=true，reason 含“兜底”说明。
-            输出字段与顺序：
+              仅列 true 模块；build_cpp 若为 true 置前；
+              build_lib 若为 true 且 diff 含 .h/.lib/.dll 且 cpp 也需构建 => 放在 cpp 前，否则放 cpp 后；
+              wpf 放最后（除非只有 wpf）。
+            无 diff 兜底：全部 true, use_cache=false, priority=["cpp","lib","wpf"], reason 含“无 diff 全量构建”。
+            若全部 false：兜底 build_cpp=true，reason 含“兜底”。
+            新增字段 should_submit_pr：
+              - 若有任一模块为 true 或检测到致命错误迹象（solution_build.log 中出现 fatal / LNK / unresolved） => should_submit_pr=true
+              - 否则 should_submit_pr=false
+            输出严格：
             {
               "build_cpp": <bool>,
               "build_wpf": <bool>,
               "build_lib": <bool>,
               "use_cache": <bool>,
               "priority": [ ... ],
+              "should_submit_pr": <bool>,
               "reason": "≤400中文字符"
             }
-            priority 不含 false 模块；不加额外字段；true/false 小写。
+            不加多余字段；true/false 小写；priority 不含 false 模块。
             仅写文件 build_decision.json。
+
+            注意1:build_decision.json会被下一个AI接手,它会通过你描述的总结,请确保其格式正确且符合要求.
+            注意2:你所在的环境只能允许做以上给你的任务,不要尝试做其他任何事情.(git除外)
 
       - name: 上传构建决策
         uses: actions/upload-artifact@v4
@@ -240,86 +245,83 @@ jobs:
           name: build-decision
           path: build_decision.json
 
-      # ---------- 汇总步骤（独立） ----------
-      - name: Run iFlow Build Summary
+      # ---------- 汇总步骤：生成 summary.md (Markdown 报告) ----------
+      - name: Run iFlow Build Summary (Markdown)
         id: iflow-summary
         uses: iflow-ai/iflow-cli-action@v2.0.0
         with:
           api_key: ${{ secrets.IFLOW_API_KEY }}
           model: "glm-4.6"
           timeout: "900"
-            # 若不是 PR 也要运行以产出总结文件，但仅在 PR 事件评论
           working_directory: "."
           prompt: |
-            执行构建结果汇总，读取：saer.txt, solution_build.log, build_decision.json(若存在)。
-            输出 build_summary.json（UTF-8，无 BOM），结构：
-            {
-              "overall_status":"success|failure|partial",
-              "components":{
-                "cpp":{"status":"success|failure|unknown","errors":0,"warnings":0},
-                "wpf":{"status":"success|failure|unknown","errors":0,"warnings":0},
-                "lib":{"status":"success|failure|unknown","errors":0,"warnings":0},
-                "main":{"status":"success|failure|unknown","errors":0,"warnings":0}
-              },
-              "key_issues":[...≤12],
-              "recommendations":[...],
-              "summary_text":"≤600中文字符总结"
-            }
-            日志解析（solution_build.log）：
-              errors 匹配：fatal error|fatal:|unresolved external symbol|undefined reference|LINK : fatal error|LNK\d{4}|NETSDK\d+|error CS\d+
-              warnings 匹配：\bwarning\b
-            模块状态：
-              命中 C++ 路径相关错误 → cpp=failure
-              命中 WPF-UI1 路径错误 → wpf=failure
-              命中 src/third_party 错误 → lib=failure
-              任一 fatal/link/NETSDK 错误 → main=failure
-              未判定 → unknown
-            overall_status：
-              全 success → success
-              有 failure 且有 success → partial
-              全 failure 或 main=failure → failure
-            无日志兜底：overall_status=failure，全部 unknown，key_issues=["缺少构建日志"]，recommendations=["检查构建日志采集"]。
-            key_issues 只选最重要（fatal/link/符号缺失/依赖），多于12截断。
-            recommendations 针对问题给可执行短语，如：
-              - 检查第三方库版本兼容
-              - 修复 unresolved external symbol
-              - 重新还原 NuGet 包
-              - 处理 WPF XAML 绑定错误
-            summary_text 结构（不带 JSON）：
-              行1 总体 + 简述
-              行2 模块状态 (只列出现的：CPP=成功/失败, WPF=..., LIB=..., MAIN=...)
-              行3 关键问题概述 + 建议（用顿号或分号分隔） 换行 ≤3
-            写文件后：
-              若是 PR 事件 (github.event_name == 'pull_request') → 自动用 GITHUB_TOKEN 评论 summary_text 到该 PR。
-              非 PR 不评论。
-            仅写 build_summary.json（不要在控制台打印 JSON 正文）。
+            读取文件：saer.txt, solution_build.log, build_decision.json(若存在)。
+            生成 Markdown 报告 summary.md（UTF-8，无 BOM），用于 PR 评论。
+            内容结构：
+            # 构建汇总
+            ## 总体状态
+            - overall: success|failure|partial （规则：
+              * 所有模块无致命错误且日志无 fatal/LNK/unresolved/NETSDK => success
+              * 部分存在错误但非全部 => partial
+              * 存在 fatal / 链接失败 / unresolved / NETSDK / 构建退出码非零 => failure）
+            ## 模块状态
+            - 列出：CPP / WPF / LIB / MAIN，各自 success|failure|unknown（用路径匹配与错误关键字）
+            ## 关键问题
+            - 归纳：fatal error / unresolved external symbol / undefined reference / LNKxxxx / NETSDK / 缺失依赖 等（最多列 12 条）
+            ## 建议
+            - 针对关键问题给可执行建议（如“修复未解析符号”“重新还原 NuGet 包”“检查第三方库版本”）
+            ## 环境摘录
+            - 从 saer.txt 中挑选 CPU, 内存, OS 一行概述
+            ## 决策摘要
+            - 从 build_decision.json 中列出：build_cpp / build_wpf / build_lib / use_cache / should_submit_pr / priority
+            约束：
+            - 控制总长度 ≤ 1200 中文字符
+            - 不输出 JSON 到控制台
+            - 标题使用一级/二级 Markdown，列表用短横线
+            写入 summary.md（仅文件）。
 
-      - name: 上传构建汇总
+            注意:你所在的环境只能允许做以上给你的任务,不要尝试做其他任何事情.(git除外)
+
+      - name: 上传汇总 Markdown
         uses: actions/upload-artifact@v4
         with:
-            name: build-summary
-            path: build_summary.json
+          name: build-summary-md
+          path: summary.md
 
-      # 备用评论（仅当 iflow action 不支持自动评论时取消注释）
-      # - name: 备用：PR 评论
-      #   if: github.event_name == 'pull_request'
-      #   uses: actions/github-script@v7
-      #   with:
-      #     script: |
-      #       const fs = require('fs');
-      #       if (!fs.existsSync('build_summary.json')) {
-      #         github.issues.createComment({
-      #           issue_number: context.issue.number,
-      #           owner: context.repo.owner,
-      #           repo: context.repo.repo,
-      #           body: '未找到 build_summary.json，无法生成汇总。'
-      #         });
-      #       } else {
-      #         const data = JSON.parse(fs.readFileSync('build_summary.json','utf8'));
-      #         github.issues.createComment({
-      #           issue_number: context.issue.number,
-      #           owner: context.repo.owner,
-      #           repo: context.repo.repo,
-      #           body: data.summary_text || 'summary_text 字段为空。'
-      #         });
-      #       }
+      # ---------- 基于 should_submit_pr 决定是否评论 PR ----------
+      - name: PR 评论 (基于决策)
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let decision = {};
+            let should = false;
+            if (fs.existsSync('build_decision.json')) {
+              try {
+                decision = JSON.parse(fs.readFileSync('build_decision.json','utf8'));
+                should = !!decision.should_submit_pr;
+              } catch(e) {
+                should = true; // 解析失败时默认评论，方便排错
+              }
+            } else {
+              should = true; // 没决策文件也评论
+            }
+
+            let summary = '';
+            if (fs.existsSync('summary.md')) {
+              summary = fs.readFileSync('summary.md','utf8');
+            } else {
+              summary = 'warning: 未找到 summary.md，无法提供构建汇总内容。';
+            }
+
+            if (!should) {
+              summary = '（iFlow 选择本次构建无需提交 PR 评论 should_submit_pr=false）\n\n' + summary;
+            }
+
+            await github.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: summary
+            });
