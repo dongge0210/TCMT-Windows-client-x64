@@ -239,6 +239,18 @@ jobs:
           name: build-decision
           path: build_decision.json
 
+      # ---------- 缓存 iFlow CLI 结果 ----------
+      - name: Cache iFlow CLI Results
+        id: cache-iflow
+        uses: actions/cache@v4
+        with:
+          path: |
+            build_decision.json
+            summary.md
+          key: iflow-${{ github.run_id }}-${{ github.sha }}
+          restore-keys: |
+            iflow-${{ github.run_id }}-
+
       # ---------- 汇总步骤：生成 summary.md (Markdown 报告) ----------
       - name: Run iFlow Build Summary (Markdown)
         id: iflow-summary
@@ -281,6 +293,15 @@ jobs:
         with:
           name: build-summary-md
           path: summary.md
+
+      - name: Save iFlow CLI Results to Cache
+        if: always()
+        uses: actions/cache@v4
+        with:
+          path: |
+            build_decision.json
+            summary.md
+          key: iflow-${{ github.run_id }}-${{ github.sha }}
 
       # ---------- 基于 should_submit_pr 决定是否评论 PR ----------
       - name: PR 评论 (基于决策)
