@@ -14,370 +14,337 @@ env:
   ERROR_KEYWORDS: "error|warning|fatal|undefined"
   FAIL_ERROR_REGEX: "(?i)(: error | fatal error| fatal: |\\berror LNK[0-9]{4}\\b|\\bLNK[0-9]{4}\\b|unresolved external symbol|undefined reference|LINK : fatal error)"
   MAIN_EXE: ""
-  # 统一的时间格式用于日志（可选）
   TZ: Asia/Shanghai
 
 jobs:
-  full-build:
-    runs-on: windows-latest
-    timeout-minutes: 90
-
+  analyze:
+    name: IFlow分析（Linux容器）
+    runs-on: ubuntu-latest
     steps:
-    - name: Checkout (with submodules)
-      uses: actions/checkout@v5
-      with:
-        ref: feature/iflow-cli-integration
-        submodules: recursive
-        fetch-depth: 0
-        
-    # ================= S.A.E.R 系统环境报告 =================
-    - name: Generate S.A.E.R System Report
-      shell: pwsh
-      run: |
-        $report = "saer.txt"
-        "=== SYSTEM AND ENVIRONMENT REPORT ===" | Out-File $report
-        "" | Out-File $report -Append
-        "Timestamp (UTC): $(Get-Date -AsUTC)" | Out-File $report -Append
-        "" | Out-File $report -Append
-        "== Hardware ==" | Out-File $report -Append
-        Get-CimInstance -ClassName Win32_ComputerSystem |
-          Select-Object Manufacturer, Model, TotalPhysicalMemory,
-            @{Name="RAM(GB)";Expression={[math]::Round($_.TotalPhysicalMemory/1GB,2)}} |
-          Format-Table | Out-File $report -Append
-        "" | Out-File $report -Append
-        "== CPU ==" | Out-File $report -Append
-        Get-CimInstance -ClassName Win32_Processor |
-          Select-Object Name, NumberOfCores, NumberOfLogicalProcessors, MaxClockSpeed |
-          Format-Table | Out-File $report -Append
-        "" | Out-File $report -Append
-        "== OS & Arch ==" | Out-File $report -Append
-        "OS: $env:OS" | Out-File $report -Append
-        "PROCESSOR_ARCHITECTURE: $env:PROCESSOR_ARCHITECTURE" | Out-File $report -Append
-        "" | Out-File $report -Append
-        "== Git Version ==" | Out-File $report -Append
-        (git --version) | Out-File $report -Append
-        "" | Out-File $report -Append
-        "== Selected Environment Variables ==" | Out-File $report -Append
-        Get-ChildItem Env: |
-          Where-Object { $_.Name -match 'PATH|CUDA|MSBUILD|VISUAL|GITHUB|RUNNER' } |
-          Select-Object Name, Value |
-          Format-Table | Out-File $report -Append
-        "" | Out-File $report -Append
-        "== Repo File Tree (Top 200) ==" | Out-File $report -Append
-        (git ls-tree -r --name-only HEAD | Select-Object -First 200) | Out-File $report -Append
+      - name: 检出代码
+        uses: actions/checkout@v5
+        with:
+          ref: feature/iflow-cli-integration
+          submodules: recursive
+          fetch-depth: 0
 
-    - name: Upload S.A.E.R Report
-      uses: actions/upload-artifact@v4
-      with:
-        name: saer-report
-        path: saer.txt
+      - name: 生成S.A.E.R环境报告
+        run: |
+          echo "=== SYSTEM AND ENVIRONMENT REPORT ===" > saer.txt
+          echo "" >> saer.txt
+          echo "Timestamp (UTC): $(date -u)" >> saer.txt
+          echo "" >> saer.txt
+          echo "== Hardware ==" >> saer.txt
+          lscpu >> saer.txt
+          echo "" >> saer.txt
+          echo "== OS & Arch ==" >> saer.txt
+          echo "OS: $(uname -a)" >> saer.txt
+          echo "" >> saer.txt
+          echo "== Git Version ==" >> saer.txt
+          git --version >> saer.txt
+          echo "" >> saer.txt
+          echo "== Repo File Tree (Top 200) ==" >> saer.txt
+          git ls-tree -r --name-only HEAD | head -n 200 >> saer.txt
 
-    # ================= 环境准备 (.NET / MSBuild / CUDA 缓存) =================
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v5
-      with:
-        dotnet-version: '8.x'
+      - name: 上传S.A.E.R报告
+        uses: actions/upload-artifact@v4
+        with:
+          name: saer-report
+          path: saer.txt
 
-    - name: Setup MSBuild
-      uses: microsoft/setup-msbuild@v2
+      - name: 执行iFlow CLI分析
+        uses: iflow-ai/iflow-cli-action@v2.0.0
+        with:
+          api_key: ${{ secrets.IFLOW_API_KEY }}
+          model: "glm-4.6"
+          timeout: "1800"
+          working_directory: "."
+          prompt: |
+            ## 角色
+            你是一个CI/CD智能决策助手，需根据增量代码变更决定本次构建应编译哪些模块并给出原因。
+            ## 输入资源
+            - Git 仓库当前工作副本
+            - 需判断的模块目录：
+              * C++: src/core/, src/main.cpp, src/CPP-parsers/
+              * WPF: WPF-UI1/
+              * 第三方库: src/third_party/
+            - 构建日志（稍后步骤生成，当前可仅基于代码差异）
+            ## 目标输出
+            写出一个 JSON 文件 build_decision.json（UTF-8，无 BOM），结构：
+            {
+              "build_cpp": <true|false>,
+              "build_wpf": <true|false>,
+              "build_lib": <true|false>,
+              "use_cache": <true|false>,
+              "priority": ["cpp","wpf","lib"],
+              "reason": "用简洁中文说明判定逻辑，列出触发编译的关键文件或目录"
+            }
+            ## 行为要求
+            1. 运行: git diff --name-only HEAD~1 HEAD （如 HEAD~1 不存在则比较最近一次提交与其父或仅列出当前快照重要文件）
+            2. 根据文件路径命中上述模块分类；只要目录/文件前缀匹配就标记对应模块需编译。
+            3. 如果 main.cpp 或核心头/源 (src/core/) 有变更 → build_cpp 必须为 true。
+            4. 如果 WPF-UI1/ 下任何 .xaml / .cs 变更 → build_wpf = true。
+            5. 如果 src/third_party/ 下有变更 → build_lib = true。
+            6. use_cache 判断：若变更只影响少量非核心文件且缓存命中，可设为 true；否则 false。
+            7. priority：若多个模块都需要编译，优先级规则...
+            8. 输出 JSON 时保证字段顺序与示例一致，不加额外字段。
+            ## 输出要求
+            直接生成 build_decision.json 文件，不在控制台输出 JSON 内容。
 
-    - name: Cache CUDA
-      id: cache-cuda
-      uses: actions/cache@v4
-      with:
-        path: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6
-        key: cuda-12.6-${{ runner.os }}
+      - name: 上传分析决策
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-decision
+          path: build_decision.json
 
-    - name: Setup CUDA 12.6
-      if: steps.cache-cuda.outputs.cache-hit != 'true'
-      uses: Jimver/cuda-toolkit@v0.2.18
-      with:
-        cuda: '12.6.0'
-        method: 'network'
+  build:
+    name: Windows编译构建
+    runs-on: windows-latest
+    needs: analyze
+    timeout-minutes: 90
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+        with:
+          ref: feature/iflow-cli-integration
+          submodules: recursive
+          fetch-depth: 0
 
-    - name: Cache NuGet packages
-      id: cache-nuget
-      uses: actions/cache@v4
-      with:
-        path: ~/.nuget/packages
-        key: nuget-${{ runner.os }}-${{ hashFiles('**/*.sln','**/*.csproj','**/packages.config') }}
-        restore-keys: |
-          nuget-${{ runner.os }}-
+      - name: 下载分析报告
+        uses: actions/download-artifact@v4
+        with:
+          name: build-decision
+          path: .
 
-    - name: NuGet & Dotnet Restore
-      if: steps.cache-nuget.outputs.cache-hit != 'true'
-      shell: pwsh
-      run: |
-        Write-Host "Restoring solution: ${{ env.SOLUTION_FILE_PATH }}"
-        nuget restore ${{ env.SOLUTION_FILE_PATH }}
-        dotnet restore ${{ env.SOLUTION_FILE_PATH }}
+      - name: 下载环境报告
+        uses: actions/download-artifact@v4
+        with:
+          name: saer-report
+          path: .
 
-    - name: Cache MSBuild
-      id: cache-msbuild
-      uses: actions/cache@v4
-      with:
-        path: C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\MSBuild
-        key: msbuild-${{ runner.os }}-${{ hashFiles('**/*.sln') }}
-        restore-keys: msbuild-${{ runner.os }}-
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.x'
 
-    # ================= 构建解决方案 =================
-    - name: Build Solution
-      id: build-solution
-      continue-on-error: true
-      shell: pwsh
-      run: |
-        $exitCode = 0
-        try {
-          # Build the entire solution in the order defined by the .sln file
-          # The solution should handle build dependencies correctly
-          msbuild ${{ env.SOLUTION_FILE_PATH }} `
-            /p:Configuration=${{ env.BUILD_CONFIGURATION }} `
-            /p:Platform=${{ env.BUILD_PLATFORM }} `
-            /p:PlatformToolset=v143 `
-            /p:WindowsTargetPlatformVersion=10.0 `
-            /m /verbosity:minimal 2>&1 | Tee-Object -FilePath solution_build.log
-          $exitCode = $LASTEXITCODE
-        } catch {
-          Write-Host "Build failed with exception: $_"
-          $exitCode = 1
-        }
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
 
-        if (!(Test-Path solution_build.log)) {
-          "Build log was not generated" | Out-File solution_build.log
-        }
+      - name: Cache CUDA
+        id: cache-cuda
+        uses: actions/cache@v4
+        with:
+          path: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6
+          key: cuda-12.6-${{ runner.os }}
 
-        # 扫描真正的致命错误（更精确的检测）
-        $fatalErrors = @()
-        $warningLines = @()
-        
-        # 定义真正的错误模式（排除警告和汇总信息）
-        $errorPatterns = @(
-          ': error [A-Z]\w+\d+:',
-          'fatal error',
-          'fatal: ',
-          'error LNK\d{4}',
-          'LNK\d{4}',
-          'unresolved external symbol',
-          'undefined reference',
-          'LINK : fatal error',
-          'MSB\d+: error A-Z',
-          'error CS\d+:',
-          'NETSDK\d+:'
-        )
-        
-        # 逐行分析构建日志
-        Get-Content solution_build.log | ForEach-Object {
-          $line = $_.Trim()
-          
-          # 跳过汇总行和空行
-          if ($line -match '^(\d+>)?\s*(error|warning|fatal)' -or $line -match '0 error\(s\)' -or $line -match '0 warning\(s\)') {
-            continue
+      - name: Setup CUDA 12.6
+        if: steps.cache-cuda.outputs.cache-hit != 'true'
+        uses: Jimver/cuda-toolkit@v0.2.18
+        with:
+          cuda: '12.6.0'
+          method: 'network'
+
+      - name: Cache NuGet packages
+        id: cache-nuget
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.sln','**/*.csproj','**/packages.config') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
+      - name: NuGet & Dotnet Restore
+        if: steps.cache-nuget.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          Write-Host "Restoring solution: ${{ env.SOLUTION_FILE_PATH }}"
+          nuget restore ${{ env.SOLUTION_FILE_PATH }}
+          dotnet restore ${{ env.SOLUTION_FILE_PATH }}
+
+      - name: Cache MSBuild
+        id: cache-msbuild
+        uses: actions/cache@v4
+        with:
+          path: C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\MSBuild
+          key: msbuild-${{ runner.os }}-${{ hashFiles('**/*.sln') }}
+          restore-keys: msbuild-${{ runner.os }}-
+
+      - name: 构建主工程
+        id: build-solution
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $exitCode = 0
+          try {
+            msbuild ${{ env.SOLUTION_FILE_PATH }} `
+              /p:Configuration=${{ env.BUILD_CONFIGURATION }} `
+              /p:Platform=${{ env.BUILD_PLATFORM }} `
+              /p:PlatformToolset=v143 `
+              /p:WindowsTargetPlatformVersion=10.0 `
+              /m /verbosity:minimal 2>&1 | Tee-Object -FilePath solution_build.log
+            $exitCode = $LASTEXITCODE
+          } catch {
+            Write-Host "Build failed with exception: $_"
+            $exitCode = 1
           }
-          
-          # 检查是否包含真正的错误
-          $isError = $false
-          foreach ($pattern in $errorPatterns) {
-            if ($line -match $pattern) {
-              $isError = $true
-              break
+
+          if (!(Test-Path solution_build.log)) {
+            "Build log was not generated" | Out-File solution_build.log
+          }
+
+          $fatalErrors = @()
+          $warningLines = @()
+          $errorPatterns = @(
+            ': error [A-Z]\w+\d+:', 'fatal error', 'fatal: ', 'error LNK\d{4}',
+            'LNK\d{4}', 'unresolved external symbol', 'undefined reference',
+            'LINK : fatal error', 'MSB\d+: error A-Z', 'error CS\d+:', 'NETSDK\d+:'
+          )
+          Get-Content solution_build.log | ForEach-Object {
+            $line = $_.Trim()
+            if ($line -match '^(\d+>)?\s*(error|warning|fatal)' -or $line -match '0 error\(s\)' -or $line -match '0 warning\(s\)') { continue }
+            $isError = $false
+            foreach ($pattern in $errorPatterns) { if ($line -match $pattern) { $isError = $true; break } }
+            if ($isError) { $fatalErrors += $line }
+            elseif ($line -match 'warning') { $warningLines += $line }
+          }
+          if ($fatalErrors.Count -gt 0) {
+            "发现 $($fatalErrors.Count) 个致命错误:" | Out-File solution_build.errors.txt
+            $fatalErrors | ForEach-Object { $_ } | Out-File solution_build.errors.txt -Append
+            "" | Out-File solution_build.errors.txt -Append
+            "警告信息 ($($warningLines.Count) 个):" | Out-File solution_build.errors.txt -Append
+            $warningLines | ForEach-Object { $_ } | Out-File solution_build.errors.txt -Append
+            Write-Host "##[error]Build failed with $($fatalErrors.Count) fatal errors"
+            exit 1
+          } else {
+            "构建成功，无致命错误。" | Out-File solution_build.errors.txt
+            if ($warningLines.Count -gt 0) {
+              "发现 $($warningLines.Count) 个警告（不影响构建）:" | Out-File solution_build.errors.txt -Append
+              $warningLines | ForEach-Object { $_ } | Out-File solution_build.errors.txt -Append
             }
           }
-          
-          if ($isError) {
-            $fatalErrors += $line
-          } elseif ($line -match 'warning') {
-            $warningLines += $line
+          if ($exitCode -ne 0 -and $fatalErrors.Count -eq 0) {
+            Write-Host "##[warning]Build process failed with exit code $exitCode but no fatal errors detected"
+            Write-Host "This might be a toolchain issue, not a code compilation error"
+          } elseif ($exitCode -ne 0) {
+            Write-Host "##[error]Build failed with exit code $exitCode"
+            exit $exitCode
           }
-        }
-        
-        # 输出检测结果
-        if ($fatalErrors.Count -gt 0) {
-          "发现 $($fatalErrors.Count) 个致命错误:" | Out-File solution_build.errors.txt
-          $fatalErrors | ForEach-Object { $_ } | Out-File solution_build.errors.txt -Append
-          "" | Out-File solution_build.errors.txt -Append
-          "警告信息 ($($warningLines.Count) 个):" | Out-File solution_build.errors.txt -Append
-          $warningLines | ForEach-Object { $_ } | Out-File solution_build.errors.txt -Append
-          Write-Host "##[error]Build failed with $($fatalErrors.Count) fatal errors"
-          exit 1
-        } else {
-          "构建成功，无致命错误。" | Out-File solution_build.errors.txt
-          if ($warningLines.Count -gt 0) {
-            "发现 $($warningLines.Count) 个警告（不影响构建）:" | Out-File solution_build.errors.txt -Append
-            $warningLines | ForEach-Object { $_ } | Out-File solution_build.errors.txt -Append
-          }
-        }
-        
-        # 只有在真正有构建错误时才检查退出码
-        if ($exitCode -ne 0 -and $fatalErrors.Count -eq 0) {
-          Write-Host "##[warning]Build process failed with exit code $exitCode but no fatal errors detected"
-          Write-Host "This might be a toolchain issue, not a code compilation error"
-        } elseif ($exitCode -ne 0) {
-          Write-Host "##[error]Build failed with exit code $exitCode"
-          exit $exitCode
-        }
 
-    - name: Upload Solution Build Log
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: solution-build-log
-        path: |
-          solution_build.log
-          solution_build.errors.txt
-        if-no-files-found: warn
+      - name: 上传构建日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solution-build-log
+          path: |
+            solution_build.log
+            solution_build.errors.txt
+          if-no-files-found: warn
 
-    
+      - name: 上传Windows产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: win-build-output
+          path: |
+            Project1/x64/${{ env.BUILD_CONFIGURATION }}/*.exe
+            Project1/x64/${{ env.BUILD_CONFIGURATION }}/*.dll
 
-    # ================= iFlow 分析（决策） =================
-    - name: Run iFlow CLI Analysis
-      if: steps.build-solution.outcome == 'success'
-      uses: iflow-ai/iflow-cli-action@v2.0.0
-      with:
-        api_key: ${{ secrets.IFLOW_API_KEY }}
-        model: "glm-4.6"
-        timeout: "1800"
-        working_directory: "."
-        prompt: |
-          ## 角色
-          你是一个CI/CD智能决策助手，需根据增量代码变更决定本次构建应编译哪些模块并给出原因。
-          
-          ## 输入资源
-          - Git 仓库当前工作副本
-          - 需判断的模块目录：
-            * C++: src/core/, src/main.cpp, src/CPP-parsers/
-            * WPF: WPF-UI1/
-            * 第三方库: src/third_party/
-          - 构建日志（稍后步骤生成，当前可仅基于代码差异）
-          
-          ## 目标输出
-          写出一个 JSON 文件 build_decision.json（UTF-8，无 BOM），结构：
-          {
-            "build_cpp": <true|false>,
-            "build_wpf": <true|false>,
-            "build_lib": <true|false>,
-            "use_cache": <true|false>,
-            "priority": ["cpp","wpf","lib"]  // 按实际需要的优先顺序
-            "reason": "用简洁中文说明判定逻辑，列出触发编译的关键文件或目录"
-          }
-          
-          ## 行为要求
-          1. 运行: git diff --name-only HEAD~1 HEAD （如 HEAD~1 不存在则比较最近一次提交与其父或仅列出当前快照重要文件）
-          2. 根据文件路径命中上述模块分类；只要目录/文件前缀匹配就标记对应模块需编译。
-          3. 如果 main.cpp 或核心头/源 (src/core/) 有变更 → build_cpp 必须为 true。
-          4. 如果 WPF-UI1/ 下任何 .xaml / .cs 变更 → build_wpf = true。
-          5. 如果 src/third_party/ 下有变更 → build_lib = true。
-          6. use_cache 判断：若变更只影响少量非核心文件且缓存命中，可设为 true；否则 false。
-          7. priority：若多个模块都需要编译，优先级规则：
-             - 若 cpp 需要编译：它第一
-             - 若 lib 与 cpp 同时需要：lib 在 cpp 之前仅当其更新会影响 cpp 链接
-             - WPF 始终排在最后（除非只变更 WPF）
-          8. 输出 JSON 时保证字段顺序与示例一致，不加额外字段。
-          
-          ## 校验
-          - JSON 必须是合法对象、字段类型正确。
-          - reason 不超过 400 中文字符。
-          
-          ## 仅输出
-          直接生成 build_decision.json 文件，不在控制台输出 JSON 内容。
-          
-          ## 如果无法获取 diff
-          - 回退策略：扫描工作区上述目录是否存在 → 推断可能需要编译的模块并在 reason 中标注“无 diff，采用全量推断”。
-          
-          现在执行你的分析并生成文件。
+  summary:
+    name: 汇总与PR反馈（Linux）
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: 下载分析决策
+        uses: actions/download-artifact@v4
+        with:
+          name: build-decision
+          path: ./
+      - name: 下载环境报告
+        uses: actions/download-artifact@v4
+        with:
+          name: saer-report
+          path: ./
+      - name: 下载构建日志
+        uses: actions/download-artifact@v4
+        with:
+          name: solution-build-log
+          path: ./
 
-    - name: Upload Build Decision
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-decision
-        path: build_decision.json
+      - name: 汇总分析
+        uses: iflow-ai/iflow-cli-action@v2.0.0
+        with:
+          api_key: ${{ secrets.IFLOW_API_KEY }}
+          model: "glm-4.6"
+          timeout: "1200"
+          working_directory: "."
+          prompt: |
+            ## 角色
+            你是一个CI/CD智能决策助手，需根据增量代码变更决定本次构建应编译哪些模块并给出原因。
+          
+            ## 输入资源
+            - Git 仓库当前工作副本
+            - 需判断的模块目录：
+              * C++: src/core/, src/main.cpp, src/CPP-parsers/
+              * WPF: WPF-UI1/
+              * 第三方库: src/third_party/
+            - 构建日志（稍后步骤生成，当前可仅基于代码差异）
+          
+            ## 目标输出
+            写出一个 JSON 文件 build_decision.json（UTF-8，无 BOM），结构：
+            {
+              "build_cpp": <true|false>,
+              "build_wpf": <true|false>,
+              "build_lib": <true|false>,
+              "use_cache": <true|false>,
+              "priority": ["cpp","wpf","lib"]  // 按实际需要的优先顺序
+              "reason": "用简洁中文说明判定逻辑，列出触发编译的关键文件或目录"
+            }
+          
+            ## 行为要求
+            1. 运行: git diff --name-only HEAD~1 HEAD （如 HEAD~1 不存在则比较最近一次提交与其父或仅列出当前快照重要文件）
+            2. 根据文件路径命中上述模块分类；只要目录/文件前缀匹配就标记对应模块需编译。
+            3. 如果 main.cpp 或核心头/源 (src/core/) 有变更 → build_cpp 必须为 true。
+            4. 如果 WPF-UI1/ 下任何 .xaml / .cs 变更 → build_wpf = true。
+            5. 如果 src/third_party/ 下有变更 → build_lib = true。
+            6. use_cache 判断：若变更只影响少量非核心文件且缓存命中，可设为 true；否则 false。
+            7. priority：若多个模块都需要编译，优先级规则：
+              - 若 cpp 需要编译：它第一
+              - 若 lib 与 cpp 同时需要：lib 在 cpp 之前仅当其更新会影响 cpp 链接
+              - WPF 始终排在最后（除非只变更 WPF）
+            8. 输出 JSON 时保证字段顺序与示例一致，不加额外字段。
+          
+            ## 校验
+            - JSON 必须是合法对象、字段类型正确。
+            - reason 不超过 400 中文字符。
+          
+            ## 仅输出
+            直接生成 build_decision.json 文件，不在控制台输出 JSON 内容。
+          
+            ## 如果无法获取 diff
+            - 回退策略：扫描工作区上述目录是否存在 → 推断可能需要编译的模块并在 reason 中标注“无 diff，采用全量推断”。
+          
+            现在执行你的分析并生成文件。
 
-    # ================= iFlow 汇总（总结） =================
-    - name: Run iFlow CLI Summary
-      if: always()
-      uses: iflow-ai/iflow-cli-action@v2.0.0
-      with:
-        api_key: ${{ secrets.IFLOW_API_KEY }}
-        model: "glm-4.6"
-        timeout: "1200"
-        working_directory: "."
-        prompt: |
-          ## 角色
-          你是一个CI/CD结果分析与质量评估助手，基于构建日志与环境信息生成结构化与人类可读总结。
-          
-          ## 可用文件
-          - saer.txt
-          - build_lib.log
-          - wpfui1_build.log
-          - cpp_parsers_build.log
-          - main_build.log
-          - main_build.errors.txt
-          - build_decision.json
-          
-          ## 需要输出的文件
-          生成 build_summary.json，结构：
-          {
-            "overall_status": "success|failure|partial",
-            "components": {
-              "lib": {"status":"success|failure","errors":0,"warnings":0},
-              "wpf": {"status":"success|failure","errors":0,"warnings":0},
-              "cpp": {"status":"success|failure","errors":0,"warnings":0},
-              "main":{"status":"success|failure","errors":0,"warnings":0}
-            },
-            "key_issues": ["列出影响质量或阻塞的问题, 无则空数组"],
-            "recommendations": ["改进建议, 无则空数组"],
-            "summary_text": "面向PR评论的一段整洁中文总结（不超过600中文字符，包含总体结论、模块状态、关键错误、建议）"
-          }
-          
-          ## 解析与判断规则
-          1. 从各日志中提取错误与警告：匹配模式 (?i)\\berror\\b / \\bwarning\\b 及特定 LNK/NETSDK 关键词。
-          2. 若某模块日志存在致命构建失败（构建命令非零退出或含 fatal / NETSDK / LNK 错误）→ status=failure。
-          3. overall_status 规则：
-             - 所有模块 success → success
-             - 至少一个 failure 且至少一个 success → partial
-             - 全失败或 main 失败 → failure
-          4. key_issues 中优先列：阻塞编译错误、链接错误、缺失依赖、NETSDK100x、unresolved external symbol。
-          5. recommendations 给出具体行动：例如“检查包还原”、“优化并行构建顺序”、“补充缺少的第三方库”等。
-          6. 若 main_build.errors.txt 存在内容并非‘未发现致命错误’ → 将对应行归类到 key_issues。
-          
-          ## 输出要求
-          - 严格生成合法 JSON 文件 build_summary.json。
-          - summary_text 要精炼、可直接复制到 PR 评论，不含 Markdown 标题，换行不超过 3 处。
-          
-          ## 仅输出
-          直接写入 build_summary.json，不在控制台回显 JSON 正文。
-          
-          开始执行分析并生成 build_summary.json。
+      - name: 上传汇总结果
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-summary
+          path: build_summary.json
 
-    - name: Upload Summary
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-summary
-        path: build_summary.json
-
-    # ================= PR 自动反馈 =================
-    - name: PR Feedback
-      if: github.event_name == 'pull_request'
-      shell: pwsh
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        REPOSITORY: ${{ github.repository }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
-        RUN_ID: ${{ github.run_id }}
-      run: |
-        if (Test-Path build_summary.json) {
-          $json = Get-Content build_summary.json -Raw | ConvertFrom-Json
-          $comment = $json.summary_text
-          if (-not $comment) {
-            $comment = "未生成 summary_text 字段，检查 iFlow Summary 步骤。"
-          }
-        } else {
-          $comment = "未找到 build_summary.json，可能汇总步骤失败。"
-        }
-        $headers = @{
-          Authorization = "token $env:GITHUB_TOKEN"
-          "User-Agent" = "github-actions-pwsh"
-          "Accept" = "application/vnd.github+json"
-        }
-        $body = @{ body = $comment } | ConvertTo-Json -Depth 4
-        $url = "https://api.github.com/repos/$env:REPOSITORY/issues/$env:PR_NUMBER/comments"
-        Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $body
+      - name: PR 自动反馈
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const summaryPath = 'build_summary.json'
+            let comment = "未找到 build_summary.json，可能汇总步骤失败。";
+            if (fs.existsSync(summaryPath)) {
+              const summary = JSON.parse(fs.readFileSync(summaryPath, "utf-8"))
+              comment = summary.summary_text || "未生成 summary_text 字段，检查 iFlow Summary 步骤。";
+            }
+            github.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
