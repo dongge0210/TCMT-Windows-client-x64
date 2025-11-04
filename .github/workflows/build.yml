@@ -97,7 +97,6 @@ jobs:
             nuget-${{ runner.os }}-
 
       - name: NuGet & Dotnet Restore
-        if: steps.cache-nuget.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           nuget restore ${{ env.SOLUTION_FILE_PATH }}
