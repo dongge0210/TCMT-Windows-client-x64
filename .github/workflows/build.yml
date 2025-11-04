@@ -27,7 +27,6 @@ jobs:
       - name: Checkout (with submodules)
         uses: actions/checkout@v5
         with:
-          ref: feature/iflow-cli-integration
           submodules: recursive
           fetch-depth: 0
 
@@ -185,7 +184,7 @@ jobs:
           name: build-logs
           path: .
 
-      - name: (可选) 下载构建产物
+      - name: 下载构建产物
         uses: actions/download-artifact@v4
         with:
           name: win-build-output
