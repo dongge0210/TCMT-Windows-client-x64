@@ -9,8 +9,17 @@
 std::mutex Logger::mutex;
 std::ofstream Logger::stream;
 bool Logger::consoleEnabled = true;
-LogLevel Logger::currentLevel = LOG_DEBUG;
+LogLevel Logger::currentLevel = LL_DEBUG;
+
+#ifdef PLATFORM_WINDOWS
 HANDLE Logger::consoleHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+#elif defined(PLATFORM_MACOS)
+bool Logger::useSyslog = false;
+FILE* Logger::consoleHandle = stdout;
+#else
+bool Logger::useSyslog = false;
+FILE* Logger::consoleHandle = stdout;
+#endif
 size_t Logger::maxFileSize = 0;
 int Logger::maxFileCount = 0;
 std::string Logger::basePath;
@@ -40,6 +49,8 @@ std::string Logger::NormalizeToUTF8(std::string_view input) {
     if (input.empty()) return std::string();
     std::string s(input);
     if (IsValidUTF8(s)) return s;
+    
+#ifdef PLATFORM_WINDOWS
     int wideLen = MultiByteToWideChar(CP_ACP, 0, s.c_str(), (int)s.size(), nullptr, 0);
     if (wideLen <= 0) return s;
     std::wstring wide(wideLen, L'\0');
@@ -49,18 +60,46 @@ std::string Logger::NormalizeToUTF8(std::string_view input) {
     std::string out(utf8Len, '\0');
     WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), (int)wide.size(), out.data(), utf8Len, nullptr, nullptr);
     return out;
+#else
+    // For non-Windows platforms, assume input is already UTF-8
+    return s;
+#endif
 }
 
 std::string Logger::WStringToUtf8(const std::wstring& w) {
     if (w.empty()) return {};
+    
+#ifdef PLATFORM_WINDOWS
     int len = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), nullptr, 0, nullptr, nullptr);
     std::string s(len, '\0');
     WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), s.data(), len, nullptr, nullptr);
     return s;
+#else
+    // For non-Windows platforms, use std::codecvt or similar conversion
+    std::mbstate_t state = std::mbstate_t();
+    const wchar_t* src = w.c_str();
+    size_t len = std::wcsrtombs(nullptr, &src, 0, &state);
+    if (len == static_cast<size_t>(-1)) return {};
+    std::string s(len, '\0');
+    std::wcsrtombs(&s[0], &src, len, &state);
+    return s;
+#endif
 }
 
 bool Logger::Initialize(const std::string& filePath) {
+    return Initialize(filePath, false);
+}
+
+bool Logger::Initialize(const std::string& filePath, bool enableSyslog) {
     std::lock_guard<std::mutex> lock(mutex);
+    
+#ifdef PLATFORM_MACOS
+    useSyslog = enableSyslog;
+    if (useSyslog) {
+        openlog("TCMT", LOG_PID | LOG_CONS, LOG_USER);
+    }
+#endif
+    
     stream.open(filePath, std::ios::binary | std::ios::app);
     if (!stream.is_open()) return false;
     if (stream.tellp() == 0) {
@@ -72,7 +111,7 @@ bool Logger::Initialize(const std::string& filePath) {
 }
 
 bool Logger::InitializeWithRotation(const std::string& baseFilePath, size_t maxFileSizeBytes, int maxFiles) {
-    if (!Initialize(baseFilePath)) return false;
+    if (!Initialize(baseFilePath, false)) return false;
     maxFileSize = maxFileSizeBytes;
     maxFileCount = maxFiles;
     return true;
@@ -91,21 +130,21 @@ void Logger::SetRingBufferSize(size_t capacity) {
 
 std::string Logger::LevelToString(LogLevel l) {
     switch(l){
-        case LOG_TRACE: return "TRACE"; case LOG_DEBUG: return "DEBUG"; case LOG_INFO: return "INFO";
-        case LOG_WARNING: return "WARN"; case LOG_ERROR: return "ERROR"; case LOG_CRITICAL: return "CRITICAL"; case LOG_FATAL: return "FATAL";
+        case LL_TRACE: return "TRACE"; case LL_DEBUG: return "DEBUG"; case LL_INFO: return "INFO";
+        case LL_WARNING: return "WARN"; case LL_ERROR: return "ERROR"; case LL_CRITICAL: return "CRITICAL"; case LL_FATAL: return "FATAL";
     }
     return "UNKNOWN";
 }
 
 ConsoleColor Logger::LevelToColor(LogLevel l) {
     switch(l){
-        case LOG_TRACE: return ConsoleColor::TRACE_COLOR;
-        case LOG_DEBUG: return ConsoleColor::DEBUG_COLOR;
-        case LOG_INFO: return ConsoleColor::INFO_COLOR;
-        case LOG_WARNING: return ConsoleColor::WARN_COLOR;
-        case LOG_ERROR: return ConsoleColor::ERROR_COLOR;
-        case LOG_CRITICAL: return ConsoleColor::CRITICAL_COLOR;
-        case LOG_FATAL: return ConsoleColor::FATAL_COLOR;
+        case LL_TRACE: return ConsoleColor::TRACE_COLOR;
+        case LL_DEBUG: return ConsoleColor::DEBUG_COLOR;
+        case LL_INFO: return ConsoleColor::INFO_COLOR;
+        case LL_WARNING: return ConsoleColor::WARN_COLOR;
+        case LL_ERROR: return ConsoleColor::ERROR_COLOR;
+        case LL_CRITICAL: return ConsoleColor::CRITICAL_COLOR;
+        case LL_FATAL: return ConsoleColor::FATAL_COLOR;
     }
     return ConsoleColor::DEFAULT;
 }
@@ -146,7 +185,14 @@ void Logger::WriteInternal(const LogEntry& entry) {
     if (!stream.is_open()) return;
     RotateIfNeeded();
     auto tt = std::chrono::system_clock::to_time_t(entry.timestamp);
-    std::tm tm{}; localtime_s(&tm, &tt);
+    std::tm tm{};
+    
+#ifdef PLATFORM_WINDOWS
+    localtime_s(&tm, &tt);
+#else
+    localtime_r(&tt, &tm);
+#endif
+    
     std::ostringstream oss;
     oss << '[' << std::put_time(&tm, "%Y-%m-%d %H:%M:%S") << "]";
     oss << '[' << LevelToString(entry.level) << "]";
@@ -159,7 +205,8 @@ void Logger::WriteInternal(const LogEntry& entry) {
 
     PushRing(entry);
 
-    if (consoleEnabled && consoleHandle != INVALID_HANDLE_VALUE) {
+    if (consoleEnabled && consoleHandle) {
+#ifdef PLATFORM_WINDOWS
         SetConsoleTextAttribute(consoleHandle, static_cast<WORD>(LevelToColor(entry.level)));
         // Convert UTF-8 to wide for proper output
         int wlen = MultiByteToWideChar(CP_UTF8, 0, line.c_str(), (int)line.size(), nullptr, 0);
@@ -169,6 +216,41 @@ void Logger::WriteInternal(const LogEntry& entry) {
             DWORD written; WriteConsoleW(consoleHandle, wbuf.c_str(), (DWORD)wlen, &written, NULL);
         }
         SetConsoleTextAttribute(consoleHandle, (WORD)ConsoleColor::DEFAULT);
+#elif defined(PLATFORM_MACOS)
+        // macOS: Use ANSI escape codes for colors and syslog if enabled
+        if (useSyslog) {
+            int priority = LOG_INFO;
+            switch (entry.level) {
+                case LL_TRACE: priority = LOG_DEBUG; break;
+                case LL_DEBUG: priority = LOG_DEBUG; break;
+                case LL_INFO: priority = LOG_INFO; break;
+                case LL_WARNING: priority = LOG_WARNING; break;
+                case LL_ERROR: priority = LOG_ERR; break;
+                case LL_CRITICAL: priority = LOG_ERR; break;
+                case LL_FATAL: priority = LOG_CRIT; break;
+            }
+            syslog(priority, "%s", line.c_str());
+        } else {
+            // Use ANSI color codes
+            const char* colorCode = "\033[0m"; // Reset
+            switch (LevelToColor(entry.level)) {
+                case ConsoleColor::TRACE_COLOR: colorCode = "\033[35m"; break; // Magenta
+                case ConsoleColor::DEBUG_COLOR: colorCode = "\033[34m"; break; // Blue
+                case ConsoleColor::INFO_COLOR: colorCode = "\033[32m"; break;  // Green
+                case ConsoleColor::WARN_COLOR: colorCode = "\033[33m"; break;  // Yellow
+                case ConsoleColor::ERROR_COLOR: colorCode = "\033[91m"; break; // Light Red
+                case ConsoleColor::CRITICAL_COLOR: colorCode = "\033[35m"; break; // Purple
+                case ConsoleColor::FATAL_COLOR: colorCode = "\033[31m"; break; // Dark Red
+                default: colorCode = "\033[0m"; break;
+            }
+            fprintf(consoleHandle, "%s%s\033[0m", colorCode, line.c_str());
+            fflush(consoleHandle);
+        }
+#else
+        // Other platforms: simple output
+        fprintf(consoleHandle, "%s", line.c_str());
+        fflush(consoleHandle);
+#endif
     }
 }
 
@@ -217,11 +299,26 @@ std::vector<LogEntry> Logger::GetRecentEntries() {
     void Logger::fnName(const std::string& m){ Log(lvl, "default", m, {}, 0);} \
     void Logger::fnName(const std::wstring& m){ Log(lvl, "default", WStringToUtf8(m), {}, 0);} 
 
-SIMPLE_LOG_WRAPPER(Trace, LOG_TRACE)
-SIMPLE_LOG_WRAPPER(Debug, LOG_DEBUG)
-SIMPLE_LOG_WRAPPER(Info, LOG_INFO)
-SIMPLE_LOG_WRAPPER(Warn, LOG_WARNING)
-SIMPLE_LOG_WRAPPER(Error, LOG_ERROR)
-SIMPLE_LOG_WRAPPER(Critical, LOG_CRITICAL)
-SIMPLE_LOG_WRAPPER(Fatal, LOG_FATAL)
+SIMPLE_LOG_WRAPPER(Trace, LL_TRACE)
+SIMPLE_LOG_WRAPPER(Debug, LL_DEBUG)
+SIMPLE_LOG_WRAPPER(Info, LL_INFO)
+SIMPLE_LOG_WRAPPER(Warn, LL_WARNING)
+SIMPLE_LOG_WRAPPER(Error, LL_ERROR)
+SIMPLE_LOG_WRAPPER(Critical, LL_CRITICAL)
+SIMPLE_LOG_WRAPPER(Fatal, LL_FATAL)
+
+void Logger::Shutdown() {
+    std::lock_guard<std::mutex> lock(mutex);
+    
+#ifdef PLATFORM_MACOS
+    if (useSyslog) {
+        closelog();
+        useSyslog = false;
+    }
+#endif
+    
+    if (stream.is_open()) {
+        stream.close();
+    }
+}
 
