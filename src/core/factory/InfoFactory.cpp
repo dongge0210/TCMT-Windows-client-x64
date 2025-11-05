@@ -1,5 +1,5 @@
 #include "InfoFactory.h"
-#include "core/common/PlatformDefs.h"
+#include "../common/PlatformDefs.h"
 
 // 平台特定包含
 #ifdef PLATFORM_WINDOWS
@@ -15,15 +15,16 @@
     #include "../platform/windows/WinDataCollector.h"
 #elif defined(PLATFORM_MACOS)
     #include "../platform/macos/MacCpuInfo.h"
+    #include "../platform/macos/MacCpuAdapter.h"
     #include "../platform/macos/MacMemoryInfo.h"
+    #include "../platform/macos/MacMemoryAdapter.h"
     #include "../platform/macos/MacGpuInfo.h"
-    #include "../platform/macos/MacNetworkAdapter.h"
-    #include "../platform/macos/MacDiskInfo.h"
-    #include "../platform/macos/MacTemperatureWrapper.h"
-    #include "../platform/macos/MacTpmInfo.h"
-    #include "../platform/macos/MacUsbInfo.h"
-    #include "../platform/macos/MacOSInfo.h"
-    #include "../platform/macos/MacDataCollector.h"
+    #include "../platform/macos/MacGpuAdapter.h"
+    #include "../platform/macos/MacSystemInfo.h"
+    #include "../platform/macos/MacSystemAdapter.h"
+    #include "../platform/macos/MacBatteryInfo.h"
+    #include "../platform/macos/MacBatteryAdapter.h"
+    #include "../platform/macos/MacPlatformPlaceholder.h"
 #elif defined(PLATFORM_LINUX)
     #include "../platform/linux/LinuxCpuInfo.h"
     #include "../platform/linux/LinuxMemoryInfo.h"
@@ -36,6 +37,9 @@
     #include "../platform/linux/LinuxOSInfo.h"
     #include "../platform/linux/LinuxDataCollector.h"
 #endif
+
+// 兼容性支持：包含原有类
+#include "../cpu/CpuInfo.h"
 
 #include <sstream>
 
@@ -58,6 +62,35 @@ std::unique_ptr<ICpuInfo> InfoFactory::CreateCpuInfo() {
         #endif
     } catch (const std::exception& e) {
         SetError(std::string("Failed to create CPU info: ") + e.what());
+        return nullptr;
+    }
+}
+
+// 兼容性支持：创建原有类实例
+std::unique_ptr<CpuInfo> InfoFactory::CreateLegacyCpuInfo() {
+    try {
+        return std::make_unique<CpuInfo>();
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create legacy CPU info: ") + e.what());
+        return nullptr;
+    }
+}
+
+// 兼容性支持：创建CPU适配器
+std::unique_ptr<ICpuAdapter> InfoFactory::CreateCpuAdapter() {
+    try {
+        #ifdef PLATFORM_WINDOWS
+            return std::make_unique<WinCpuAdapter>();
+        #elif defined(PLATFORM_MACOS)
+            return CreateMacCpuAdapter();
+        #elif defined(PLATFORM_LINUX)
+            return CreateLinuxCpuAdapter();
+        #else
+            SetError("Unsupported platform for CPU adapter");
+            return nullptr;
+        #endif
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create CPU adapter: ") + e.what());
         return nullptr;
     }
 }
@@ -206,6 +239,42 @@ std::unique_ptr<IOSInfo> InfoFactory::CreateOSInfo() {
         #endif
     } catch (const std::exception& e) {
         SetError(std::string("Failed to create OS info: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<ISystemInfo> InfoFactory::CreateSystemInfo() {
+    try {
+        #ifdef PLATFORM_WINDOWS
+            return CreateWinSystemInfo();
+        #elif defined(PLATFORM_MACOS)
+            return CreateMacSystemInfo();
+        #elif defined(PLATFORM_LINUX)
+            return CreateLinuxSystemInfo();
+        #else
+            SetError("Unsupported platform for system info");
+            return nullptr;
+        #endif
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create system info: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<IBatteryInfo> InfoFactory::CreateBatteryInfo() {
+    try {
+        #ifdef PLATFORM_WINDOWS
+            return CreateWinBatteryInfo();
+        #elif defined(PLATFORM_MACOS)
+            return CreateMacBatteryInfo();
+        #elif defined(PLATFORM_LINUX)
+            return CreateLinuxBatteryInfo();
+        #else
+            SetError("Unsupported platform for battery info");
+            return nullptr;
+        #endif
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create battery info: ") + e.what());
         return nullptr;
     }
 }
@@ -368,6 +437,163 @@ std::string InfoFactory::GetLastError() {
 void InfoFactory::ClearError() {
     lastError.clear();
 }
+
+// 平台特定的创建函数实现
+#ifdef PLATFORM_WINDOWS
+std::unique_ptr<ICpuInfo> InfoFactory::CreateWinCpuInfo() {
+    return std::make_unique<WinCpuInfo>();
+}
+
+std::unique_ptr<ICpuAdapter> InfoFactory::CreateWinCpuAdapter() {
+    return std::make_unique<WinCpuAdapter>();
+}
+#elif defined(PLATFORM_MACOS)
+std::unique_ptr<ICpuInfo> InfoFactory::CreateMacCpuInfo() {
+    try {
+        auto cpuInfo = std::make_unique<MacCpuInfo>();
+        if (cpuInfo && cpuInfo->Initialize()) {
+            return cpuInfo;
+        } else {
+            SetError("Failed to initialize macOS CPU info");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create macOS CPU info: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<ICpuAdapter> InfoFactory::CreateMacCpuAdapter() {
+    try {
+        auto adapter = std::make_unique<MacCpuAdapter>();
+        if (adapter && adapter->Initialize()) {
+            return adapter;
+        } else {
+            SetError("Failed to initialize macOS CPU adapter");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create macOS CPU adapter: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<IMemoryInfo> InfoFactory::CreateMacMemoryInfo() {
+    auto memoryInfo = std::make_unique<MacMemoryInfo>();
+    if (memoryInfo && memoryInfo->Initialize()) {
+        return memoryInfo;
+    } else {
+        SetError("Failed to initialize macOS memory info");
+        return nullptr;
+    }
+}
+
+// 兼容性支持：创建MacMemoryAdapter
+std::unique_ptr<MacMemoryAdapter> InfoFactory::CreateMacMemoryAdapter() {
+    auto adapter = std::make_unique<MacMemoryAdapter>();
+    if (adapter && adapter->Initialize()) {
+        return adapter;
+    } else {
+        SetError("Failed to initialize macOS memory adapter");
+        return nullptr;
+    }
+}
+
+std::unique_ptr<IGpuInfo> InfoFactory::CreateMacGpuInfo() {
+    auto gpuInfo = std::make_unique<MacGpuInfo>();
+    if (gpuInfo && gpuInfo->Initialize()) {
+        return gpuInfo;
+    } else {
+        SetError("Failed to initialize macOS GPU info");
+        return nullptr;
+    }
+}
+
+// 兼容性支持：创建MacGpuAdapter
+std::unique_ptr<MacGpuAdapter> InfoFactory::CreateMacGpuAdapter() {
+    auto adapter = std::make_unique<MacGpuAdapter>();
+    if (adapter && adapter->Initialize()) {
+        return adapter;
+    } else {
+        SetError("Failed to initialize macOS GPU adapter");
+        return nullptr;
+    }
+}
+
+std::unique_ptr<IGpuInfo> InfoFactory::CreateMacGpuInfo() {
+    return std::make_unique<MacGpuInfo>();
+}
+
+std::unique_ptr<INetworkAdapter> InfoFactory::CreateMacNetworkAdapter(const std::string& adapterName) {
+    return std::make_unique<MacNetworkAdapter>(adapterName);
+}
+
+std::unique_ptr<IDiskInfo> InfoFactory::CreateMacDiskInfo(const std::string& diskName) {
+    return std::make_unique<MacDiskInfo>(diskName);
+}
+
+std::unique_ptr<ITemperatureMonitor> InfoFactory::CreateMacTemperatureMonitor() {
+    return std::make_unique<MacTemperatureWrapper>();
+}
+
+std::unique_ptr<ITpmInfo> InfoFactory::CreateMacTpmInfo() {
+    return std::make_unique<MacTpmInfo>();
+}
+
+std::unique_ptr<IUsbMonitor> InfoFactory::CreateMacUsbMonitor() {
+    return std::make_unique<MacUsbInfo>();
+}
+
+std::unique_ptr<IOSInfo> InfoFactory::CreateMacOSInfo() {
+    return std::make_unique<MacOSInfo>();
+}
+
+std::unique_ptr<ISystemInfo> InfoFactory::CreateMacSystemInfo() {
+    try {
+        auto systemInfo = std::make_unique<MacSystemInfo>();
+        if (systemInfo && systemInfo->Initialize()) {
+            return systemInfo;
+        } else {
+            SetError("Failed to initialize macOS system info");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create macOS system info: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<IBatteryInfo> InfoFactory::CreateMacBatteryInfo() {
+    try {
+        auto batteryInfo = std::make_unique<MacBatteryInfo>();
+        if (batteryInfo && batteryInfo->Initialize()) {
+            return batteryInfo;
+        } else {
+            SetError("Failed to initialize macOS battery info");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create macOS battery info: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<IDataCollector> InfoFactory::CreateMacDataCollector() {
+    return std::make_unique<MacDataCollector>();
+}
+#elif defined(PLATFORM_LINUX)
+std::unique_ptr<ICpuInfo> InfoFactory::CreateLinuxCpuInfo() {
+    // TODO: 实现Linux CPU信息创建
+    SetError("Linux CPU info not implemented yet");
+    return nullptr;
+}
+
+std::unique_ptr<ICpuAdapter> InfoFactory::CreateLinuxCpuAdapter() {
+    // TODO: 实现Linux CPU适配器创建
+    SetError("Linux CPU adapter not implemented yet");
+    return nullptr;
+}
+#endif
 
 // 私有辅助函数实现
 void InfoFactory::SetError(const std::string& error) {

@@ -1,11 +1,11 @@
 #pragma once
 #include "../../common/BaseInfo.h"
 #include "../../common/PlatformDefs.h"
-#include "../../gpu/GpuInfo.h"
 #include "MacGpuInfo.h"
 #include <memory>
 #include <string>
 #include <vector>
+#include <cstdint>
 
 #ifdef PLATFORM_MACOS
 
@@ -15,7 +15,18 @@ public:
     virtual ~MacGpuAdapter();
     
     // 兼容原始GpuInfo接口
-    const std::vector<GpuInfo::GpuData>& GetGpuData() const;
+    struct GpuData {
+        std::string name;
+        std::string vendor;
+        uint64_t dedicatedMemory;
+        uint64_t sharedMemory;
+        double usage;
+        double temperature;
+        double powerUsage;
+        double fanSpeed;
+    };
+    
+    const std::vector<GpuData>& GetGpuData() const;
     
     // 扩展方法，提供更详细的信息
     double GetGpuUsage() const;
@@ -52,7 +63,7 @@ public:
 
 private:
     std::unique_ptr<MacGpuInfo> m_macGpuInfo;
-    mutable std::vector<GpuInfo::GpuData> m_gpuData;
+    mutable std::vector<GpuData> m_gpuData;
     mutable std::string m_lastError;
     
     void UpdateGpuData();

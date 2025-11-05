@@ -18,7 +18,7 @@ MacGpuAdapter::~MacGpuAdapter() {
     Cleanup();
 }
 
-const std::vector<GpuInfo::GpuData>& MacGpuAdapter::GetGpuData() const {
+const std::vector<MacGpuAdapter::GpuData>& MacGpuAdapter::GetGpuData() const {
     return m_gpuData;
 }
 
@@ -238,20 +238,17 @@ void MacGpuAdapter::UpdateGpuData() {
     m_gpuData.clear();
     
     // 创建兼容的GpuData结构
-    GpuInfo::GpuData gpuData;
+    GpuData gpuData;
     
     // 填充基本信息
-    std::string name = m_macGpuInfo->GetName();
-    gpuData.name = std::wstring(name.begin(), name.end());
-    gpuData.deviceId = L"Apple_Silicon_GPU";
+    gpuData.name = m_macGpuInfo->GetName();
+    gpuData.vendor = m_macGpuInfo->GetVendor();
     gpuData.dedicatedMemory = m_macGpuInfo->GetDedicatedMemory();
-    gpuData.coreClock = static_cast<uint64_t>(m_macGpuInfo->GetCurrentFrequency() * 1000000); // 转换为Hz
-    gpuData.isNvidia = false;
-    gpuData.isIntegrated = true;
-    gpuData.isVirtual = false;
-    gpuData.computeCapabilityMajor = 1; // Apple Silicon GPU计算能力
-    gpuData.computeCapabilityMinor = 0;
-    gpuData.temperature = static_cast<unsigned int>(m_macGpuInfo->GetTemperature());
+    gpuData.sharedMemory = m_macGpuInfo->GetSharedMemory();
+    gpuData.usage = m_macGpuInfo->GetGpuUsage();
+    gpuData.temperature = m_macGpuInfo->GetTemperature();
+    gpuData.powerUsage = m_macGpuInfo->GetPowerUsage();
+    gpuData.fanSpeed = m_macGpuInfo->GetFanSpeed();
     
     // 添加到列表
     m_gpuData.push_back(gpuData);

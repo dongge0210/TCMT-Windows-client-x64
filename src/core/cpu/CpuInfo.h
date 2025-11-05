@@ -1,10 +1,35 @@
 ﻿#pragma once
+#include "../common/PlatformDefs.h"
 #include <string>
-#include <windows.h>
-#include <pdh.h>
 #include <queue>
 #include <vector>
 
+#ifdef PLATFORM_WINDOWS
+    #include <windows.h>
+    #include <pdh.h>
+    typedef unsigned long DWORD;
+    typedef unsigned long long ULONG;
+    typedef unsigned short WORD;
+    typedef unsigned int BOOL;
+    typedef void* HANDLE;
+    typedef void* PDH_HQUERY;
+    typedef void* PDH_HCOUNTER;
+    typedef unsigned long PDH_STATUS;
+#elif defined(PLATFORM_MACOS)
+    typedef unsigned long DWORD;
+    typedef unsigned long long ULONG;
+    typedef unsigned short WORD;
+    typedef unsigned int BOOL;
+    typedef void* HANDLE;
+    typedef void* PDH_HQUERY;
+    typedef void* PDH_HCOUNTER;
+    typedef unsigned long PDH_STATUS;
+    #define PDH_CSTATUS_VALID_DATA 0x00000000L
+    #define PDH_CSTATUS_NEW_DATA 0x00000001L
+    #define ERROR_SUCCESS 0
+#endif
+
+// 原有CpuInfo类保持完全不变，确保向后兼容
 class CpuInfo {
 public:
     CpuInfo();
@@ -67,4 +92,53 @@ private:
     bool freqCounterInitialized = false;
     DWORD lastFreqTick = 0;
     double cachedInstantMHz = 0.0;
+};
+
+// 新增：跨平台CPU适配器接口
+class ICpuAdapter {
+public:
+    virtual ~ICpuAdapter() = default;
+    virtual double GetUsage() = 0;
+    virtual std::string GetName() = 0;
+    virtual int GetTotalCores() const = 0;
+    virtual int GetSmallCores() const = 0;
+    virtual int GetLargeCores() const = 0;
+    virtual double GetLargeCoreSpeed() const = 0;
+    virtual double GetSmallCoreSpeed() const = 0;
+    virtual DWORD GetCurrentSpeed() const = 0;
+    virtual bool IsHyperThreadingEnabled() const = 0;
+    virtual bool IsVirtualizationEnabled() const = 0;
+    virtual double GetLastSampleIntervalMs() const = 0;
+    virtual double GetBaseFrequencyMHz() const = 0;
+    virtual double GetCurrentFrequencyMHz() const = 0;
+    virtual bool Initialize() = 0;
+    virtual void Cleanup() = 0;
+    virtual bool Update() = 0;
+};
+
+// Windows平台适配器：包装原有CpuInfo类
+class WinCpuAdapter : public ICpuAdapter {
+public:
+    WinCpuAdapter();
+    virtual ~WinCpuAdapter();
+
+    virtual double GetUsage() override;
+    virtual std::string GetName() override;
+    virtual int GetTotalCores() const override;
+    virtual int GetSmallCores() const override;
+    virtual int GetLargeCores() const override;
+    virtual double GetLargeCoreSpeed() const override;
+    virtual double GetSmallCoreSpeed() const override;
+    virtual DWORD GetCurrentSpeed() const override;
+    virtual bool IsHyperThreadingEnabled() const override;
+    virtual bool IsVirtualizationEnabled() const override;
+    virtual double GetLastSampleIntervalMs() const override;
+    virtual double GetBaseFrequencyMHz() const override;
+    virtual double GetCurrentFrequencyMHz() const override;
+    virtual bool Initialize() override;
+    virtual void Cleanup() override;
+    virtual bool Update() override;
+
+private:
+    std::unique_ptr<CpuInfo> m_originalCpuInfo;
 };

@@ -6,6 +6,7 @@
 #include <pdh.h>
 #include <algorithm>
 #include <powrprof.h> // CallNtPowerInformation
+#include <memory>
 #pragma comment(lib, "pdh.lib")
 #pragma comment(lib, "PowrProf.lib")
 
@@ -378,4 +379,93 @@ bool CpuInfo::IsVirtualizationEnabled() const {
     }
 
     return isVMXEnabled;
+}
+
+// WinCpuAdapter 实现
+WinCpuAdapter::WinCpuAdapter() {
+    m_originalCpuInfo = std::make_unique<CpuInfo>();
+}
+
+WinCpuAdapter::~WinCpuAdapter() {
+    Cleanup();
+}
+
+double WinCpuAdapter::GetUsage() {
+    if (!m_originalCpuInfo) return 0.0;
+    return m_originalCpuInfo->GetUsage();
+}
+
+std::string WinCpuAdapter::GetName() {
+    if (!m_originalCpuInfo) return "";
+    return m_originalCpuInfo->GetName();
+}
+
+int WinCpuAdapter::GetTotalCores() const {
+    if (!m_originalCpuInfo) return 0;
+    return m_originalCpuInfo->GetTotalCores();
+}
+
+int WinCpuAdapter::GetSmallCores() const {
+    if (!m_originalCpuInfo) return 0;
+    return m_originalCpuInfo->GetSmallCores();
+}
+
+int WinCpuAdapter::GetLargeCores() const {
+    if (!m_originalCpuInfo) return 0;
+    return m_originalCpuInfo->GetLargeCores();
+}
+
+double WinCpuAdapter::GetLargeCoreSpeed() const {
+    if (!m_originalCpuInfo) return 0.0;
+    return m_originalCpuInfo->GetLargeCoreSpeed();
+}
+
+double WinCpuAdapter::GetSmallCoreSpeed() const {
+    if (!m_originalCpuInfo) return 0.0;
+    return m_originalCpuInfo->GetSmallCoreSpeed();
+}
+
+DWORD WinCpuAdapter::GetCurrentSpeed() const {
+    if (!m_originalCpuInfo) return 0;
+    return m_originalCpuInfo->GetCurrentSpeed();
+}
+
+bool WinCpuAdapter::IsHyperThreadingEnabled() const {
+    if (!m_originalCpuInfo) return false;
+    return m_originalCpuInfo->IsHyperThreadingEnabled();
+}
+
+bool WinCpuAdapter::IsVirtualizationEnabled() const {
+    if (!m_originalCpuInfo) return false;
+    return m_originalCpuInfo->IsVirtualizationEnabled();
+}
+
+double WinCpuAdapter::GetLastSampleIntervalMs() const {
+    if (!m_originalCpuInfo) return 0.0;
+    return m_originalCpuInfo->GetLastSampleIntervalMs();
+}
+
+double WinCpuAdapter::GetBaseFrequencyMHz() const {
+    if (!m_originalCpuInfo) return 0.0;
+    return m_originalCpuInfo->GetBaseFrequencyMHz();
+}
+
+double WinCpuAdapter::GetCurrentFrequencyMHz() const {
+    if (!m_originalCpuInfo) return 0.0;
+    return m_originalCpuInfo->GetCurrentFrequencyMHz();
+}
+
+bool WinCpuAdapter::Initialize() {
+    // CpuInfo类在构造时自动初始化，这里只需要确认对象存在
+    return m_originalCpuInfo != nullptr;
+}
+
+void WinCpuAdapter::Cleanup() {
+    // CpuInfo类在析构时自动清理，这里不需要额外操作
+}
+
+bool WinCpuAdapter::Update() {
+    // CpuInfo类在每次调用Get方法时自动更新数据
+    // 这里可以添加额外的更新逻辑，如果需要的话
+    return m_originalCpuInfo != nullptr;
 }

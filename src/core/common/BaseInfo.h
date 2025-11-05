@@ -350,9 +350,109 @@ public:
     virtual std::string GetHypervisor() const = 0;
     
     // 系统更新
-    virtual std::string GetLastUpdateTime() const = 0;
+    virtual std::string GetLastSystemUpdateTime() const = 0;
     virtual bool IsUpToDate() const = 0;
     virtual std::string GetUpdateStatus() const = 0;
+};
+
+// 系统信息监控接口
+class ISystemInfo : public IBaseInfo {
+public:
+    virtual ~ISystemInfo() = default;
+    
+    // 操作系统信息
+    virtual std::string GetOSName() const = 0;
+    virtual std::string GetOSVersion() const = 0;
+    virtual std::string GetHostname() const = 0;
+    virtual std::string GetArchitecture() const = 0;
+    
+    // 系统运行时间
+    virtual uint64_t GetUptimeSeconds() const = 0;
+    virtual std::string GetBootTime() const = 0;
+    
+    // 系统负载
+    virtual double GetLoadAverage1Min() const = 0;
+    virtual double GetLoadAverage5Min() const = 0;
+    virtual double GetLoadAverage15Min() const = 0;
+    
+    // 进程信息
+    virtual uint32_t GetTotalProcesses() const = 0;
+    virtual uint32_t GetRunningProcesses() const = 0;
+    virtual uint32_t GetSleepingProcesses() const = 0;
+    virtual uint32_t GetThreads() const = 0;
+    
+    // 系统资源统计
+    virtual uint64_t GetTotalPhysicalMemory() const = 0;
+    virtual uint64_t GetAvailablePhysicalMemory() const = 0;
+    virtual uint64_t GetTotalSwapMemory() const = 0;
+    virtual uint64_t GetAvailableSwapMemory() const = 0;
+    
+    // 磁盘使用统计
+    virtual uint64_t GetTotalDiskSpace() const = 0;
+    virtual uint64_t GetAvailableDiskSpace() const = 0;
+    virtual uint64_t GetUsedDiskSpace() const = 0;
+    
+    // 网络统计
+    virtual uint64_t GetNetworkBytesReceived() const = 0;
+    virtual uint64_t GetNetworkBytesSent() const = 0;
+    virtual uint64_t GetNetworkPacketsReceived() const = 0;
+    virtual uint64_t GetNetworkPacketsSent() const = 0;
+    
+    // 系统健康状态
+    virtual bool IsSystemHealthy() const = 0;
+    virtual double GetSystemHealthScore() const = 0;
+    virtual std::string GetSystemStatus() const = 0;
+};
+
+// 电池信息监控接口
+class IBatteryInfo : public IBaseInfo {
+public:
+    virtual ~IBatteryInfo() = default;
+    
+    // 电池存在状态
+    virtual bool IsBatteryPresent() const = 0;
+    virtual bool IsUPS() const = 0;
+    
+    // 充电状态
+    virtual bool IsCharging() const = 0;
+    virtual bool IsFullyCharged() const = 0;
+    virtual bool IsDischarging() const = 0;
+    
+    // 电量信息
+    virtual double GetChargePercentage() const = 0;
+    virtual double GetDesignCapacity() const = 0;
+    virtual double GetCurrentCapacity() const = 0;
+    virtual double GetMaximumCapacity() const = 0;
+    
+    // 健康状态
+    virtual double GetHealthPercentage() const = 0;
+    virtual uint32_t GetCycleCount() const = 0;
+    virtual std::string GetBatteryCondition() const = 0;
+    
+    // 时间信息
+    virtual uint64_t GetTimeToEmpty() const = 0;  // 剩余使用时间(秒)
+    virtual uint64_t GetTimeToFullCharge() const = 0;  // 充满时间(秒)
+    virtual uint64_t GetTimeRemaining() const = 0;  // 剩余时间(秒)
+    
+    // 温度和电压
+    virtual double GetTemperature() const = 0;
+    virtual double GetVoltage() const = 0;
+    virtual double GetCurrent() const = 0;
+    
+    // 电源信息
+    virtual std::string GetPowerSource() const = 0;
+    virtual std::string GetChargerType() const = 0;
+    virtual double GetPowerWattage() const = 0;
+    
+    // 电池标识
+    virtual std::string GetBatteryManufacturer() const = 0;
+    virtual std::string GetBatteryModel() const = 0;
+    virtual std::string GetSerialNumber() const = 0;
+    
+    // 电池特性
+    virtual bool SupportsFastCharging() const = 0;
+    virtual bool IsOptimizedBatteryChargingEnabled() const = 0;
+    virtual std::vector<std::string> GetBatteryWarnings() const = 0;
 };
 
 // 数据收集器接口
@@ -379,6 +479,8 @@ public:
     virtual std::shared_ptr<ITpmInfo> GetTpmInfo() const = 0;
     virtual std::shared_ptr<IUsbMonitor> GetUsbMonitor() const = 0;
     virtual std::shared_ptr<IOSInfo> GetOSInfo() const = 0;
+    virtual std::shared_ptr<ISystemInfo> GetSystemInfo() const = 0;
+    virtual std::shared_ptr<IBatteryInfo> GetBatteryInfo() const = 0;
     
     // 数据导出
     virtual bool ExportToStruct(SystemInfoData& data) const = 0;

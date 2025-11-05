@@ -16,36 +16,36 @@ MacMemoryAdapter::~MacMemoryAdapter() {
     Cleanup();
 }
 
-ULONGLONG MacMemoryAdapter::GetTotalPhysical() const {
+uint64_t MacMemoryAdapter::GetTotalPhysical() const {
     if (!m_macMemoryInfo) {
         SetError("MacMemoryInfo not initialized");
         return 0;
     }
-    return static_cast<ULONGLONG>(m_macMemoryInfo->GetTotalPhysicalMemory());
+    return m_macMemoryInfo->GetTotalPhysicalMemory();
 }
 
-ULONGLONG MacMemoryAdapter::GetAvailablePhysical() const {
+uint64_t MacMemoryAdapter::GetAvailablePhysical() const {
     if (!m_macMemoryInfo) {
         SetError("MacMemoryInfo not initialized");
         return 0;
     }
-    return static_cast<ULONGLONG>(m_macMemoryInfo->GetAvailablePhysicalMemory());
+    return m_macMemoryInfo->GetAvailablePhysicalMemory();
 }
 
-ULONGLONG MacMemoryAdapter::GetTotalVirtual() const {
+uint64_t MacMemoryAdapter::GetTotalVirtual() const {
     if (!m_macMemoryInfo) {
         SetError("MacMemoryInfo not initialized");
         return 0;
     }
-    return static_cast<ULONGLONG>(m_macMemoryInfo->GetTotalVirtualMemory());
+    return m_macMemoryInfo->GetTotalVirtualMemory();
 }
 
-ULONGLONG MacMemoryAdapter::GetAvailableVirtual() const {
+uint64_t MacMemoryAdapter::GetAvailableVirtual() const {
     if (!m_macMemoryInfo) {
         SetError("MacMemoryInfo not initialized");
         return 0;
     }
-    return static_cast<ULONGLONG>(m_macMemoryInfo->GetAvailableVirtualMemory());
+    return m_macMemoryInfo->GetAvailableVirtualMemory();
 }
 
 double MacMemoryAdapter::GetPhysicalUsagePercentage() const {
@@ -64,44 +64,44 @@ double MacMemoryAdapter::GetVirtualUsagePercentage() const {
     return m_macMemoryInfo->GetVirtualMemoryUsage();
 }
 
-ULONGLONG MacMemoryAdapter::GetUsedPhysical() const {
+uint64_t MacMemoryAdapter::GetUsedPhysical() const {
     if (!m_macMemoryInfo) {
         SetError("MacMemoryInfo not initialized");
         return 0;
     }
-    return static_cast<ULONGLONG>(m_macMemoryInfo->GetUsedPhysicalMemory());
+    return m_macMemoryInfo->GetUsedPhysicalMemory();
 }
 
-ULONGLONG MacMemoryAdapter::GetUsedVirtual() const {
+uint64_t MacMemoryAdapter::GetUsedVirtual() const {
     if (!m_macMemoryInfo) {
         SetError("MacMemoryInfo not initialized");
         return 0;
     }
-    return static_cast<ULONGLONG>(m_macMemoryInfo->GetUsedVirtualMemory());
+    return m_macMemoryInfo->GetUsedVirtualMemory();
 }
 
-ULONGLONG MacMemoryAdapter::GetTotalSwap() const {
+uint64_t MacMemoryAdapter::GetTotalSwap() const {
     if (!m_macMemoryInfo) {
         SetError("MacMemoryInfo not initialized");
         return 0;
     }
-    return static_cast<ULONGLONG>(m_macMemoryInfo->GetTotalSwapMemory());
+    return m_macMemoryInfo->GetTotalSwapMemory();
 }
 
-ULONGLONG MacMemoryAdapter::GetAvailableSwap() const {
+uint64_t MacMemoryAdapter::GetAvailableSwap() const {
     if (!m_macMemoryInfo) {
         SetError("MacMemoryInfo not initialized");
         return 0;
     }
-    return static_cast<ULONGLONG>(m_macMemoryInfo->GetAvailableSwapMemory());
+    return m_macMemoryInfo->GetAvailableSwapMemory();
 }
 
-ULONGLONG MacMemoryAdapter::GetUsedSwap() const {
+uint64_t MacMemoryAdapter::GetUsedSwap() const {
     if (!m_macMemoryInfo) {
         SetError("MacMemoryInfo not initialized");
         return 0;
     }
-    return static_cast<ULONGLONG>(m_macMemoryInfo->GetUsedSwapMemory());
+    return m_macMemoryInfo->GetUsedSwapMemory();
 }
 
 double MacMemoryAdapter::GetSwapUsagePercentage() const {
@@ -136,28 +136,28 @@ uint32_t MacMemoryAdapter::GetMemoryChannels() const {
     return m_macMemoryInfo->GetMemoryChannels();
 }
 
-ULONGLONG MacMemoryAdapter::GetCachedMemory() const {
+uint64_t MacMemoryAdapter::GetCachedMemory() const {
     if (!m_macMemoryInfo) {
         SetError("MacMemoryInfo not initialized");
         return 0;
     }
-    return static_cast<ULONGLONG>(m_macMemoryInfo->GetCachedMemory());
+    return m_macMemoryInfo->GetCachedMemory();
 }
 
-ULONGLONG MacMemoryAdapter::GetBufferedMemory() const {
+uint64_t MacMemoryAdapter::GetBufferedMemory() const {
     if (!m_macMemoryInfo) {
         SetError("MacMemoryInfo not initialized");
         return 0;
     }
-    return static_cast<ULONGLONG>(m_macMemoryInfo->GetBufferedMemory());
+    return m_macMemoryInfo->GetBufferedMemory();
 }
 
-ULONGLONG MacMemoryAdapter::GetSharedMemory() const {
+uint64_t MacMemoryAdapter::GetSharedMemory() const {
     if (!m_macMemoryInfo) {
         SetError("MacMemoryInfo not initialized");
         return 0;
     }
-    return static_cast<ULONGLONG>(m_macMemoryInfo->GetSharedMemory());
+    return m_macMemoryInfo->GetSharedMemory();
 }
 
 double MacMemoryAdapter::GetMemoryPressure() const {

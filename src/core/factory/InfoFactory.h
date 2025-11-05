@@ -1,9 +1,17 @@
 #pragma once
-#include "core/common/BaseInfo.h"
-#include "core/common/PlatformDefs.h"
+#include "../common/BaseInfo.h"
+#include "../common/PlatformDefs.h"
+#include "../cpu/CpuInfo.h"
 #include <memory>
 #include <string>
 #include <vector>
+
+#ifdef PLATFORM_MACOS
+class MacMemoryAdapter;
+class MacGpuAdapter;
+class MacSystemInfo;
+class MacBatteryInfo;
+#endif
 
 class InfoFactory {
 public:
@@ -33,6 +41,12 @@ public:
     
     // 创建操作系统信息实例
     static std::unique_ptr<IOSInfo> CreateOSInfo();
+    
+    // 创建系统信息监控实例
+    static std::unique_ptr<ISystemInfo> CreateSystemInfo();
+    
+    // 创建电池信息监控实例
+    static std::unique_ptr<IBatteryInfo> CreateBatteryInfo();
     
     // 创建数据收集器实例
     static std::unique_ptr<IDataCollector> CreateDataCollector();
@@ -78,6 +92,7 @@ private:
         static std::unique_ptr<IDataCollector> CreateWinDataCollector();
     #elif defined(PLATFORM_MACOS)
         static std::unique_ptr<ICpuInfo> CreateMacCpuInfo();
+        static std::unique_ptr<ICpuAdapter> CreateMacCpuAdapter();
         static std::unique_ptr<IMemoryInfo> CreateMacMemoryInfo();
         static std::unique_ptr<IGpuInfo> CreateMacGpuInfo();
         static std::unique_ptr<INetworkAdapter> CreateMacNetworkAdapter(const std::string& adapterName);
@@ -86,6 +101,8 @@ private:
         static std::unique_ptr<ITpmInfo> CreateMacTpmInfo();
         static std::unique_ptr<IUsbMonitor> CreateMacUsbMonitor();
         static std::unique_ptr<IOSInfo> CreateMacOSInfo();
+        static std::unique_ptr<ISystemInfo> CreateMacSystemInfo();
+        static std::unique_ptr<IBatteryInfo> CreateMacBatteryInfo();
         static std::unique_ptr<IDataCollector> CreateMacDataCollector();
     #elif defined(PLATFORM_LINUX)
         static std::unique_ptr<ICpuInfo> CreateLinuxCpuInfo();
@@ -99,6 +116,14 @@ private:
         static std::unique_ptr<IOSInfo> CreateLinuxOSInfo();
         static std::unique_ptr<IDataCollector> CreateLinuxDataCollector();
     #endif
+
+    // 兼容性支持：创建原有类实例
+    static std::unique_ptr<CpuInfo> CreateLegacyCpuInfo();
+    static std::unique_ptr<ICpuAdapter> CreateCpuAdapter();
+    
+    // macOS特定适配器
+    static std::unique_ptr<MacMemoryAdapter> CreateMacMemoryAdapter();
+    static std::unique_ptr<MacGpuAdapter> CreateMacGpuAdapter();
     
     // 错误处理
     static std::string lastError;
