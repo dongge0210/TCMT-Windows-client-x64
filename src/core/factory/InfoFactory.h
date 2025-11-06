@@ -42,11 +42,18 @@ public:
     // 创建操作系统信息实例
     static std::unique_ptr<IOSInfo> CreateOSInfo();
     
-    // 创建系统信息监控实例
-    static std::unique_ptr<ISystemInfo> CreateSystemInfo();
+    // 创建系统信息
+    std::unique_ptr<ISystemInfo> CreateSystemInfo();
+    std::unique_ptr<IBatteryInfo> CreateBatteryInfo();
     
-    // 创建电池信息监控实例
-    static std::unique_ptr<IBatteryInfo> CreateBatteryInfo();
+    // 创建温度信息
+    std::unique_ptr<ITemperatureInfo> CreateTemperatureInfo();
+    
+    // 创建磁盘信息
+    std::unique_ptr<IDiskInfo> CreateDiskInfo();
+    
+    // 创建网络信息
+    std::unique_ptr<INetworkInfo> CreateNetworkInfo();
     
     // 创建数据收集器实例
     static std::unique_ptr<IDataCollector> CreateDataCollector();

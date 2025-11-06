@@ -1,108 +1,126 @@
 #include <iostream>
-#include <string>
-#include <vector>
+#include <iomanip>
 #include <sys/sysctl.h>
-#include <mach/mach.h>
+#include <sys/utsname.h>
 #include <unistd.h>
+#include <mach/mach.h>
+#include <thread>
+#include <chrono>
+#include <pwd.h>
 
-// 简化的CPU信息类
-class SimpleMacCpuInfo {
-private:
-    mutable double m_cpuUsage;
-    mutable std::vector<double> m_perCoreUsage;
-    mutable uint32_t m_totalCores;
-    mutable uint32_t m_physicalCores;
-    mutable bool m_initialized;
-
-    bool GetHostStatistics(host_cpu_load_info_data_t& cpuLoad) const {
-        mach_msg_type_number_t count = HOST_CPU_LOAD_INFO_COUNT;
-        kern_return_t result = host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO,
-                                              (host_info_t)&cpuLoad, &count);
-        return result == KERN_SUCCESS;
+// 简单的系统信息测试
+void testBasicSystemInfo() {
+    std::cout << "\n=== 基本系统信息测试 ===" << std::endl;
+    
+    // 获取系统信息
+    struct utsname uname_info;
+    if (uname(&uname_info) == 0) {
+        std::cout << "操作系统: " << uname_info.sysname << std::endl;
+        std::cout << "版本: " << uname_info.release << std::endl;
+        std::cout << "构建: " << uname_info.version << std::endl;
+        std::cout << "主机名: " << uname_info.nodename << std::endl;
+        std::cout << "架构: " << uname_info.machine << std::endl;
+    } else {
+        std::cout << "✗ 获取系统信息失败" << std::endl;
     }
-
-public:
-    SimpleMacCpuInfo() : m_cpuUsage(0.0), m_totalCores(0), m_physicalCores(0), m_initialized(false) {
-        Initialize();
+    
+    // 获取主机名
+    char hostname[256];
+    if (gethostname(hostname, sizeof(hostname)) == 0) {
+        std::cout << "主机名: " << hostname << std::endl;
     }
-
-    bool Initialize() {
-        // 获取CPU核心数
-        int mib[2];
-        size_t length;
+    
+    // 获取用户名
+    struct passwd* pw = getpwuid(getuid());
+    if (pw) {
+        std::cout << "用户名: " << pw->pw_name << std::endl;
+    }
+    
+    // 获取运行时间
+    struct timeval boottime;
+    size_t size = sizeof(boottime);
+    int mib[2] = {CTL_KERN, KERN_BOOTTIME};
+    
+    if (sysctl(mib, 2, &boottime, &size, nullptr, 0) == 0) {
+        auto now = std::chrono::system_clock::now();
+        auto bootTime = std::chrono::system_clock::from_time_t(boottime.tv_sec);
+        auto duration = std::chrono::duration_cast<std::chrono::seconds>(now - bootTime);
+        uint64_t uptime = duration.count();
         
-        mib[0] = CTL_HW;
-        mib[1] = HW_NCPU;
-        length = sizeof(m_totalCores);
-        if (sysctl(mib, 2, &m_totalCores, &length, NULL, 0) != 0) {
-            std::cerr << "Failed to get CPU count" << std::endl;
-            return false;
-        }
-
-        // 在macOS上，物理核心数可能通过不同的方式获取
-        // 暂时使用逻辑核心数作为物理核心数
-        m_physicalCores = m_totalCores;
-
-        m_perCoreUsage.resize(m_totalCores, 0.0);
-        m_initialized = true;
-        return true;
+        std::cout << "运行时间: " << uptime << " 秒 (" << (uptime / 3600) << " 小时)" << std::endl;
+        
+        uint64_t days = uptime / 86400;
+        uint64_t hours = (uptime % 86400) / 3600;
+        uint64_t minutes = (uptime % 3600) / 60;
+        
+        std::cout << "格式化运行时间: ";
+        if (days > 0) std::cout << days << "天 ";
+        if (hours > 0 || days > 0) std::cout << hours << "小时 ";
+        std::cout << minutes << "分钟" << std::endl;
+    } else {
+        std::cout << "✗ 获取运行时间失败" << std::endl;
     }
-
-    double GetTotalUsage() const {
-        if (!m_initialized) return 0.0;
-
-        host_cpu_load_info_data_t cpuLoad;
-        if (!GetHostStatistics(cpuLoad)) {
-            return m_cpuUsage;
-        }
-
-        uint32_t totalTicks = 0;
-        uint32_t idleTicks = 0;
-
-        for (int i = 0; i < CPU_STATE_MAX; i++) {
-            totalTicks += cpuLoad.cpu_ticks[i];
-        }
-        idleTicks = cpuLoad.cpu_ticks[CPU_STATE_IDLE];
-
-        if (totalTicks > 0) {
-            m_cpuUsage = ((double)(totalTicks - idleTicks) / (double)totalTicks) * 100.0;
-        }
-
-        return m_cpuUsage;
+    
+    // 获取系统负载
+    double loadAverage[3];
+    if (getloadavg(loadAverage, 3) != -1) {
+        std::cout << "系统负载 (1/5/15分钟): " 
+                  << std::fixed << std::setprecision(2) 
+                  << loadAverage[0] << ", " 
+                  << loadAverage[1] << ", " 
+                  << loadAverage[2] << std::endl;
+    } else {
+        std::cout << "✗ 获取系统负载失败" << std::endl;
     }
-
-    uint32_t GetTotalCores() const {
-        return m_totalCores;
-    }
-
-    uint32_t GetPhysicalCores() const {
-        return m_physicalCores;
-    }
-
-    std::string GetName() const {
-        char buffer[256];
-        size_t size = sizeof(buffer);
-        if (sysctlbyname("machdep.cpu.brand_string", buffer, &size, NULL, 0) == 0) {
-            return std::string(buffer);
+    
+    // 获取内存信息
+    uint64_t totalMemory = 0;
+    size_t memSize = sizeof(totalMemory);
+    if (sysctlbyname("hw.memsize", &totalMemory, &memSize, nullptr, 0) == 0) {
+        std::cout << "总物理内存: " << (totalMemory / (1024 * 1024 * 1024)) << " GB" << std::endl;
+        
+        // 获取可用内存
+        vm_statistics64_data_t vm_stat;
+        mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+        kern_return_t kr = host_statistics64(mach_host_self(), HOST_VM_INFO64,
+                                               (host_info64_t)&vm_stat, &count);
+        
+        if (kr == KERN_SUCCESS) {
+            uint64_t pageSize = vm_page_size;
+            uint64_t freeMemory = vm_stat.free_count * pageSize;
+            uint64_t inactiveMemory = vm_stat.inactive_count * pageSize;
+            uint64_t availableMemory = freeMemory + inactiveMemory;
+            uint64_t usedMemory = totalMemory - availableMemory;
+            
+            std::cout << "可用内存: " << (availableMemory / (1024 * 1024 * 1024)) << " GB" << std::endl;
+            std::cout << "已用内存: " << (usedMemory / (1024 * 1024 * 1024)) << " GB" << std::endl;
+            std::cout << "内存使用率: " << std::fixed << std::setprecision(1) 
+                      << ((double)usedMemory / totalMemory * 100) << "%" << std::endl;
+        } else {
+            std::cout << "✗ 获取详细内存信息失败" << std::endl;
         }
-        return "Unknown CPU";
+    } else {
+        std::cout << "✗ 获取总内存失败" << std::endl;
     }
-};
+    
+    // 获取CPU核心数
+    uint32_t cores = std::thread::hardware_concurrency();
+    std::cout << "CPU核心数: " << cores << std::endl;
+    
+    std::cout << "✓ 基本系统信息测试完成" << std::endl;
+}
 
 int main() {
-    std::cout << "=== macOS CPU信息测试 ===" << std::endl;
+    std::cout << "=== macOS 简单系统信息检测测试 ===" << std::endl;
+    std::cout << "测试基本的系统信息获取功能" << std::endl;
     
-    SimpleMacCpuInfo cpuInfo;
-    
-    std::cout << "CPU名称: " << cpuInfo.GetName() << std::endl;
-    std::cout << "逻辑核心数: " << cpuInfo.GetTotalCores() << std::endl;
-    std::cout << "物理核心数: " << cpuInfo.GetPhysicalCores() << std::endl;
-    std::cout << "CPU使用率: " << cpuInfo.GetTotalUsage() << "%" << std::endl;
-    
-    std::cout << "\n=== 跨平台架构测试成功 ===" << std::endl;
-    std::cout << "✓ macOS CPU信息获取正常" << std::endl;
-    std::cout << "✓ 接口统一，实现分离" << std::endl;
-    std::cout << "✓ 原有功能保持不变" << std::endl;
+    try {
+        testBasicSystemInfo();
+        std::cout << "\n=== 所有测试完成 ===" << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "测试过程中发生异常: " << e.what() << std::endl;
+        return 1;
+    }
     
     return 0;
 }

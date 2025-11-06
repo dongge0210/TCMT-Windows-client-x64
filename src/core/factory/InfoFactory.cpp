@@ -21,10 +21,12 @@
     #include "../platform/macos/MacGpuInfo.h"
     #include "../platform/macos/MacGpuAdapter.h"
     #include "../platform/macos/MacSystemInfo.h"
-    #include "../platform/macos/MacSystemAdapter.h"
     #include "../platform/macos/MacBatteryInfo.h"
+    #include "../platform/macos/MacSystemAdapter.h"
     #include "../platform/macos/MacBatteryAdapter.h"
-    #include "../platform/macos/MacPlatformPlaceholder.h"
+    #include "../platform/macos/MacTemperatureInfo.h"
+    #include "../platform/macos/MacDiskInfo.h"
+    #include "../platform/macos/MacNetworkInfo.h"
 #elif defined(PLATFORM_LINUX)
     #include "../platform/linux/LinuxCpuInfo.h"
     #include "../platform/linux/LinuxMemoryInfo.h"
@@ -37,6 +39,9 @@
     #include "../platform/linux/LinuxOSInfo.h"
     #include "../platform/linux/LinuxDataCollector.h"
 #endif
+
+// 兼容性支持：包含原有类
+#include "../cpu/CpuInfo.h"
 
 // 兼容性支持：包含原有类
 #include "../cpu/CpuInfo.h"
@@ -243,12 +248,20 @@ std::unique_ptr<IOSInfo> InfoFactory::CreateOSInfo() {
     }
 }
 
+
+
 std::unique_ptr<ISystemInfo> InfoFactory::CreateSystemInfo() {
     try {
         #ifdef PLATFORM_WINDOWS
             return CreateWinSystemInfo();
         #elif defined(PLATFORM_MACOS)
-            return CreateMacSystemInfo();
+            auto systemInfo = std::make_unique<MacSystemInfo>();
+            if (systemInfo && systemInfo->Initialize()) {
+                return systemInfo;
+            } else {
+                SetError("Failed to initialize macOS system info");
+                return nullptr;
+            }
         #elif defined(PLATFORM_LINUX)
             return CreateLinuxSystemInfo();
         #else
@@ -261,23 +274,7 @@ std::unique_ptr<ISystemInfo> InfoFactory::CreateSystemInfo() {
     }
 }
 
-std::unique_ptr<IBatteryInfo> InfoFactory::CreateBatteryInfo() {
-    try {
-        #ifdef PLATFORM_WINDOWS
-            return CreateWinBatteryInfo();
-        #elif defined(PLATFORM_MACOS)
-            return CreateMacBatteryInfo();
-        #elif defined(PLATFORM_LINUX)
-            return CreateLinuxBatteryInfo();
-        #else
-            SetError("Unsupported platform for battery info");
-            return nullptr;
-        #endif
-    } catch (const std::exception& e) {
-        SetError(std::string("Failed to create battery info: ") + e.what());
-        return nullptr;
-    }
-}
+
 
 std::unique_ptr<IDataCollector> InfoFactory::CreateDataCollector() {
     try {
@@ -441,11 +438,243 @@ void InfoFactory::ClearError() {
 // 平台特定的创建函数实现
 #ifdef PLATFORM_WINDOWS
 std::unique_ptr<ICpuInfo> InfoFactory::CreateWinCpuInfo() {
-    return std::make_unique<WinCpuInfo>();
+    try {
+        auto cpuInfo = std::make_unique<WinCpuInfo>();
+        if (cpuInfo && cpuInfo->Initialize()) {
+            return cpuInfo;
+        } else {
+            SetError("Failed to initialize Windows CPU info");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Windows CPU info: ") + e.what());
+        return nullptr;
+    }
 }
 
 std::unique_ptr<ICpuAdapter> InfoFactory::CreateWinCpuAdapter() {
-    return std::make_unique<WinCpuAdapter>();
+    try {
+        auto adapter = std::make_unique<WinCpuAdapter>();
+        if (adapter && adapter->Initialize()) {
+            return adapter;
+        } else {
+            SetError("Failed to initialize Windows CPU adapter");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Windows CPU adapter: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<IMemoryInfo> InfoFactory::CreateWinMemoryInfo() {
+    try {
+        auto memoryInfo = std::make_unique<WinMemoryInfo>();
+        if (memoryInfo && memoryInfo->Initialize()) {
+            return memoryInfo;
+        } else {
+            SetError("Failed to initialize Windows memory info");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Windows memory info: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<IGpuInfo> InfoFactory::CreateWinGpuInfo() {
+    try {
+        auto gpuInfo = std::make_unique<WinGpuInfo>();
+        if (gpuInfo && gpuInfo->Initialize()) {
+            return gpuInfo;
+        } else {
+            SetError("Failed to initialize Windows GPU info");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Windows GPU info: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<INetworkAdapter> InfoFactory::CreateWinNetworkAdapter(const std::string& adapterName) {
+    try {
+        auto adapter = std::make_unique<WinNetworkAdapter>(adapterName);
+        if (adapter && adapter->Initialize()) {
+            return adapter;
+        } else {
+            SetError("Failed to initialize Windows network adapter");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Windows network adapter: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<IDiskInfo> InfoFactory::CreateWinDiskInfo(const std::string& diskName) {
+    try {
+        auto diskInfo = std::make_unique<WinDiskInfo>(diskName);
+        if (diskInfo && diskInfo->Initialize()) {
+            return diskInfo;
+        } else {
+            SetError("Failed to initialize Windows disk info");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Windows disk info: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<ITemperatureMonitor> InfoFactory::CreateWinTemperatureMonitor() {
+    try {
+        auto monitor = std::make_unique<WinTemperatureWrapper>();
+        if (monitor && monitor->Initialize()) {
+            return monitor;
+        } else {
+            SetError("Failed to initialize Windows temperature monitor");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Windows temperature monitor: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<ITpmInfo> InfoFactory::CreateWinTpmInfo() {
+    try {
+        auto tpmInfo = std::make_unique<WinTpmInfo>();
+        if (tpmInfo && tpmInfo->Initialize()) {
+            return tpmInfo;
+        } else {
+            SetError("Failed to initialize Windows TPM info");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Windows TPM info: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<IUsbMonitor> InfoFactory::CreateWinUsbMonitor() {
+    try {
+        auto usbMonitor = std::make_unique<WinUsbInfo>();
+        if (usbMonitor && usbMonitor->Initialize()) {
+            return usbMonitor;
+        } else {
+            SetError("Failed to initialize Windows USB monitor");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Windows USB monitor: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<IOSInfo> InfoFactory::CreateWinOSInfo() {
+    try {
+        auto osInfo = std::make_unique<WinOSInfo>();
+        if (osInfo && osInfo->Initialize()) {
+            return osInfo;
+        } else {
+            SetError("Failed to initialize Windows OS info");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Windows OS info: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<ISystemInfo> InfoFactory::CreateWinSystemInfo() {
+    try {
+        auto systemInfo = std::make_unique<WinSystemInfo>();
+        if (systemInfo && systemInfo->Initialize()) {
+            return systemInfo;
+        } else {
+            SetError("Failed to initialize Windows system info");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Windows system info: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<IBatteryInfo> InfoFactory::CreateWinBatteryInfo() {
+    try {
+        auto batteryInfo = std::make_unique<WinBatteryInfo>();
+        if (batteryInfo && batteryInfo->Initialize()) {
+            return batteryInfo;
+        } else {
+            SetError("Failed to initialize Windows battery info");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Windows battery info: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<ITemperatureInfo> InfoFactory::CreateWinTemperatureInfo() {
+    try {
+        auto tempInfo = std::make_unique<WinTemperatureInfo>();
+        if (tempInfo && tempInfo->Initialize()) {
+            return tempInfo;
+        } else {
+            SetError("Failed to initialize Windows temperature info");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Windows temperature info: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<IDiskInfo> InfoFactory::CreateWinDiskInfo() {
+    try {
+        auto diskInfo = std::make_unique<WinDiskInfo>();
+        if (diskInfo && diskInfo->Initialize()) {
+            return diskInfo;
+        } else {
+            SetError("Failed to initialize Windows disk info");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Windows disk info: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<INetworkInfo> InfoFactory::CreateWinNetworkInfo() {
+    try {
+        auto networkInfo = std::make_unique<WinNetworkInfo>();
+        if (networkInfo && networkInfo->Initialize()) {
+            return networkInfo;
+        } else {
+            SetError("Failed to initialize Windows network info");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Windows network info: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<IDataCollector> InfoFactory::CreateWinDataCollector() {
+    try {
+        auto dataCollector = std::make_unique<WinDataCollector>();
+        if (dataCollector && dataCollector->Initialize()) {
+            return dataCollector;
+        } else {
+            SetError("Failed to initialize Windows data collector");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Windows data collector: ") + e.what());
+        return nullptr;
+    }
 }
 #elif defined(PLATFORM_MACOS)
 std::unique_ptr<ICpuInfo> InfoFactory::CreateMacCpuInfo() {
@@ -520,32 +749,74 @@ std::unique_ptr<MacGpuAdapter> InfoFactory::CreateMacGpuAdapter() {
     }
 }
 
-std::unique_ptr<IGpuInfo> InfoFactory::CreateMacGpuInfo() {
-    return std::make_unique<MacGpuInfo>();
-}
-
 std::unique_ptr<INetworkAdapter> InfoFactory::CreateMacNetworkAdapter(const std::string& adapterName) {
-    return std::make_unique<MacNetworkAdapter>(adapterName);
+    try {
+        // TODO: Implement MacNetworkAdapter class
+        SetError("MacNetworkAdapter not implemented yet");
+        return nullptr;
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create macOS network adapter: ") + e.what());
+        return nullptr;
+    }
 }
 
 std::unique_ptr<IDiskInfo> InfoFactory::CreateMacDiskInfo(const std::string& diskName) {
-    return std::make_unique<MacDiskInfo>(diskName);
+    try {
+        auto diskInfo = std::make_unique<MacDiskInfo>(diskName);
+        if (diskInfo && diskInfo->Initialize()) {
+            return diskInfo;
+        } else {
+            SetError("Failed to initialize macOS disk info");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create macOS disk info: ") + e.what());
+        return nullptr;
+    }
 }
 
 std::unique_ptr<ITemperatureMonitor> InfoFactory::CreateMacTemperatureMonitor() {
-    return std::make_unique<MacTemperatureWrapper>();
+    try {
+        // TODO: Implement MacTemperatureMonitor class
+        SetError("MacTemperatureMonitor not implemented yet");
+        return nullptr;
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create macOS temperature monitor: ") + e.what());
+        return nullptr;
+    }
 }
 
 std::unique_ptr<ITpmInfo> InfoFactory::CreateMacTpmInfo() {
-    return std::make_unique<MacTpmInfo>();
+    try {
+        // TODO: Implement MacTpmInfo class
+        SetError("MacTpmInfo not implemented yet");
+        return nullptr;
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create macOS TPM info: ") + e.what());
+        return nullptr;
+    }
 }
 
 std::unique_ptr<IUsbMonitor> InfoFactory::CreateMacUsbMonitor() {
-    return std::make_unique<MacUsbInfo>();
+    try {
+        // TODO: Implement MacUsbMonitor class
+        SetError("MacUsbMonitor not implemented yet");
+        return nullptr;
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create macOS USB monitor: ") + e.what());
+        return nullptr;
+    }
 }
 
 std::unique_ptr<IOSInfo> InfoFactory::CreateMacOSInfo() {
-    return std::make_unique<MacOSInfo>();
+    try {
+        // TODO: Implement MacOSInfo class
+        SetError("MacOSInfo not implemented yet");
+        return nullptr;
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create macOS OS info: ") + e.what());
+        return nullptr;
+    }
 }
 
 std::unique_ptr<ISystemInfo> InfoFactory::CreateMacSystemInfo() {
@@ -579,19 +850,254 @@ std::unique_ptr<IBatteryInfo> InfoFactory::CreateMacBatteryInfo() {
 }
 
 std::unique_ptr<IDataCollector> InfoFactory::CreateMacDataCollector() {
-    return std::make_unique<MacDataCollector>();
+    try {
+        // TODO: Implement MacDataCollector class
+        SetError("MacDataCollector not implemented yet");
+        return nullptr;
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create macOS data collector: ") + e.what());
+        return nullptr;
+    }
 }
 #elif defined(PLATFORM_LINUX)
 std::unique_ptr<ICpuInfo> InfoFactory::CreateLinuxCpuInfo() {
-    // TODO: 实现Linux CPU信息创建
-    SetError("Linux CPU info not implemented yet");
-    return nullptr;
+    try {
+        auto cpuInfo = std::make_unique<LinuxCpuInfo>();
+        if (cpuInfo && cpuInfo->Initialize()) {
+            return cpuInfo;
+        } else {
+            SetError("Failed to initialize Linux CPU info");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Linux CPU info: ") + e.what());
+        return nullptr;
+    }
 }
 
 std::unique_ptr<ICpuAdapter> InfoFactory::CreateLinuxCpuAdapter() {
-    // TODO: 实现Linux CPU适配器创建
-    SetError("Linux CPU adapter not implemented yet");
-    return nullptr;
+    try {
+        auto adapter = std::make_unique<LinuxCpuAdapter>();
+        if (adapter && adapter->Initialize()) {
+            return adapter;
+        } else {
+            SetError("Failed to initialize Linux CPU adapter");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Linux CPU adapter: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<IMemoryInfo> InfoFactory::CreateLinuxMemoryInfo() {
+    try {
+        auto memoryInfo = std::make_unique<LinuxMemoryInfo>();
+        if (memoryInfo && memoryInfo->Initialize()) {
+            return memoryInfo;
+        } else {
+            SetError("Failed to initialize Linux memory info");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Linux memory info: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<IGpuInfo> InfoFactory::CreateLinuxGpuInfo() {
+    try {
+        auto gpuInfo = std::make_unique<LinuxGpuInfo>();
+        if (gpuInfo && gpuInfo->Initialize()) {
+            return gpuInfo;
+        } else {
+            SetError("Failed to initialize Linux GPU info");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Linux GPU info: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<INetworkAdapter> InfoFactory::CreateLinuxNetworkAdapter(const std::string& adapterName) {
+    try {
+        auto adapter = std::make_unique<LinuxNetworkAdapter>(adapterName);
+        if (adapter && adapter->Initialize()) {
+            return adapter;
+        } else {
+            SetError("Failed to initialize Linux network adapter");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Linux network adapter: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<IDiskInfo> InfoFactory::CreateLinuxDiskInfo(const std::string& diskName) {
+    try {
+        auto diskInfo = std::make_unique<LinuxDiskInfo>(diskName);
+        if (diskInfo && diskInfo->Initialize()) {
+            return diskInfo;
+        } else {
+            SetError("Failed to initialize Linux disk info");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Linux disk info: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<ITemperatureMonitor> InfoFactory::CreateLinuxTemperatureMonitor() {
+    try {
+        auto monitor = std::make_unique<LinuxTemperatureWrapper>();
+        if (monitor && monitor->Initialize()) {
+            return monitor;
+        } else {
+            SetError("Failed to initialize Linux temperature monitor");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Linux temperature monitor: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<ITpmInfo> InfoFactory::CreateLinuxTpmInfo() {
+    try {
+        auto tpmInfo = std::make_unique<LinuxTpmInfo>();
+        if (tpmInfo && tpmInfo->Initialize()) {
+            return tpmInfo;
+        } else {
+            SetError("Failed to initialize Linux TPM info");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Linux TPM info: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<IUsbMonitor> InfoFactory::CreateLinuxUsbMonitor() {
+    try {
+        auto usbMonitor = std::make_unique<LinuxUsbInfo>();
+        if (usbMonitor && usbMonitor->Initialize()) {
+            return usbMonitor;
+        } else {
+            SetError("Failed to initialize Linux USB monitor");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Linux USB monitor: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<IOSInfo> InfoFactory::CreateLinuxOSInfo() {
+    try {
+        auto osInfo = std::make_unique<LinuxOSInfo>();
+        if (osInfo && osInfo->Initialize()) {
+            return osInfo;
+        } else {
+            SetError("Failed to initialize Linux OS info");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Linux OS info: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<ISystemInfo> InfoFactory::CreateLinuxSystemInfo() {
+    try {
+        auto systemInfo = std::make_unique<LinuxSystemInfo>();
+        if (systemInfo && systemInfo->Initialize()) {
+            return systemInfo;
+        } else {
+            SetError("Failed to initialize Linux system info");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Linux system info: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<IBatteryInfo> InfoFactory::CreateLinuxBatteryInfo() {
+    try {
+        auto batteryInfo = std::make_unique<LinuxBatteryInfo>();
+        if (batteryInfo && batteryInfo->Initialize()) {
+            return batteryInfo;
+        } else {
+            SetError("Failed to initialize Linux battery info");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Linux battery info: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<ITemperatureInfo> InfoFactory::CreateLinuxTemperatureInfo() {
+    try {
+        auto tempInfo = std::make_unique<LinuxTemperatureInfo>();
+        if (tempInfo && tempInfo->Initialize()) {
+            return tempInfo;
+        } else {
+            SetError("Failed to initialize Linux temperature info");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Linux temperature info: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<IDiskInfo> InfoFactory::CreateLinuxDiskInfo() {
+    try {
+        auto diskInfo = std::make_unique<LinuxDiskInfo>();
+        if (diskInfo && diskInfo->Initialize()) {
+            return diskInfo;
+        } else {
+            SetError("Failed to initialize Linux disk info");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Linux disk info: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<INetworkInfo> InfoFactory::CreateLinuxNetworkInfo() {
+    try {
+        auto networkInfo = std::make_unique<LinuxNetworkInfo>();
+        if (networkInfo && networkInfo->Initialize()) {
+            return networkInfo;
+        } else {
+            SetError("Failed to initialize Linux network info");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Linux network info: ") + e.what());
+        return nullptr;
+    }
+}
+
+std::unique_ptr<IDataCollector> InfoFactory::CreateLinuxDataCollector() {
+    try {
+        auto dataCollector = std::make_unique<LinuxDataCollector>();
+        if (dataCollector && dataCollector->Initialize()) {
+            return dataCollector;
+        } else {
+            SetError("Failed to initialize Linux data collector");
+            return nullptr;
+        }
+    } catch (const std::exception& e) {
+        SetError(std::string("Failed to create Linux data collector: ") + e.what());
+        return nullptr;
+    }
 }
 #endif
 

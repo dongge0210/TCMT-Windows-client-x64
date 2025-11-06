@@ -7,6 +7,94 @@
 // 前向声明
 struct SystemInfoData;
 
+// 数据结构定义
+struct TemperatureSensor {
+    std::string name;
+    double temperature;
+    std::string type;
+    std::string location;
+};
+
+struct DiskInfo {
+    std::string name;
+    std::string model;
+    std::string serialNumber;
+    uint64_t totalSpace;
+    uint64_t freeSpace;
+    uint64_t usedSpace;
+    double usagePercentage;
+    std::string fileSystem;
+    double readSpeed;
+    double writeSpeed;
+    uint64_t totalReadBytes;
+    uint64_t totalWriteBytes;
+    bool isHealthy;
+    std::string healthStatus;
+    uint32_t powerOnHours;
+    uint32_t startStopCount;
+    uint32_t reallocatedSectors;
+    double temperature;
+    uint64_t remainingBlocks;
+    bool isActive;
+    double diskUtilization;
+    uint32_t activeProcesses;
+    bool isEncrypted;
+    std::string encryptionType;
+};
+
+struct NetworkInterface {
+    std::string name;
+    std::string description;
+    std::string type;
+    std::string status;
+    std::string macAddress;
+    std::vector<std::string> ipAddresses;
+    double downloadSpeed;
+    double uploadSpeed;
+    uint64_t totalRxBytes;
+    uint64_t totalTxBytes;
+    std::string ssid;
+    double signalStrength;
+    uint32_t channel;
+    std::string securityType;
+    bool isConnected;
+    double latency;
+    double packetLoss;
+    std::string networkQuality;
+};
+
+struct BatteryCell {
+    uint32_t cellIndex;
+    double voltage;
+    double temperature;
+    double capacity;
+    bool isHealthy;
+};
+
+struct BatteryInfo {
+    double currentCapacity;
+    double maxCapacity;
+    double designCapacity;
+    int cycleCount;
+    bool isCharging;
+    bool isPresent;
+    double voltage;
+    double current;
+    double temperature;
+    std::string healthStatus;
+    int timeToEmpty;
+    int timeToFullCharge;
+    std::string powerSourceState;
+    double powerConsumption;
+    double healthPercentage;
+    std::string batterySerial;
+    std::string manufacturingDate;
+    double batteryWearLevel;
+    bool isCalibrated;
+    uint32_t powerOnTime;
+    std::vector<std::string> batteryWarnings;
+};
+
 // 基础信息接口类
 class IBaseInfo {
 public:
@@ -355,7 +443,6 @@ public:
     virtual std::string GetUpdateStatus() const = 0;
 };
 
-// 系统信息监控接口
 class ISystemInfo : public IBaseInfo {
 public:
     virtual ~ISystemInfo() = default;
@@ -363,96 +450,249 @@ public:
     // 操作系统信息
     virtual std::string GetOSName() const = 0;
     virtual std::string GetOSVersion() const = 0;
-    virtual std::string GetHostname() const = 0;
+    virtual std::string GetOSBuild() const = 0;
     virtual std::string GetArchitecture() const = 0;
+    virtual std::string GetHostname() const = 0;
+    virtual std::string GetDomain() const = 0;
     
-    // 系统运行时间
+    // 系统时间信息
     virtual uint64_t GetUptimeSeconds() const = 0;
     virtual std::string GetBootTime() const = 0;
+    virtual std::string GetLocalTime() const = 0;
+    virtual std::string GetUTCTime() const = 0;
+    virtual std::string GetTimezone() const = 0;
     
     // 系统负载
     virtual double GetLoadAverage1Min() const = 0;
     virtual double GetLoadAverage5Min() const = 0;
     virtual double GetLoadAverage15Min() const = 0;
+    virtual double GetCPULoadAverage() const = 0;
     
     // 进程信息
-    virtual uint32_t GetTotalProcesses() const = 0;
-    virtual uint32_t GetRunningProcesses() const = 0;
-    virtual uint32_t GetSleepingProcesses() const = 0;
-    virtual uint32_t GetThreads() const = 0;
+    virtual uint32_t GetProcessCount() const = 0;
+    virtual uint32_t GetRunningProcessCount() const = 0;
+    virtual uint32_t GetSleepingProcessCount() const = 0;
+    virtual uint32_t GetThreadCount() const = 0;
+    virtual uint32_t GetMaxProcesses() const = 0;
     
-    // 系统资源统计
-    virtual uint64_t GetTotalPhysicalMemory() const = 0;
-    virtual uint64_t GetAvailablePhysicalMemory() const = 0;
-    virtual uint64_t GetTotalSwapMemory() const = 0;
-    virtual uint64_t GetAvailableSwapMemory() const = 0;
+    // 内存信息
+    virtual uint64_t GetTotalMemory() const = 0;
+    virtual uint64_t GetAvailableMemory() const = 0;
+    virtual uint64_t GetUsedMemory() const = 0;
+    virtual uint64_t GetCacheMemory() const = 0;
+    virtual uint64_t GetSwapMemory() const = 0;
+    virtual double GetMemoryUsagePercentage() const = 0;
+    virtual double GetMemoryPressure() const = 0;
     
-    // 磁盘使用统计
+    // 磁盘信息
     virtual uint64_t GetTotalDiskSpace() const = 0;
     virtual uint64_t GetAvailableDiskSpace() const = 0;
     virtual uint64_t GetUsedDiskSpace() const = 0;
+    virtual double GetDiskUsagePercentage() const = 0;
+    virtual uint32_t GetDiskReadOps() const = 0;
+    virtual uint32_t GetDiskWriteOps() const = 0;
+    virtual uint64_t GetDiskReadBytes() const = 0;
+    virtual uint64_t GetDiskWriteBytes() const = 0;
     
-    // 网络统计
-    virtual uint64_t GetNetworkBytesReceived() const = 0;
-    virtual uint64_t GetNetworkBytesSent() const = 0;
-    virtual uint64_t GetNetworkPacketsReceived() const = 0;
-    virtual uint64_t GetNetworkPacketsSent() const = 0;
+    // 网络信息
+    virtual uint32_t GetNetworkInterfaceCount() const = 0;
+    virtual uint64_t GetTotalBytesReceived() const = 0;
+    virtual uint64_t GetTotalBytesSent() const = 0;
+    virtual double GetNetworkUtilization() const = 0;
     
-    // 系统健康状态
+    // 系统状态
     virtual bool IsSystemHealthy() const = 0;
-    virtual double GetSystemHealthScore() const = 0;
     virtual std::string GetSystemStatus() const = 0;
+    virtual std::vector<std::string> GetSystemWarnings() const = 0;
+    virtual std::vector<std::string> GetSystemErrors() const = 0;
+    virtual double GetSystemHealthScore() const = 0;
+    
+    // 安全信息
+    virtual bool IsSecureBootEnabled() const = 0;
+    virtual bool IsFirewallEnabled() const = 0;
+    virtual bool IsAntivirusRunning() const = 0;
+    virtual std::string GetSecurityStatus() const = 0;
+    
+    // 硬件信息
+    virtual std::string GetMotherboardModel() const = 0;
+    virtual std::string GetBIOSVersion() const = 0;
+    virtual std::string GetFirmwareVersion() const = 0;
+    virtual std::string GetSerialNumber() const = 0;
+    
+    // 虚拟化信息
+    virtual bool IsVirtualMachine() const = 0;
+    virtual std::string GetVirtualizationPlatform() const = 0;
+    virtual uint32_t GetVirtualCPUCount() const = 0;
+    virtual uint64_t GetVirtualMemory() const = 0;
+    
+    // 环境变量
+    virtual std::vector<std::string> GetEnvironmentVariables() const = 0;
+    virtual std::string GetEnvironmentVariable(const std::string& name) const = 0;
+    
+    // 系统更新
+    virtual std::string GetLastSystemUpdateTime() const = 0;
+    virtual bool UpdatesAvailable() const = 0;
+    virtual std::vector<std::string> GetPendingUpdates() const = 0;
 };
 
-// 电池信息监控接口
+// 新增接口
+class ITemperatureInfo : public IBaseInfo {
+public:
+    virtual ~ITemperatureInfo() = default;
+    
+    // CPU温度
+    virtual double GetCPUTemperature() const = 0;
+    virtual double GetCpuMaxTemperature() const = 0;
+    virtual double GetCpuMinTemperature() const = 0;
+    
+    // GPU温度
+    virtual double GetGPUTemperature() const = 0;
+    virtual double GetGpuMaxTemperature() const = 0;
+    
+    // 系统温度
+    virtual double GetSystemTemperature() const = 0;
+    virtual double GetAmbientTemperature() const = 0;
+    
+    // 存储温度
+    virtual double GetSSDTemperature() const = 0;
+    virtual std::vector<std::string> GetHDDTemperatures() const = 0;
+    
+    // 温度传感器列表
+    virtual std::vector<TemperatureSensor> GetAllSensors() const = 0;
+    virtual size_t GetSensorCount() const = 0;
+    
+    // 温度状态
+    virtual bool IsOverheating() const = 0;
+    virtual bool IsThermalThrottling() const = 0;
+    virtual double GetThermalPressure() const = 0;
+    
+    // 温度历史
+    virtual std::vector<double> GetTemperatureHistory(int minutes = 60) const = 0;
+    virtual double GetAverageTemperature(int minutes = 10) const = 0;
+    
+    // 温度预警
+    virtual std::vector<std::string> GetTemperatureWarnings() const = 0;
+    virtual bool HasHighTemperatureAlert() const = 0;
+};
+
+
+
+class INetworkInfo : public IBaseInfo {
+public:
+    virtual ~INetworkInfo() = default;
+    
+    // 基本网络信息
+    virtual size_t GetInterfaceCount() const = 0;
+    virtual std::vector<NetworkInterface> GetAllInterfaces() const = 0;
+    virtual NetworkInterface GetInterfaceByIndex(size_t index) const = 0;
+    virtual NetworkInterface GetInterfaceByName(const std::string& name) const = 0;
+    virtual NetworkInterface GetPrimaryInterface() const = 0;
+    
+    // 网络流量统计
+    virtual uint64_t GetTotalRxBytes() const = 0;
+    virtual uint64_t GetTotalTxBytes() const = 0;
+    virtual double GetCurrentDownloadSpeed() const = 0; // Mbps
+    virtual double GetCurrentUploadSpeed() const = 0; // Mbps
+    virtual double GetAverageDownloadSpeed(int minutes = 5) const = 0;
+    virtual double GetAverageUploadSpeed(int minutes = 5) const = 0;
+    
+    // 连接状态
+    virtual bool IsConnected() const = 0;
+    virtual bool IsInternetAvailable() const = 0;
+    virtual std::string GetConnectionType() const = 0; // WiFi, Ethernet, Cellular
+    virtual std::string GetConnectionStatus() const = 0; // Connected, Disconnected, etc.
+    
+    // WiFi特定信息
+    virtual std::string GetCurrentSSID() const = 0;
+    virtual double GetSignalStrength() const = 0; // dBm
+    virtual uint32_t GetChannel() const = 0;
+    virtual std::string GetSecurityType() const = 0;
+    virtual std::vector<std::string> GetAvailableNetworks() const = 0;
+    
+    // 网络质量
+    virtual double GetLatency() const = 0; // ms
+    virtual double GetPacketLoss() const = 0; // percentage
+    virtual std::string GetNetworkQuality() const = 0; // Excellent, Good, Fair, Poor
+    virtual bool HasNetworkIssues() const = 0;
+    
+    // 带宽使用
+    virtual double GetBandwidthUsage() const = 0; // percentage
+    virtual double GetMaxBandwidth() const = 0; // Mbps
+    virtual std::vector<std::string> GetNetworkWarnings() const = 0;
+    
+    // 历史数据
+    virtual std::vector<std::pair<uint64_t, double>> GetDownloadHistory(int minutes = 60) const = 0;
+    virtual std::vector<std::pair<uint64_t, double>> GetUploadHistory(int minutes = 60) const = 0;
+    virtual uint64_t GetDataUsageToday() const = 0;
+    virtual uint64_t GetDataUsageThisMonth() const = 0;
+};
+
 class IBatteryInfo : public IBaseInfo {
 public:
     virtual ~IBatteryInfo() = default;
     
-    // 电池存在状态
+    // 基本电池信息
     virtual bool IsBatteryPresent() const = 0;
-    virtual bool IsUPS() const = 0;
-    
-    // 充电状态
     virtual bool IsCharging() const = 0;
-    virtual bool IsFullyCharged() const = 0;
-    virtual bool IsDischarging() const = 0;
+    virtual bool IsACPowered() const = 0;
+    virtual std::string GetBatteryType() const = 0;
+    virtual std::string GetBatteryModel() const = 0;
+    virtual std::string GetBatteryManufacturer() const = 0;
+    virtual std::string GetBatterySerialNumber() const = 0;
     
-    // 电量信息
+    // 容量和电量信息
+    virtual uint32_t GetCurrentCapacity() const = 0;
+    virtual uint32_t GetMaxCapacity() const = 0;
+    virtual uint32_t GetDesignCapacity() const = 0;
+    virtual uint32_t GetNominalCapacity() const = 0;
+    
     virtual double GetChargePercentage() const = 0;
-    virtual double GetDesignCapacity() const = 0;
-    virtual double GetCurrentCapacity() const = 0;
-    virtual double GetMaximumCapacity() const = 0;
-    
-    // 健康状态
     virtual double GetHealthPercentage() const = 0;
-    virtual uint32_t GetCycleCount() const = 0;
-    virtual std::string GetBatteryCondition() const = 0;
+    virtual double GetDesignHealthPercentage() const = 0;
+    
+    // 电压和电流信息
+    virtual double GetVoltage() const = 0;
+    virtual double GetAmperage() const = 0;
+    virtual double GetWattage() const = 0;
     
     // 时间信息
-    virtual uint64_t GetTimeToEmpty() const = 0;  // 剩余使用时间(秒)
-    virtual uint64_t GetTimeToFullCharge() const = 0;  // 充满时间(秒)
-    virtual uint64_t GetTimeRemaining() const = 0;  // 剩余时间(秒)
+    virtual uint32_t GetTimeToFullCharge() const = 0;
+    virtual uint32_t GetTimeToEmpty() const = 0;
+    virtual uint32_t GetTimeRemaining() const = 0;
     
-    // 温度和电压
+    // 循环计数
+    virtual uint32_t GetCycleCount() const = 0;
+    virtual uint32_t GetCycleCountLimit() const = 0;
+    virtual double GetCycleCountPercentage() const = 0;
+    
+    // 温度信息
     virtual double GetTemperature() const = 0;
-    virtual double GetVoltage() const = 0;
-    virtual double GetCurrent() const = 0;
+    virtual std::vector<BatteryCell> GetCellInfo() const = 0;
     
-    // 电源信息
-    virtual std::string GetPowerSource() const = 0;
-    virtual std::string GetChargerType() const = 0;
-    virtual double GetPowerWattage() const = 0;
+    // 电源管理信息
+    virtual std::string GetPowerSourceState() const = 0;
+    virtual bool IsPowerSavingMode() const = 0;
+    virtual bool IsOptimizedBatteryCharging() const = 0;
     
-    // 电池标识
-    virtual std::string GetBatteryManufacturer() const = 0;
-    virtual std::string GetBatteryModel() const = 0;
-    virtual std::string GetSerialNumber() const = 0;
-    
-    // 电池特性
-    virtual bool SupportsFastCharging() const = 0;
-    virtual bool IsOptimizedBatteryChargingEnabled() const = 0;
+    // 扩展功能
+    virtual BatteryInfo GetDetailedBatteryInfo() const = 0;
     virtual std::vector<std::string> GetBatteryWarnings() const = 0;
+    virtual double GetBatteryWearLevel() const = 0;
+    virtual std::string GetBatterySerial() const = 0;
+    virtual std::string GetManufacturingDate() const = 0;
+    virtual uint32_t GetPowerOnTime() const = 0;
+    virtual bool IsBatteryCalibrated() const = 0;
+    virtual std::string GetChargingState() const = 0;
+    
+    // 电池状态
+    virtual bool IsBatteryHealthy() const = 0;
+    virtual std::string GetBatteryHealthStatus() const = 0;
+    virtual std::vector<std::string> GetWarnings() const = 0;
+    virtual std::vector<std::string> GetErrors() const = 0;
+    
+    // 估算信息
+    virtual double GetEstimatedRuntime() const = 0;
+    virtual double GetEstimatedChargingTime() const = 0;
 };
 
 // 数据收集器接口

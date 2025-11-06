@@ -1,11 +1,12 @@
 #pragma once
-#include "../common/PlatformDefs.h"
+#include "../../common/PlatformDefs.h"
+#include "../../common/BaseInfo.h"
 #include <string>
 #include <chrono>
 
 #ifdef PLATFORM_MACOS
 
-class MacSystemInfo {
+class MacSystemInfo : public ISystemInfo {
 public:
     MacSystemInfo();
     virtual ~MacSystemInfo();
@@ -29,7 +30,8 @@ public:
     
     // 系统运行时间
     uint64_t GetUptimeSeconds() const;
-    std::chrono::system_clock::time_point GetBootTime() const;
+    std::string GetBootTime() const;
+    std::string GetBootTimeFormatted() const;
     std::string GetUptimeFormatted() const;
     
     // 系统负载
@@ -102,17 +104,18 @@ private:
     mutable uint64_t m_networkBytesSent;
     mutable uint64_t m_networkPacketsReceived;
     mutable uint64_t m_networkPacketsSent;
+    mutable std::string m_primaryInterface;
     
     // 私有更新方法
     bool UpdateOSInfo() const;
     bool UpdateHostname() const;
     bool UpdateUsername() const;
     bool UpdateUptime() const;
-    bool UpdateLoadAverages() const;
-    bool UpdateProcessInfo() const;
-    bool UpdateMemoryInfo() const;
-    bool UpdateDiskInfo() const;
-    bool UpdateNetworkInfo() const;
+    bool GetLoadAverages() const;
+    bool GetProcessInfo() const;
+    bool GetMemoryInfo() const;
+    bool GetDiskInfo() const;
+    bool GetNetworkInfo() const;
     
     void ClearErrorInternal() const;
     void SetError(const std::string& error) const;

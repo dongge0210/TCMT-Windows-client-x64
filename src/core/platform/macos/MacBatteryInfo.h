@@ -1,20 +1,17 @@
 #pragma once
-#include "../common/PlatformDefs.h"
+#include "../../common/PlatformDefs.h"
+#include "../../common/BaseInfo.h"
 #include <string>
-#include <chrono>
 #include <vector>
+#include <memory>
+#include <chrono>
 
 #ifdef PLATFORM_MACOS
+#include <IOKit/ps/IOPowerSources.h>
+#include <IOKit/ps/IOPSKeys.h>
+#include <CoreFoundation/CoreFoundation.h>
 
-struct BatteryCell {
-    uint32_t cellIndex;
-    double voltage;        // 电压 (V)
-    double temperature;    // 温度 (°C)
-    double capacity;       // 容量 (mAh)
-    bool isHealthy;        // 健康状态
-};
-
-class MacBatteryInfo {
+class MacBatteryInfo : public IBatteryInfo {
 public:
     MacBatteryInfo();
     virtual ~MacBatteryInfo();
@@ -70,6 +67,15 @@ public:
     std::string GetPowerSourceState() const;     // 电源状态描述
     bool IsPowerSavingMode() const;              // 是否省电模式
     bool IsOptimizedBatteryCharging() const;     // 是否优化电池充电
+    
+    // 扩展功能
+    BatteryInfo GetDetailedBatteryInfo() const; // 详细电池信息
+    std::vector<std::string> GetBatteryWarnings() const; // 电池警告
+    double GetBatteryWearLevel() const;        // 电池磨损程度
+    std::string GetBatterySerial() const;      // 电池序列号
+    std::string GetManufacturingDate() const;  // 制造日期
+    uint32_t GetPowerOnTime() const;           // 通电时间(小时)
+    bool IsBatteryCalibrated() const;           // 是否已校准
     std::string GetChargingState() const;        // 充电状态描述
     
     // 电池状态
@@ -132,6 +138,13 @@ private:
     std::vector<std::string> m_warnings;
     std::vector<std::string> m_errors;
     
+    // 扩展数据
+    double m_batteryWearLevel;
+    std::string m_manufacturingDate;
+    uint32_t m_powerOnTime;
+    bool m_isCalibrated;
+    std::string m_chargingState;
+    
     // 辅助方法
     bool GetBatteryInfoFromIOKit();
     bool GetBatteryInfoFromSystemProfiler();
@@ -142,6 +155,14 @@ private:
     void CheckBatteryWarnings();
     void SetError(const std::string& error) const;
     void ClearErrorInternal() const;
+    
+    // 扩展功能方法
+    bool GetExtendedBatteryInfo();
+    bool GetBatteryWearInfo();
+    bool GetBatteryCalibrationInfo();
+    bool GetBatteryManufacturingInfo();
+    void UpdateExtendedBatteryData();
+    void GenerateBatteryWarnings();
     
     // IOKit相关方法
     bool GetIOKitBatteryInfo();

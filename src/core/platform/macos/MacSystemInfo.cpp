@@ -45,6 +45,9 @@ MacSystemInfo::MacSystemInfo() {
         m_loadAverage[i] = 0.0;
     }
     
+    // 初始化主网络接口
+    m_primaryInterface = "en0";
+    
     Initialize();
 }
 
@@ -112,27 +115,27 @@ bool MacSystemInfo::Update() {
     }
     
     // 更新系统负载
-    if (!UpdateLoadAverages()) {
+    if (!GetLoadAverages()) {
         success = false;
     }
     
     // 更新进程信息
-    if (!UpdateProcessInfo()) {
+    if (!GetProcessInfo()) {
         success = false;
     }
     
     // 更新内存信息
-    if (!UpdateMemoryInfo()) {
+    if (!GetMemoryInfo()) {
         success = false;
     }
     
     // 更新磁盘信息
-    if (!UpdateDiskInfo()) {
+    if (!GetDiskInfo()) {
         success = false;
     }
     
     // 更新网络信息
-    if (!UpdateNetworkInfo()) {
+    if (!GetNetworkInfo()) {
         success = false;
     }
     
@@ -170,7 +173,21 @@ uint64_t MacSystemInfo::GetUptimeSeconds() const {
     return m_uptimeSeconds;
 }
 
-std::chrono::system_clock::time_point MacSystemInfo::GetBootTime() const {
+std::string MacSystemInfo::GetBootTime() const {
+    if (m_bootTime == std::chrono::system_clock::time_point{}) {
+        return "Unknown";
+    }
+    
+    auto tt = std::chrono::system_clock::to_time_t(m_bootTime);
+    std::tm tm{};
+    localtime_r(&tt, &tm);
+    
+    std::ostringstream oss;
+    oss << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
+    return oss.str();
+}
+
+std::string MacSystemInfo::GetBootTimeFormatted() const {
     if (m_bootTime == std::chrono::system_clock::time_point{}) {
         return "Unknown";
     }
@@ -338,9 +355,12 @@ bool MacSystemInfo::UpdateOSInfo() const {
     m_osBuild = uname_info.version;
     
     // 获取更详细的macOS版本信息
-    std::string productVersion;
-    if (GetSysctlString("kern.osproductversion", productVersion)) {
-        m_osVersion = productVersion;
+    size_t size = 0;
+    if (sysctlbyname("kern.osproductversion", nullptr, &size, nullptr, 0) == 0 && size > 0) {
+        std::vector<char> buffer(size);
+        if (sysctlbyname("kern.osproductversion", buffer.data(), &size, nullptr, 0) == 0) {
+            m_osVersion = std::string(buffer.data(), size - 1);
+        }
     }
     
     return true;
@@ -386,7 +406,7 @@ bool MacSystemInfo::UpdateUptime() const {
     return true;
 }
 
-bool MacSystemInfo::GetLoadAverages() {
+bool MacSystemInfo::GetLoadAverages() const {
     if (getloadavg(m_loadAverage, 3) == -1) {
         SetError("Failed to get load averages");
         return false;
@@ -394,7 +414,7 @@ bool MacSystemInfo::GetLoadAverages() {
     return true;
 }
 
-bool MacSystemInfo::GetProcessInfo() {
+bool MacSystemInfo::GetProcessInfo() const {
     // 获取进程信息
     int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0};
     size_t size = 0;
@@ -438,8 +458,10 @@ bool MacSystemInfo::GetProcessInfo() {
     return true;
 }
 
-bool MacSystemInfo::GetMemoryInfo() {
-    if (!GetSysctlUint64("hw.memsize", m_totalPhysicalMemory)) {
+bool MacSystemInfo::GetMemoryInfo() const {
+    size_t size = sizeof(m_totalPhysicalMemory);
+    if (sysctlbyname("hw.memsize", nullptr, &size, nullptr, 0) != 0 ||
+        sysctlbyname("hw.memsize", nullptr, &size, &m_totalPhysicalMemory, size) != 0) {
         SetError("Failed to get total physical memory");
         return false;
     }
@@ -464,7 +486,7 @@ bool MacSystemInfo::GetMemoryInfo() {
     return true;
 }
 
-bool MacSystemInfo::GetDiskInfo() {
+bool MacSystemInfo::GetDiskInfo() const {
     struct statvfs vfs;
     if (statvfs("/", &vfs) != 0) {
         SetError("Failed to get disk statistics");
@@ -478,7 +500,7 @@ bool MacSystemInfo::GetDiskInfo() {
     return true;
 }
 
-bool MacSystemInfo::GetNetworkInfo() {
+bool MacSystemInfo::GetNetworkInfo() const {
     struct ifaddrs* ifaddrs_ptr = nullptr;
     if (getifaddrs(&ifaddrs_ptr) != 0) {
         SetError("Failed to get network interface information");
@@ -504,38 +526,6 @@ bool MacSystemInfo::GetNetworkInfo() {
     return true;
 }
 
-bool MacSystemInfo::GetSysctlString(const char* name, std::string& value) const {
-    size_t size = 0;
-    
-    if (sysctlbyname(name, nullptr, &size, nullptr, 0) != 0) {
-        return false;
-    }
-    
-    if (size == 0) {
-        return false;
-    }
-    
-    std::vector<char> buffer(size);
-    if (sysctlbyname(name, buffer.data(), &size, nullptr, 0) != 0) {
-        return false;
-    }
-    
-    value = std::string(buffer.data(), size - 1);
-    return true;
-}
-
-bool MacSystemInfo::GetSysctlInt(const char* name, int& value) const {
-    size_t size = sizeof(value);
-    return sysctlbyname(name, nullptr, &size, nullptr, 0) == 0 &&
-           sysctlbyname(name, nullptr, &size, &value, size) == 0;
-}
-
-bool MacSystemInfo::GetSysctlUint64(const char* name, uint64_t& value) const {
-    size_t size = sizeof(value);
-    return sysctlbyname(name, nullptr, &size, nullptr, 0) == 0 &&
-           sysctlbyname(name, nullptr, &size, &value, size) == 0;
-}
-
 void MacSystemInfo::ClearErrorInternal() const {
     m_lastError.clear();
 }
@@ -546,10 +536,6 @@ void MacSystemInfo::SetError(const std::string& error) const {
 
 uint64_t MacSystemInfo::GetLastUpdateTime() const {
     return m_lastUpdateTime;
-}
-
-void MacSystemInfo::ClearErrorInternal() const {
-    m_lastError.clear();
 }
 
 #endif // PLATFORM_MACOS
