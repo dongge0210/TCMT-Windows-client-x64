@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 #include <stdint.h>
-#include "usb/USBInfo.h"
+#include "../usb/USBInfo.h"
 
 #pragma pack(push, 1) // 确保内存对齐
 

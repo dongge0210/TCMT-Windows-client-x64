@@ -12,7 +12,7 @@
 namespace fs = std::filesystem;
 using namespace std::chrono_literals;
 
-// USB监控实现类
+// USB monitoring implementation class
 class USBInfoManager::USBMonitorImpl {
 public:
     USBMonitorImpl(USBInfoManager* parent) : parentManager(parent), stopFlag(false) {}
@@ -47,11 +47,11 @@ private:
         while (!stopFlag) {
             try {
                 DetectUSBChanges();
-                std::this_thread::sleep_for(500ms); // 每500ms检查一次
+                std::this_thread::sleep_for(500ms); // Check every 500ms
             }
             catch (const std::exception& e) {
                 Logger::Error("USB monitoring loop exception: " + std::string(e.what()));
-                std::this_thread::sleep_for(1s); // 异常时等待更长时间
+                std::this_thread::sleep_for(1s); // Wait longer on exception
             }
         }
     }
@@ -61,7 +61,7 @@ private:
         DWORD drives = GetLogicalDrives();
         std::bitset<26> currentDrives(drives);
         
-        // 检测所有可移动驱动器
+    // Detect all removable drives
         for (int i = 0; i < 26; ++i) {
             if (currentDrives[i]) {
                 char driveLetter = 'A' + i;
@@ -79,7 +79,7 @@ private:
             // 检查新插入的设备
             for (const auto& path : newUSBPaths) {
                 if (currentUSBPaths.find(path) == currentUSBPaths.end()) {
-                    // 新设备插入
+                    // New device inserted
                     USBDeviceInfo deviceInfo;
                     if (parentManager->GetDriveInfo(path, deviceInfo)) {
                         deviceInfo.state = USBState::Inserted;
@@ -93,7 +93,7 @@ private:
                         currentDevices.push_back(deviceInfo);
                         currentUSBPaths.insert(path);
                         
-                        // 通知状态变化
+                        // Notify state change
                         if (parentManager->stateCallback) {
                             parentManager->stateCallback(deviceInfo);
                         }
@@ -101,10 +101,10 @@ private:
                 }
             }
             
-            // 检查拔出的设备
+            // Check for removed devices
             for (auto it = currentDevices.begin(); it != currentDevices.end();) {
                 if (newUSBPaths.find(it->drivePath) == newUSBPaths.end()) {
-                    // 设备拔出
+                    // Device removed
                     Logger::Info("USB device removed: " + it->drivePath);
                     
                     USBDeviceInfo removedDevice = *it;
@@ -225,9 +225,9 @@ bool USBInfoManager::HasUpdateFolder(const std::string& drivePath) {
     try {
         fs::path updatePath = fs::path(drivePath) / "update";
         if (fs::exists(updatePath) && fs::is_directory(updatePath)) {
-            // 检查目录是否为空
+            // Check if directory is empty
             auto it = fs::directory_iterator(updatePath);
-            return it != fs::directory_iterator(); // 不为空返回true
+            return it != fs::directory_iterator(); // Return true if not empty
         }
         return false;
     }
