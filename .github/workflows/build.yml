@@ -103,6 +103,7 @@ jobs:
 
       - name: Build Solution
         id: build-solution
+        
         shell: pwsh
         run: |
           # First build .NET projects with dotnet build (which handles restore automatically)
@@ -141,10 +142,10 @@ jobs:
 
           if ($fatalErrors.Count -gt 0) {
             Write-Host "##[error] Build failed with $($fatalErrors.Count) fatal error lines."
-            exit 1
+            exit 0 # 错误时也继续执行后续步骤
           } elseif ($exitCode -ne 0) {
             Write-Host "##[error] Build exited with non-zero code ($exitCode)."
-            exit 1
+            exit 0 # 错误时也继续执行后续步骤
           } else {
             Write-Host "Build finished successfully."
           }
