@@ -42,6 +42,7 @@ struct USBDeviceInfo {
     std::string mountPoint;     // 挂载点 (macOS/Linux特有)
     uint64_t totalSize;        // 总容量（字节）
     uint64_t freeSpace;        // 可用空间（字节）
+    uint64_t usedSpace;        // 已用空间（字节）
     bool isUpdateReady;        // 是否包含update文件夹
     USBState state;            // 当前状态
     
@@ -59,8 +60,8 @@ struct USBDeviceInfo {
     std::string deviceClass;    // 设备类别
     bool isRemovable;           // 是否为可移动设备
     
-    USBDeviceInfo() : totalSize(0), freeSpace(0), isUpdateReady(false), 
-                     state(USBState::Removed), isRemovable(true) {
+    USBDeviceInfo() : totalSize(0), freeSpace(0), usedSpace(0), // 初始化usedSpace
+                     state(USBState::Removed), isUpdateReady(false), isRemovable(true) {
 #ifdef PLATFORM_WINDOWS
         memset(&lastUpdate, 0, sizeof(lastUpdate));
 #else
@@ -122,8 +123,8 @@ private:
     void GetMacDeviceProperties(const std::string& devicePath, USBDeviceInfo& info);
     bool IsMacUSBDevice(const std::string& devicePath);
     void MonitorMacUSBDevices();
-    DADissenterRef CreateDiskArbitrationSession();
-    void ReleaseDiskArbitrationSession(DADissenterRef session);
+    DASessionRef CreateDiskArbitrationSession(); // 修正类型
+    void ReleaseDiskArbitrationSession(DASessionRef session); // 修正类型
 #elif defined(PLATFORM_LINUX)
     bool GetLinuxDeviceInfo(const std::string& mountPoint, USBDeviceInfo& info);
     std::string GetLinuxDevicePath(const std::string& mountPoint);

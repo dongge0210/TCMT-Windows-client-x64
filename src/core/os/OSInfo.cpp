@@ -159,9 +159,9 @@ std::string OSInfo::GetHostname() const {
     try {
         char hostname[256];
         if (gethostname(hostname, sizeof(hostname)) == 0) {
-            return "Unknown";
+            return std::string(hostname); // 修正：成功时返回主机名
         }
-        return std::string(hostname);
+        return "Unknown"; // 失败时返回 Unknown
     }
     catch (const std::exception& e) {
         Logger::Error("GetHostname failed: " + std::string(e.what()));
@@ -313,7 +313,7 @@ bool OSInfo::IsMacSIPEnabled() const {
 
 bool OSInfo::IsMacSecureBootEnabled() const {
     try {
-        FILE* pipe = pclose(popen("bless -r /System/Library/CoreServices/SystemRoot.dmg/efi/Apple/AppleBootPolicy", "r"));
+        FILE* pipe = popen("bless -r /System/Library/CoreServices/SystemRoot.dmg/efi/Apple/AppleBootPolicy", "r");
         if (!pipe) return false;
         
         char buffer[1024];
@@ -511,8 +511,7 @@ std::string OSInfo::GetLinuxArchitecture() const {
                     std::string arch = line.substr(pos + 2);
                     // 移除前后空格
                     arch.erase(0, arch.find_first_not_of(" \t "));
-                    arch.erase(arch.find_last_not_of(" \t\n\r"));
-                    
+                    arch.erase(arch.find_last_not_of(" \t\n\r") + 1); // 修正此处
                     // 标准化架构名称
                     if (arch == "x86_64") return "x86_64";
                     if (arch == "aarch64") return "aarch64";
@@ -538,11 +537,14 @@ std::string OSInfo::GetLinuxDistribution() const {
         while (std::getline(file, line)) {
             if (line.find("PRETTY_NAME=") != std::string::npos) {
                 file.close();
-                size_t start = line.find("\"") + 13; // 跳过PRETTY_NAME="
-                size_t end = line.find("\"", start);
-                if (end != std::string::npos) {
-                    std::string distro = line.substr(start, end - start);
-                    return distro;
+                size_t start = line.find("PRETTY_NAME=\"");
+                if (start != std::string::npos) {
+                    start += 13; // 跳过 PRETTY_NAME="
+                    size_t end = line.find("\"", start);
+                    if (end != std::string::npos) {
+                        std::string distro = line.substr(start, end - start);
+                        return distro;
+                    }
                 }
             }
         }
@@ -739,4 +741,4 @@ std::string OSInfo::GetKernelVersion() const {
 std::string OSInfo::GetVersion() const {
     return osVersion;
 }
-#endif                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         
+#endif

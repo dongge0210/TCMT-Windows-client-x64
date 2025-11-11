@@ -96,7 +96,6 @@ void USBInfoManager::USBMonitorImpl::MonitorMacUSBDevices() {
         int count = getmntinfo(&mounts, MNT_WAIT);
         if (count == 0) return;
         
-<<<<<<< HEAD
         std::set<std::string> newMountPoints;
         
         for (int i = 0; i < count; i++) {
@@ -304,15 +303,14 @@ bool USBInfoManager::USBMonitorImpl::GetMacDeviceInfo(const std::string& mountPo
     }
 }
 
-DADissenterRef USBInfoManager::USBMonitorImpl::CreateDiskArbitrationSession() {
-    DADissenterRef session = NULL;
-    DASessionCreate(kDASessionCreateNoEvents, &session);
+DASessionRef USBInfoManager::USBMonitorImpl::CreateDiskArbitrationSession() {
+    DASessionRef session = DASessionCreate(kCFAllocatorDefault);
     return session;
 }
 
-void USBInfoManager::USBMonitorImpl::ReleaseDiskArbitrationSession(DADissenterRef session) {
+void USBInfoManager::USBMonitorImpl::ReleaseDiskArbitrationSession(DASessionRef session) {
     if (session) {
-        DASessionDispose(session);
+        CFRelease(session);
     }
 }
 #endif
@@ -507,7 +505,6 @@ bool USBInfoManager::GetDriveInfo(const std::string& drivePath, USBDeviceInfo& i
 
 bool USBInfoManager::HasUpdateFolder(const std::string& path) {
     try {
-<<<<<<< HEAD
 #ifdef PLATFORM_WINDOWS
         std::filesystem::path updatePath = std::filesystem::path(path) / "update";
         if (std::filesystem::exists(updatePath) && std::filesystem::is_directory(updatePath)) {
