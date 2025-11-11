@@ -5,14 +5,16 @@
 #include <algorithm>
 #include <filesystem>
 #include <unistd.h>
+#include <sys/mount.h>
 
 #ifdef PLATFORM_MACOS
 
-MacDiskInfo::MacDiskInfo() 
+MacDiskInfo::MacDiskInfo(const std::string& diskName) 
     : m_initialized(false)
     , m_lastError("")
     , m_lastUpdateTime(0)
     , m_dataValid(false)
+    , m_diskName(diskName)
     , m_lastReadSpeed(0.0)
     , m_lastWriteSpeed(0.0) {
 }
@@ -109,58 +111,53 @@ void MacDiskInfo::ClearError() {
 }
 
 // IDiskInfo 接口实现
-size_t MacDiskInfo::GetDiskCount() const {
-    return m_disks.size();
-}
-
-std::vector<DiskInfo> MacDiskInfo::GetAllDisks() const {
-    return m_disks;
-}
-
-DiskInfo MacDiskInfo::GetDiskByIndex(size_t index) const {
-    if (index < m_disks.size()) {
-        return m_disks[index];
+std::string MacDiskInfo::GetName() const {
+    if (!m_disks.empty()) {
+        return m_disks[0].name;
     }
-    return DiskInfo(); // 返回空对象
+    return "";
 }
 
-DiskInfo MacDiskInfo::GetDiskByName(const std::string& name) const {
-    for (const auto& disk : m_disks) {
-        if (disk.name == name) {
-            return disk;
-        }
+std::string MacDiskInfo::GetModel() const {
+    if (!m_disks.empty()) {
+        return m_disks[0].model;
     }
-    return DiskInfo(); // 返回空对象
+    return "";
 }
 
-uint64_t MacDiskInfo::GetTotalSpace() const {
-    uint64_t total = 0;
-    for (const auto& disk : m_disks) {
-        total += disk.totalSize;
+std::string MacDiskInfo::GetSerialNumber() const {
+    if (!m_disks.empty()) {
+        return m_disks[0].serialNumber;
     }
-    return total;
+    return "";
 }
 
-uint64_t MacDiskInfo::GetFreeSpace() const {
-    uint64_t free = 0;
-    for (const auto& disk : m_disks) {
-        free += disk.freeSpace;
+uint64_t MacDiskInfo::GetTotalSize() const {
+    if (!m_disks.empty()) {
+        return m_disks[0].totalSize;
     }
-    return free;
+    return 0;
+}
+
+uint64_t MacDiskInfo::GetAvailableSpace() const {
+    if (!m_disks.empty()) {
+        return m_disks[0].freeSpace;
+    }
+    return 0;
 }
 
 uint64_t MacDiskInfo::GetUsedSpace() const {
-    uint64_t used = 0;
-    for (const auto& disk : m_disks) {
-        used += disk.usedSpace;
+    if (!m_disks.empty()) {
+        return m_disks[0].usedSpace;
     }
-    return used;
+    return 0;
 }
 
 double MacDiskInfo::GetUsagePercentage() const {
-    uint64_t total = GetTotalSpace();
-    if (total == 0) return 0.0;
-    return (double)GetUsedSpace() / total * 100.0;
+    if (!m_disks.empty()) {
+        return m_disks[0].usagePercentage;
+    }
+    return 0.0;
 }
 
 double MacDiskInfo::GetReadSpeed() const {
@@ -172,173 +169,109 @@ double MacDiskInfo::GetWriteSpeed() const {
 }
 
 uint64_t MacDiskInfo::GetTotalReadBytes() const {
-    uint64_t total = 0;
-    for (const auto& disk : m_disks) {
-        total += disk.totalReadBytes;
+    if (!m_disks.empty()) {
+        return m_disks[0].totalReadBytes;
     }
-    return total;
+    return 0;
 }
 
 uint64_t MacDiskInfo::GetTotalWriteBytes() const {
-    uint64_t total = 0;
-    for (const auto& disk : m_disks) {
-        total += disk.totalWriteBytes;
+    if (!m_disks.empty()) {
+        return m_disks[0].totalWriteBytes;
     }
-    return total;
+    return 0;
 }
 
-double MacDiskInfo::GetAverageReadSpeed(int minutes) const {
-    if (m_ioHistory.size() < 2) return 0.0;
-    
-    uint64_t cutoffTime = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count() - (minutes * 60 * 1000);
-    
-    uint64_t totalRead = 0;
-    uint64_t firstTime = 0;
-    bool first = true;
-    
-    for (const auto& entry : m_ioHistory) {
-        if (entry.timestamp >= cutoffTime) {
-            totalRead += entry.readBytes;
-            if (first) {
-                firstTime = entry.timestamp;
-                first = false;
-            }
-        }
+std::string MacDiskInfo::GetFileSystem() const {
+    if (!m_disks.empty()) {
+        return m_disks[0].fileSystem;
     }
-    
-    if (firstTime == 0 || totalRead == 0) return 0.0;
-    
-    uint64_t timeDiff = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count() - firstTime;
-    
-    return (double)totalRead / timeDiff * 1000.0; // MB/s
+    return "";
 }
 
-double MacDiskInfo::GetAverageWriteSpeed(int minutes) const {
-    if (m_ioHistory.size() < 2) return 0.0;
-    
-    uint64_t cutoffTime = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count() - (minutes * 60 * 1000);
-    
-    uint64_t totalWrite = 0;
-    uint64_t firstTime = 0;
-    bool first = true;
-    
-    for (const auto& entry : m_ioHistory) {
-        if (entry.timestamp >= cutoffTime) {
-            totalWrite += entry.writeBytes;
-            if (first) {
-                firstTime = entry.timestamp;
-                first = false;
-            }
-        }
+bool MacDiskInfo::IsHealthy() const {
+    if (!m_disks.empty()) {
+        return m_disks[0].isHealthy;
     }
-    
-    if (firstTime == 0 || totalWrite == 0) return 0.0;
-    
-    uint64_t timeDiff = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count() - firstTime;
-    
-    return (double)totalWrite / timeDiff * 1000.0; // MB/s
+    return true;
 }
 
-std::vector<std::string> MacDiskInfo::GetDiskWarnings() const {
-    return GenerateDiskWarnings();
-}
-
-bool MacDiskInfo::HasDiskErrors() const {
-    for (const auto& disk : m_disks) {
-        if (disk.healthScore < 50.0) {
-            return true;
-        }
+int MacDiskInfo::GetHealthPercentage() const {
+    if (!m_disks.empty()) {
+        return (int)m_disks[0].healthScore;
     }
-    return false;
-}
-
-bool MacDiskInfo::IsDiskHealthy() const {
-    return !HasDiskErrors();
+    return 100;
 }
 
 std::string MacDiskInfo::GetHealthStatus() const {
-    if (IsDiskHealthy()) {
-        return "Healthy";
-    } else {
-        return "Warning";
+    if (!m_disks.empty()) {
+        return m_disks[0].healthStatus;
     }
+    return "Unknown";
 }
 
-uint32_t MacDiskInfo::GetPowerOnHours() const {
-    // 返回主磁盘的通电时间
+uint64_t MacDiskInfo::GetPowerOnHours() const {
     if (!m_disks.empty()) {
         return m_disks[0].powerOnHours;
     }
     return 0;
 }
 
-uint32_t MacDiskInfo::GetStartStopCount() const {
-    // 返回主磁盘的启停次数
+std::vector<std::pair<std::string, std::string>> MacDiskInfo::GetSmartAttributes() const {
+    // Return empty vector for now
+    return std::vector<std::pair<std::string, std::string>>();
+}
+
+int MacDiskInfo::GetReallocatedSectorCount() const {
     if (!m_disks.empty()) {
-        return 0; // macOS上获取这个信息比较困难
+        return (int)m_disks[0].reallocatedSectors;
     }
     return 0;
 }
 
-uint32_t MacDiskInfo::GetReallocatedSectors() const {
-    // 返回主磁盘的重分配扇区数
+int MacDiskInfo::GetPendingSectorCount() const {
+    return 0; // Not implemented for macOS
+}
+
+int MacDiskInfo::GetUncorrectableSectorCount() const {
+    return 0; // Not implemented for macOS
+}
+
+bool MacDiskInfo::IsSSD() const {
     if (!m_disks.empty()) {
-        return 0; // macOS上获取这个信息比较困难
-    }
-    return 0;
-}
-
-double MacDiskInfo::GetTemperature() const {
-    // 返回主磁盘的温度
-    if (!m_disks.empty()) {
-        return m_disks[0].temperature;
-    }
-    return 0.0;
-}
-
-uint64_t MacDiskInfo::GetRemainingBlocks() const {
-    // 返回主磁盘的剩余块数
-    if (!m_disks.empty()) {
-        return m_disks[0].freeSpace / 512; // 假设块大小为512字节
-    }
-    return 0;
-}
-
-bool MacDiskInfo::IsDiskActive() const {
-    // 检查是否有磁盘活动
-    return m_lastReadSpeed > 0 || m_lastWriteSpeed > 0;
-}
-
-double MacDiskInfo::GetDiskUtilization() const {
-    // 简单的磁盘利用率计算
-    double maxSpeed = 500.0; // 假设最大速度为500MB/s
-    double currentSpeed = m_lastReadSpeed + m_lastWriteSpeed;
-    return std::min(100.0, (currentSpeed / maxSpeed) * 100.0);
-}
-
-uint32_t MacDiskInfo::GetActiveProcesses() const {
-    // 返回正在使用磁盘的进程数（简化实现）
-    return IsDiskActive() ? 1 : 0;
-}
-
-bool MacDiskInfo::IsEncrypted() const {
-    // 检查主磁盘是否加密
-    if (!m_disks.empty()) {
-        return m_disks[0].isEncrypted;
+        return m_disks[0].isSSD;
     }
     return false;
 }
 
-std::string MacDiskInfo::GetEncryptionType() const {
-    if (IsEncrypted()) {
-        return "FileVault";
+bool MacDiskInfo::IsHDD() const {
+    if (!m_disks.empty()) {
+        return !m_disks[0].isSSD;
     }
-    return "None";
+    return false;
 }
+
+bool MacDiskInfo::IsNVMe() const {
+    if (!m_disks.empty()) {
+        return m_disks[0].interface.find("NVMe") != std::string::npos;
+    }
+    return false;
+}
+
+std::string MacDiskInfo::GetInterfaceType() const {
+    if (!m_disks.empty()) {
+        return m_disks[0].interface;
+    }
+    return "Unknown";
+}
+
+std::vector<DiskInfo> MacDiskInfo::GetAllDisks() const {
+    return m_disks;
+}
+
+// 私有方法实现
+    
+    
 
 // 私有方法实现
 void MacDiskInfo::SetError(const std::string& error) {

@@ -1,5 +1,6 @@
 #pragma once
 #include "../../common/PlatformDefs.h"
+#include "../../common/BaseInfo.h"
 #include <memory>
 #include <string>
 #include <vector>

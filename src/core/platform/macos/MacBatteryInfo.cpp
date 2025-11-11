@@ -112,6 +112,10 @@ bool MacBatteryInfo::IsDataValid() const {
     return m_initialized && (m_lastUpdateTime > 0);
 }
 
+uint64_t MacBatteryInfo::GetLastUpdateTime() const {
+    return m_lastUpdateTime;
+}
+
 bool MacBatteryInfo::IsBatteryPresent() const {
     return m_batteryPresent;
 }
@@ -357,67 +361,225 @@ bool MacBatteryInfo::GetBatteryInfoFromIOKit() {
 }
 
 bool MacBatteryInfo::GetBatteryInfoFromSystemProfiler() {
-    // 使用系统分析器命令获取电池信息
-    FILE* fp = popen("system_profiler SPPowerDataType -json 2>/dev/null", "r");
-    if (!fp) {
-        SetError("Failed to execute system_profiler command");
+    // 使用IOPowerSources API获取电池信息
+    CFTypeRef info = IOPSCopyPowerSourcesInfo();
+    if (!info) {
+        SetError("Failed to get power sources info");
         return false;
     }
     
-    std::string jsonOutput;
-    char buffer[1024];
-    while (fgets(buffer, sizeof(buffer), fp)) {
-        jsonOutput += buffer;
-    }
-    pclose(fp);
-    
-    if (jsonOutput.empty()) {
-        SetError("No output from system_profiler");
+    CFArrayRef list = IOPSCopyPowerSourcesList(info);
+    if (!list || !CFArrayGetCount(list)) {
+        CFRelease(info);
+        SetError("No power sources found");
         return false;
     }
     
-    return ParseBatteryData(jsonOutput);
+    CFDictionaryRef battery = (CFDictionaryRef)IOPSGetPowerSourceDescription(info, CFArrayGetValueAtIndex(list, 0));
+    if (!battery) {
+        CFRelease(list);
+        CFRelease(info);
+        SetError("Failed to get battery description");
+        return false;
+    }
+    
+    bool success = ParseBatteryDataFromCFDictionary(battery);
+    
+    CFRelease(battery);
+    CFRelease(list);
+    CFRelease(info);
+    
+    return success;
 }
 
-bool MacBatteryInfo::ParseBatteryData(CFDictionaryRef data) {
-    // 简化解析，实际应该使用JSON解析器
-    // 这里使用字符串搜索来提取关键信息
+bool MacBatteryInfo::ParseBatteryDataFromCFDictionary(CFDictionaryRef data) {
+    // 从CFDictionary中提取电池信息
+    if (!data) {
+        SetError("Invalid battery data dictionary");
+        return false;
+    }
     
     // 检查电池是否存在
-    m_batteryPresent = (data.find("\"sppower_battery_built_in\"") != std::string::npos);
+    CFBooleanRef isPresent = (CFBooleanRef)CFDictionaryGetValue(data, CFSTR("Is Present"));
+    m_batteryPresent = isPresent && CFBooleanGetValue(isPresent);
     
     if (!m_batteryPresent) {
         return true; // 没有电池是正常情况
     }
     
-    // 解析容量信息
-    size_t pos = data.find("\"sppower_battery_current_capacity\"");
-    if (pos != std::string::npos) {
-        size_t start = data.find("\"", pos + 30);
-        size_t end = data.find("\"", start + 1);
-        if (start != std::string::npos && end != std::string::npos) {
-            std::string capacityStr = data.substr(start + 1, end - start - 1);
-            m_currentCapacity = std::stoi(capacityStr);
+    // 获取当前容量
+    CFNumberRef currentCap = (CFNumberRef)CFDictionaryGetValue(data, CFSTR("Current Capacity"));
+    if (currentCap) {
+        SInt32 currentValue;
+        if (CFNumberGetValue(currentCap, kCFNumberSInt32Type, &currentValue)) {
+            m_currentCapacity = currentValue;
         }
     }
     
-    pos = data.find("\"sppower_battery_max_capacity\"");
-    if (pos != std::string::npos) {
-        size_t start = data.find("\"", pos + 28);
-        size_t end = data.find("\"", start + 1);
-        if (start != std::string::npos && end != std::string::npos) {
-            std::string capacityStr = data.substr(start + 1, end - start - 1);
-            m_maxCapacity = std::stoi(capacityStr);
+    // 获取最大容量
+    CFNumberRef maxCap = (CFNumberRef)CFDictionaryGetValue(data, CFSTR("Max Capacity"));
+    if (maxCap) {
+        SInt32 maxValue;
+        if (CFNumberGetValue(maxCap, kCFNumberSInt32Type, &maxValue)) {
+            m_maxCapacity = maxValue;
         }
     }
     
-    pos = data.find("\"sppower_battery_design_capacity\"");
+    // 获取设计容量 - 使用 DesignCycleCount 作为近似值
+    CFNumberRef designCap = (CFNumberRef)CFDictionaryGetValue(data, CFSTR("DesignCycleCount"));
+    if (designCap) {
+        SInt32 designValue;
+        if (CFNumberGetValue(designCap, kCFNumberSInt32Type, &designValue)) {
+            m_designCapacity = designValue;
+        }
+    }
+    
+    // 获取充电状态
+    CFBooleanRef isCharging = (CFBooleanRef)CFDictionaryGetValue(data, CFSTR(kIOPSIsChargingKey));
+    m_charging = isCharging && CFBooleanGetValue(isCharging);
+    
+    // 获取AC电源状态 - 从 Power Source State 判断
+    CFStringRef powerState = (CFStringRef)CFDictionaryGetValue(data, CFSTR("Power Source State"));
+    if (powerState) {
+        const char* stateStr = CFStringGetCStringPtr(powerState, kCFStringEncodingUTF8);
+        if (stateStr && strcmp(stateStr, "AC Power") == 0) {
+            m_acPowered = true;
+        } else {
+            m_acPowered = false;
+        }
+    }
+    
+    // 获取电压
+    CFNumberRef voltage = (CFNumberRef)CFDictionaryGetValue(data, CFSTR("Voltage"));
+    if (voltage) {
+        SInt32 voltageValue;
+        if (CFNumberGetValue(voltage, kCFNumberSInt32Type, &voltageValue)) {
+            m_voltage = voltageValue / 1000.0; // 转换为伏特
+        }
+    }
+    
+    // 获取电流
+    CFNumberRef amperage = (CFNumberRef)CFDictionaryGetValue(data, CFSTR("Current"));
+    if (amperage) {
+        SInt32 amperageValue;
+        if (CFNumberGetValue(amperage, kCFNumberSInt32Type, &amperageValue)) {
+            m_amperage = amperageValue / 1000.0; // 转换为安培
+        }
+    }
+    
+    // 获取时间信息
+    CFNumberRef timeToEmpty = (CFNumberRef)CFDictionaryGetValue(data, CFSTR("Time to Empty"));
+    if (timeToEmpty) {
+        SInt32 timeValue;
+        if (CFNumberGetValue(timeToEmpty, kCFNumberSInt32Type, &timeValue)) {
+            m_timeToEmpty = timeValue;
+        }
+    }
+    
+    CFNumberRef timeToFull = (CFNumberRef)CFDictionaryGetValue(data, CFSTR("Time to Full Charge"));
+    if (timeToFull) {
+        SInt32 timeValue;
+        if (CFNumberGetValue(timeToFull, kCFNumberSInt32Type, &timeValue)) {
+            m_timeToFullCharge = timeValue;
+        }
+    }
+    
+    // 获取循环次数
+    CFNumberRef cycleCount = (CFNumberRef)CFDictionaryGetValue(data, CFSTR("DesignCycleCount"));
+    if (cycleCount) {
+        SInt32 cycleValue;
+        if (CFNumberGetValue(cycleCount, kCFNumberSInt32Type, &cycleValue)) {
+            m_cycleCount = cycleValue;
+        }
+    }
+    
+    // 计算百分比
+    if (m_maxCapacity > 0) {
+        m_chargePercentage = (double)m_currentCapacity / m_maxCapacity * 100.0;
+        Logger::Debug("Battery: " + std::to_string(m_currentCapacity) + "/" + std::to_string(m_maxCapacity) + " = " + std::to_string(m_chargePercentage) + "%");
+    } else {
+        Logger::Debug("Battery: max capacity is 0");
+    }
+    
+    // 计算健康百分比
+    if (m_designCapacity > 0) {
+        m_healthPercentage = (double)m_maxCapacity / m_designCapacity * 100.0;
+        Logger::Debug("Battery Health: " + std::to_string(m_maxCapacity) + "/" + std::to_string(m_designCapacity) + " = " + std::to_string(m_healthPercentage) + "%");
+    }
+    
+    return true;
+}
+
+bool MacBatteryInfo::ParseBatteryData(const std::string& data) {
+    // 简化解析，使用字符串搜索来提取关键信息
+    
+    // 检查电池是否存在
+    m_batteryPresent = (data.find("\"spbattery_information\"") != std::string::npos);
+    
+    if (!m_batteryPresent) {
+        return true; // 没有电池是正常情况
+    }
+    
+    // 解析当前电量百分比
+    size_t pos = data.find("\"sppower_battery_state_of_charge\"");
     if (pos != std::string::npos) {
-        size_t start = data.find("\"", pos + 31);
-        size_t end = data.find("\"", start + 1);
+        size_t start = data.find(":", pos + 35);
+        size_t end = data.find(",", start + 1);
         if (start != std::string::npos && end != std::string::npos) {
-            std::string capacityStr = data.substr(start + 1, end - start - 1);
-            m_designCapacity = std::stoi(capacityStr);
+            std::string chargeStr = data.substr(start + 1, end - start - 1);
+            // 去除可能的空白字符
+            chargeStr.erase(0, chargeStr.find_first_not_of(" \t\n\r"));
+            chargeStr.erase(chargeStr.find_last_not_of(" \t\n\r") + 1);
+            if (!chargeStr.empty()) {
+                m_chargePercentage = std::stoi(chargeStr);
+                m_currentCapacity = m_chargePercentage; // 临时存储
+                m_maxCapacity = 100; // 临时设置为100%
+            }
+        }
+    }
+    
+    // 解析充电状态
+    pos = data.find("\"sppower_battery_is_charging\"");
+    if (pos != std::string::npos) {
+        size_t start = data.find(":", pos + 29);
+        size_t end = data.find(",", start + 1);
+        if (start != std::string::npos && end != std::string::npos) {
+            std::string chargingStr = data.substr(start + 1, end - start - 1);
+            chargingStr.erase(0, chargingStr.find_first_not_of(" \t\n\r"));
+            chargingStr.erase(chargingStr.find_last_not_of(" \t\n\r") + 1);
+            m_charging = (chargingStr == "true" || chargingStr == "TRUE");
+        }
+    }
+    
+    // 解析循环次数
+    pos = data.find("\"sppower_battery_cycle_count\"");
+    if (pos != std::string::npos) {
+        size_t start = data.find(":", pos + 30);
+        size_t end = data.find(",", start + 1);
+        if (start != std::string::npos && end != std::string::npos) {
+            std::string cycleStr = data.substr(start + 1, end - start - 1);
+            cycleStr.erase(0, cycleStr.find_first_not_of(" \t\n\r"));
+            cycleStr.erase(cycleStr.find_last_not_of(" \t\n\r") + 1);
+            if (!cycleStr.empty()) {
+                m_cycleCount = std::stoi(cycleStr);
+            }
+        }
+    }
+    
+    // 解析健康百分比
+    pos = data.find("\"sppower_battery_health_maximum_capacity\"");
+    if (pos != std::string::npos) {
+        size_t start = data.find(":", pos + 42);
+        size_t end = data.find(",", start + 1);
+        if (start != std::string::npos && end != std::string::npos) {
+            std::string healthStr = data.substr(start + 1, end - start - 1);
+            healthStr.erase(0, healthStr.find_first_not_of(" \t\n\r"));
+            healthStr.erase(healthStr.find_last_not_of(" \t\n\r") + 1);
+            // 移除百分号
+            if (!healthStr.empty() && healthStr.back() == '%') {
+                healthStr.pop_back();
+                m_healthPercentage = std::stod(healthStr);
+            }
         }
     }
     
@@ -474,23 +636,7 @@ bool MacBatteryInfo::ParseBatteryData(CFDictionaryRef data) {
     return true;
 }
 
-bool MacBatteryInfo::GetCellInfo() {
-    // 对于多电池系统，获取每个电池单元的信息
-    // 这里简化处理，返回模拟数据
-    m_cellInfo.clear();
-    
-    if (m_batteryPresent) {
-        BatteryCell cell;
-        cell.cellIndex = 0;
-        cell.voltage = m_voltage;
-        cell.temperature = m_temperature;
-        cell.capacity = m_currentCapacity;
-        cell.isHealthy = IsBatteryHealthy();
-        m_cellInfo.push_back(cell);
-    }
-    
-    return true;
-}
+
 
 void MacBatteryInfo::UpdateBatteryHealth() {
     // 更新电池健康状态评估
@@ -562,5 +708,62 @@ void MacBatteryInfo::SetError(const std::string& error) const {
 void MacBatteryInfo::ClearErrorInternal() const {
     m_lastError.clear();
 }
+
+// 添加缺少的方法实现
+BatteryInfo MacBatteryInfo::GetDetailedBatteryInfo() const {
+    BatteryInfo info;
+    info.currentCapacity = m_currentCapacity;
+    info.maxCapacity = m_maxCapacity;
+    info.designCapacity = m_designCapacity;
+    info.cycleCount = m_cycleCount;
+    info.isCharging = m_charging;
+    info.isPresent = m_batteryPresent;
+    info.voltage = m_voltage;
+    info.current = m_amperage;
+    info.temperature = m_temperature;
+    info.healthStatus = GetBatteryHealthStatus();
+    info.timeToEmpty = m_timeToEmpty;
+    info.timeToFullCharge = m_timeToFullCharge;
+    info.powerSourceState = GetPowerSourceState();
+    info.powerConsumption = m_wattage;
+    info.healthPercentage = GetHealthPercentage();
+    info.batterySerial = m_batterySerialNumber;
+    info.batteryWarnings.clear();
+    auto warnings = GetWarnings();
+    for (const auto& warning : warnings) {
+        info.batteryWarnings.push_back(warning);
+    }
+    return info;
+}
+
+std::vector<std::string> MacBatteryInfo::GetBatteryWarnings() const {
+    return m_warnings;
+}
+
+double MacBatteryInfo::GetBatteryWearLevel() const {
+    if (m_designCapacity == 0) return 0.0;
+    return (1.0 - (double)m_maxCapacity / m_designCapacity) * 100.0;
+}
+
+std::string MacBatteryInfo::GetBatterySerial() const {
+    return m_batterySerialNumber;
+}
+
+std::string MacBatteryInfo::GetManufacturingDate() const {
+    // macOS中通常不容易获取制造日期，返回空字符串
+    return "";
+}
+
+uint32_t MacBatteryInfo::GetPowerOnTime() const {
+    // 简化实现，返回0表示未知
+    return 0;
+}
+
+bool MacBatteryInfo::IsBatteryCalibrated() const {
+    // 简化实现，假设电池已校准
+    return true;
+}
+
+
 
 #endif // PLATFORM_MACOS

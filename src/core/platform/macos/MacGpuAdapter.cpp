@@ -254,4 +254,10 @@ void MacGpuAdapter::UpdateGpuData() {
     m_gpuData.push_back(gpuData);
 }
 
+// 添加缺少的方法实现
+void MacGpuAdapter::SetError(const std::string& error) const {
+    m_lastError = error;
+    Logger::Error("MacGpuAdapter error: " + error);
+}
+
 #endif // PLATFORM_MACOS

@@ -24,6 +24,7 @@ public:
     // 更新数据
     bool Update();
     bool IsDataValid() const;
+    uint64_t GetLastUpdateTime() const;
     
     // 基本电池信息
     bool IsBatteryPresent() const;
@@ -95,7 +96,7 @@ public:
 private:
     bool m_initialized;
     uint64_t m_lastUpdateTime;
-    std::string m_lastError;
+    mutable std::string m_lastError;
     
     // 基本状态
     bool m_batteryPresent;
@@ -111,6 +112,8 @@ private:
     uint32_t m_maxCapacity;
     uint32_t m_designCapacity;
     uint32_t m_nominalCapacity;
+    double m_chargePercentage;
+    double m_healthPercentage;
     
     // 电气信息
     double m_voltage;
@@ -149,7 +152,8 @@ private:
     bool GetBatteryInfoFromIOKit();
     bool GetBatteryInfoFromSystemProfiler();
     bool ParseBatteryData(CFDictionaryRef data);
-    bool GetCellInfo();
+    bool ParseBatteryData(const std::string& data);
+    bool ParseBatteryDataFromCFDictionary(CFDictionaryRef data);
     void UpdateBatteryHealth();
     void UpdatePowerManagement();
     void CheckBatteryWarnings();

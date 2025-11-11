@@ -11,8 +11,12 @@ struct SystemInfoData;
 struct TemperatureSensor {
     std::string name;
     double temperature;
+    double currentTemp;
+    double maxTemp;
+    double minTemp;
     std::string type;
     std::string location;
+    bool isValid;
 };
 
 struct DiskInfo {
@@ -20,6 +24,7 @@ struct DiskInfo {
     std::string model;
     std::string serialNumber;
     uint64_t totalSpace;
+    uint64_t totalSize;  // Alias for totalSpace
     uint64_t freeSpace;
     uint64_t usedSpace;
     double usagePercentage;
@@ -40,6 +45,11 @@ struct DiskInfo {
     uint32_t activeProcesses;
     bool isEncrypted;
     std::string encryptionType;
+    double healthScore;
+    bool isSSD;
+    bool isHDD;
+    bool isRemovable;
+    std::string interface;
 };
 
 struct NetworkInterface {
@@ -61,6 +71,16 @@ struct NetworkInterface {
     double latency;
     double packetLoss;
     std::string networkQuality;
+    
+    // Additional fields for macOS implementation
+    bool isActive;
+    bool isLoopback;
+    bool isWireless;
+    double linkSpeed;
+    double currentSpeed;
+    uint64_t currentRxBytes;
+    uint64_t currentTxBytes;
+    std::string subnetMask;
 };
 
 struct BatteryCell {

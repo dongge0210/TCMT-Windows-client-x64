@@ -25,20 +25,45 @@ MacSystemInfo::MacSystemInfo() {
     m_initialized = false;
     m_lastUpdateTime = 0;
     m_uptimeSeconds = 0;
+    m_processCount = 0;
+    m_runningProcessCount = 0;
+    m_sleepingProcessCount = 0;
+    m_threadCount = 0;
+    m_maxProcesses = 0;
     m_totalProcesses = 0;
     m_runningProcesses = 0;
     m_sleepingProcesses = 0;
-    m_threadCount = 0;
+    m_totalMemory = 0;
+    m_availableMemory = 0;
+    m_usedMemory = 0;
+    m_cacheMemory = 0;
+    m_swapMemory = 0;
+    m_memoryPressure = 0.0;
     m_totalPhysicalMemory = 0;
     m_availablePhysicalMemory = 0;
     m_usedPhysicalMemory = 0;
+    m_totalSwapMemory = 0;
+    m_availableSwapMemory = 0;
+    m_usedSwapMemory = 0;
     m_totalDiskSpace = 0;
     m_availableDiskSpace = 0;
     m_usedDiskSpace = 0;
+    m_diskReadOps = 0;
+    m_diskWriteOps = 0;
+    m_diskReadBytes = 0;
+    m_diskWriteBytes = 0;
+    m_networkInterfaceCount = 0;
+    m_totalBytesReceived = 0;
+    m_totalBytesSent = 0;
+    m_networkUtilization = 0.0;
     m_networkBytesReceived = 0;
     m_networkBytesSent = 0;
     m_networkPacketsReceived = 0;
     m_networkPacketsSent = 0;
+    m_systemHealthScore = 0.0;
+    m_isVirtualMachine = false;
+    m_virtualCPUCount = 0;
+    m_virtualMemory = 0;
     
     // 初始化负载平均值
     for (int i = 0; i < 3; ++i) {
@@ -161,8 +186,26 @@ std::string MacSystemInfo::GetOSBuild() const {
     return m_osBuild;
 }
 
+std::string MacSystemInfo::GetArchitecture() const {
+    if (m_architecture.empty()) {
+        struct utsname uname_info;
+        if (uname(&uname_info) == 0) {
+            m_architecture = uname_info.machine;
+        }
+    }
+    return m_architecture;
+}
+
 std::string MacSystemInfo::GetHostname() const {
     return m_hostname;
+}
+
+std::string MacSystemInfo::GetDomain() const {
+    if (m_domain.empty()) {
+        // 简化实现，返回空字符串
+        m_domain = "";
+    }
+    return m_domain;
 }
 
 std::string MacSystemInfo::GetUsername() const {
@@ -219,6 +262,38 @@ std::string MacSystemInfo::GetUptimeFormatted() const {
     return oss.str();
 }
 
+std::string MacSystemInfo::GetLocalTime() const {
+    auto now = std::chrono::system_clock::now();
+    auto tt = std::chrono::system_clock::to_time_t(now);
+    std::tm tm{};
+    localtime_r(&tt, &tm);
+    
+    std::ostringstream oss;
+    oss << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
+    return oss.str();
+}
+
+std::string MacSystemInfo::GetUTCTime() const {
+    auto now = std::chrono::system_clock::now();
+    auto tt = std::chrono::system_clock::to_time_t(now);
+    std::tm tm{};
+    gmtime_r(&tt, &tm);
+    
+    std::ostringstream oss;
+    oss << std::put_time(&tm, "%Y-%m-%d %H:%M:%S UTC");
+    return oss.str();
+}
+
+std::string MacSystemInfo::GetTimezone() const {
+    std::time_t now = std::time(nullptr);
+    std::tm local_tm{};
+    localtime_r(&now, &local_tm);
+    
+    char tz[32];
+    strftime(tz, sizeof(tz), "%Z", &local_tm);
+    return std::string(tz);
+}
+
 double MacSystemInfo::GetLoadAverage1Min() const {
     return m_loadAverage[0];
 }
@@ -231,6 +306,37 @@ double MacSystemInfo::GetLoadAverage15Min() const {
     return m_loadAverage[2];
 }
 
+double MacSystemInfo::GetCPULoadAverage() const {
+    // 简化实现，返回1分钟负载平均值
+    return m_loadAverage[0];
+}
+
+uint32_t MacSystemInfo::GetProcessCount() const {
+    return m_processCount;
+}
+
+uint32_t MacSystemInfo::GetRunningProcessCount() const {
+    return m_runningProcessCount;
+}
+
+uint32_t MacSystemInfo::GetSleepingProcessCount() const {
+    return m_sleepingProcessCount;
+}
+
+uint32_t MacSystemInfo::GetThreadCount() const {
+    return m_threadCount;
+}
+
+uint32_t MacSystemInfo::GetMaxProcesses() const {
+    if (m_maxProcesses == 0) {
+        size_t size = sizeof(m_maxProcesses);
+        if (sysctlbyname("kern.maxproc", nullptr, &size, nullptr, 0) == 0) {
+            sysctlbyname("kern.maxproc", nullptr, &size, &m_maxProcesses, size);
+        }
+    }
+    return m_maxProcesses;
+}
+
 uint32_t MacSystemInfo::GetTotalProcesses() const {
     return m_totalProcesses;
 }
@@ -241,10 +347,6 @@ uint32_t MacSystemInfo::GetRunningProcesses() const {
 
 uint32_t MacSystemInfo::GetSleepingProcesses() const {
     return m_sleepingProcesses;
-}
-
-uint32_t MacSystemInfo::GetThreadCount() const {
-    return m_threadCount;
 }
 
 uint64_t MacSystemInfo::GetTotalPhysicalMemory() const {
@@ -264,6 +366,30 @@ double MacSystemInfo::GetMemoryUsagePercentage() const {
     return (double)m_usedPhysicalMemory / m_totalPhysicalMemory * 100.0;
 }
 
+uint64_t MacSystemInfo::GetTotalMemory() const {
+    return m_totalMemory;
+}
+
+uint64_t MacSystemInfo::GetAvailableMemory() const {
+    return m_availableMemory;
+}
+
+uint64_t MacSystemInfo::GetUsedMemory() const {
+    return m_usedMemory;
+}
+
+uint64_t MacSystemInfo::GetCacheMemory() const {
+    return m_cacheMemory;
+}
+
+uint64_t MacSystemInfo::GetSwapMemory() const {
+    return m_swapMemory;
+}
+
+double MacSystemInfo::GetMemoryPressure() const {
+    return m_memoryPressure;
+}
+
 uint64_t MacSystemInfo::GetTotalDiskSpace() const {
     return m_totalDiskSpace;
 }
@@ -279,6 +405,22 @@ uint64_t MacSystemInfo::GetUsedDiskSpace() const {
 double MacSystemInfo::GetDiskUsagePercentage() const {
     if (m_totalDiskSpace == 0) return 0.0;
     return (double)m_usedDiskSpace / m_totalDiskSpace * 100.0;
+}
+
+uint32_t MacSystemInfo::GetDiskReadOps() const {
+    return m_diskReadOps;
+}
+
+uint32_t MacSystemInfo::GetDiskWriteOps() const {
+    return m_diskWriteOps;
+}
+
+uint64_t MacSystemInfo::GetDiskReadBytes() const {
+    return m_diskReadBytes;
+}
+
+uint64_t MacSystemInfo::GetDiskWriteBytes() const {
+    return m_diskWriteBytes;
 }
 
 std::string MacSystemInfo::GetPrimaryInterface() const {
@@ -299,6 +441,22 @@ uint64_t MacSystemInfo::GetNetworkPacketsReceived() const {
 
 uint64_t MacSystemInfo::GetNetworkPacketsSent() const {
     return m_networkPacketsSent;
+}
+
+uint32_t MacSystemInfo::GetNetworkInterfaceCount() const {
+    return m_networkInterfaceCount;
+}
+
+uint64_t MacSystemInfo::GetTotalBytesReceived() const {
+    return m_totalBytesReceived;
+}
+
+uint64_t MacSystemInfo::GetTotalBytesSent() const {
+    return m_totalBytesSent;
+}
+
+double MacSystemInfo::GetNetworkUtilization() const {
+    return m_networkUtilization;
 }
 
 bool MacSystemInfo::IsSystemHealthy() const {
@@ -332,6 +490,139 @@ std::string MacSystemInfo::GetSystemStatus() const {
     } else {
         return "Warning";
     }
+}
+
+std::vector<std::string> MacSystemInfo::GetSystemWarnings() const {
+    return m_systemWarnings;
+}
+
+std::vector<std::string> MacSystemInfo::GetSystemErrors() const {
+    return m_systemErrors;
+}
+
+double MacSystemInfo::GetSystemHealthScore() const {
+    if (m_systemHealthScore == 0.0) {
+        // 简化健康评分计算
+        double memoryScore = 100.0 - std::min(50.0, GetMemoryUsagePercentage() * 0.5);
+        double diskScore = 100.0 - std::min(50.0, GetDiskUsagePercentage() * 0.5);
+        double loadScore = 100.0 - std::min(50.0, GetLoadAverage1Min() * 10.0);
+        m_systemHealthScore = (memoryScore + diskScore + loadScore) / 3.0;
+    }
+    return m_systemHealthScore;
+}
+
+bool MacSystemInfo::IsSecureBootEnabled() const {
+    // macOS不使用传统安全启动，返回false
+    return false;
+}
+
+bool MacSystemInfo::IsFirewallEnabled() const {
+    // 简化实现
+    return false;
+}
+
+bool MacSystemInfo::IsAntivirusRunning() const {
+    // macOS不通常有传统杀毒软件
+    return false;
+}
+
+std::string MacSystemInfo::GetSecurityStatus() const {
+    return "Unknown";
+}
+
+std::string MacSystemInfo::GetMotherboardModel() const {
+    if (m_motherboardModel.empty()) {
+        // 简化实现
+        m_motherboardModel = "Unknown";
+    }
+    return m_motherboardModel;
+}
+
+std::string MacSystemInfo::GetBIOSVersion() const {
+    if (m_biosVersion.empty()) {
+        // macOS使用固件版本
+        size_t size = 0;
+        if (sysctlbyname("kern.osversion", nullptr, &size, nullptr, 0) == 0 && size > 0) {
+            std::vector<char> buffer(size);
+            if (sysctlbyname("kern.osversion", buffer.data(), &size, nullptr, 0) == 0) {
+                m_biosVersion = std::string(buffer.data(), size - 1);
+            }
+        }
+    }
+    return m_biosVersion;
+}
+
+std::string MacSystemInfo::GetFirmwareVersion() const {
+    return GetBIOSVersion();
+}
+
+std::string MacSystemInfo::GetSerialNumber() const {
+    if (m_serialNumber.empty()) {
+        // 简化实现
+        m_serialNumber = "Unknown";
+    }
+    return m_serialNumber;
+}
+
+bool MacSystemInfo::IsVirtualMachine() const {
+    if (m_isVirtualMachine) {
+        return m_isVirtualMachine;
+    }
+    
+    // 简化检测
+    size_t size = 0;
+    if (sysctlbyname("kern.hv_support", nullptr, &size, nullptr, 0) == 0) {
+        int hv_support = 0;
+        if (sysctlbyname("kern.hv_support", nullptr, &size, &hv_support, size) == 0) {
+            m_isVirtualMachine = (hv_support == 1);
+        }
+    }
+    return m_isVirtualMachine;
+}
+
+std::string MacSystemInfo::GetVirtualizationPlatform() const {
+    if (IsVirtualMachine()) {
+        return "macOS Hypervisor";
+    }
+    return "None";
+}
+
+uint32_t MacSystemInfo::GetVirtualCPUCount() const {
+    return m_virtualCPUCount;
+}
+
+uint64_t MacSystemInfo::GetVirtualMemory() const {
+    return m_virtualMemory;
+}
+
+std::vector<std::string> MacSystemInfo::GetEnvironmentVariables() const {
+    std::vector<std::string> envVars;
+    // 简化实现，返回一些常见的环境变量
+    extern char** environ;
+    for (int i = 0; environ[i] != nullptr; ++i) {
+        envVars.push_back(std::string(environ[i]));
+        if (envVars.size() >= 20) break; // 限制数量
+    }
+    return envVars;
+}
+
+std::string MacSystemInfo::GetEnvironmentVariable(const std::string& name) const {
+    const char* value = getenv(name.c_str());
+    return value ? std::string(value) : "";
+}
+
+std::string MacSystemInfo::GetLastSystemUpdateTime() const {
+    // 简化实现
+    return "Unknown";
+}
+
+bool MacSystemInfo::UpdatesAvailable() const {
+    // 简化实现
+    return false;
+}
+
+std::vector<std::string> MacSystemInfo::GetPendingUpdates() const {
+    return std::vector<std::string>();
 }
 
 std::string MacSystemInfo::GetLastError() const {
@@ -437,6 +728,7 @@ bool MacSystemInfo::GetProcessInfo() const {
         char buffer[128];
         if (fgets(buffer, sizeof(buffer), fp)) {
             m_totalProcesses = std::stoi(buffer) - 1; // 减去标题行
+            m_processCount = m_totalProcesses;
         }
         pclose(fp);
     }
@@ -454,6 +746,8 @@ bool MacSystemInfo::GetProcessInfo() const {
     // 简化处理，估算运行和休眠进程
     m_runningProcesses = m_totalProcesses / 3; // 简化估算
     m_sleepingProcesses = m_totalProcesses - m_runningProcesses;
+    m_runningProcessCount = m_runningProcesses;
+    m_sleepingProcessCount = m_sleepingProcesses;
     
     return true;
 }
@@ -479,9 +773,22 @@ bool MacSystemInfo::GetMemoryInfo() const {
     
     uint64_t free_memory = vm_stat.free_count * vm_page_size;
     uint64_t inactive_memory = vm_stat.inactive_count * vm_page_size;
+    uint64_t active_memory = vm_stat.active_count * vm_page_size;
+    uint64_t wired_memory = vm_stat.wire_count * vm_page_size;
+    uint64_t cache_memory = vm_stat.inactive_count * vm_page_size;
     
     m_availablePhysicalMemory = free_memory + inactive_memory;
     m_usedPhysicalMemory = m_totalPhysicalMemory - m_availablePhysicalMemory;
+    
+    // 设置统一的内存信息
+    m_totalMemory = m_totalPhysicalMemory;
+    m_availableMemory = m_availablePhysicalMemory;
+    m_usedMemory = m_usedPhysicalMemory;
+    m_cacheMemory = cache_memory;
+    
+    // 计算内存压力
+    double memoryUsage = (double)m_usedPhysicalMemory / m_totalPhysicalMemory;
+    m_memoryPressure = memoryUsage * 100.0;
     
     return true;
 }
@@ -507,6 +814,14 @@ bool MacSystemInfo::GetNetworkInfo() const {
         return false;
     }
     
+    // 计算网络接口数量
+    m_networkInterfaceCount = 0;
+    for (struct ifaddrs* ifa = ifaddrs_ptr; ifa != nullptr; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr && (ifa->ifa_addr->sa_family == AF_INET || ifa->ifa_addr->sa_family == AF_INET6)) {
+            m_networkInterfaceCount++;
+        }
+    }
+    
     // 查找主网络接口
     m_primaryInterface = "en0"; // 默认使用en0
     
@@ -521,6 +836,11 @@ bool MacSystemInfo::GetNetworkInfo() const {
         }
         pclose(fp);
     }
+    
+    // 设置统一的网络信息
+    m_totalBytesReceived = m_networkBytesReceived;
+    m_totalBytesSent = m_networkBytesSent;
+    m_networkUtilization = 0.0; // 简化实现
     
     freeifaddrs(ifaddrs_ptr);
     return true;

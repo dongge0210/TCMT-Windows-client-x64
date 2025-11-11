@@ -205,7 +205,15 @@ bool MacMemoryInfo::GetMemoryInfo() const {
     
     // 计算可用内存
     uint64_t pageSize = sysconf(_SC_PAGESIZE);
-    m_availablePhysicalMemory = (vm_stat.free_count + vm_stat.inactive_count) * pageSize;
+    
+    // 可用内存 = 空闲内存 + 可回收的非活跃内存的一部分
+    // 非活跃内存中只有一部分是真正可用的
+    uint64_t freeMemory = vm_stat.free_count * pageSize;
+    uint64_t inactiveMemory = vm_stat.inactive_count * pageSize;
+    
+    // 假设非活跃内存的70%是可回收的
+    uint64_t reclaimableInactive = inactiveMemory * 0.7;
+    m_availablePhysicalMemory = freeMemory + reclaimableInactive;
     
     // 获取虚拟内存信息（交换文件）
     xsw_usage vmusage;
@@ -249,15 +257,16 @@ bool MacMemoryInfo::GetMemoryDetails() const {
     
     uint64_t pageSize = sysconf(_SC_PAGESIZE);
     
-    // 更详细的内存分类
+    // 更详细的内存分类 (不影响可用内存计算)
     m_cachedMemory = vm_stat.inactive_count * pageSize;
-    m_bufferedMemory = vm_stat.free_count * pageSize * 0.3; // 估算部分空闲内存作为缓存
+    // 注意：不要将空闲内存重新分类为缓存，这会影响可用内存计算
+    m_bufferedMemory = 0; // macOS中buffered内存概念不同，设为0避免混淆
     m_sharedMemory = vm_stat.wire_count * pageSize;
     
     // 添加压缩内存支持 (macOS的内存压缩功能)
     uint64_t compressedMemory = vm_stat.compressor_page_count * pageSize;
     if (compressedMemory > 0) {
-        // 将压缩内存的一部分计入缓存
+        // 将压缩内存的一部分计入缓存，但不影响可用内存
         m_cachedMemory += compressedMemory * 0.5;
     }
     
@@ -265,30 +274,31 @@ bool MacMemoryInfo::GetMemoryDetails() const {
     double usage = GetPhysicalMemoryUsage();
     double swapUsage = GetSwapMemoryUsage();
     
-    // 基于物理内存使用率的基础压力
-    double basePressure = usage;
+    // 基于物理内存使用率的基础压力 (权重: 60%)
+    double basePressure = usage * 0.6;
     
-    // 考虑交换文件使用的影响
-    if (swapUsage > 50.0) {
-        basePressure += 20.0; // 交换文件大量使用增加压力
-    } else if (swapUsage > 20.0) {
-        basePressure += 10.0;
-    }
+    // 考虑交换文件使用的影响 (权重: 20%)
+    double swapPressure = std::min(swapUsage, 100.0) * 0.2;
     
-    // 考虑非活跃内存的比例
+    // 考虑非活跃内存的比例 (权重: 10%)
     uint64_t totalMemory = GetTotalPhysicalMemory();
     double inactiveRatio = (double)m_cachedMemory / totalMemory * 100.0;
-    
-    // 非活跃内存过少意味着系统内存紧张
+    double inactivePressure = 0.0;
     if (inactiveRatio < 10.0 && usage > 70.0) {
-        basePressure += 15.0;
+        inactivePressure = 15.0; // 非活跃内存过少且使用率高时增加压力
     }
+    inactivePressure *= 0.1;
     
-    // 考虑有线内存（不可被换出的内存）的比例
+    // 考虑有线内存（不可被换出的内存）的比例 (权重: 10%)
     double wiredRatio = (double)m_sharedMemory / totalMemory * 100.0;
+    double wiredPressure = 0.0;
     if (wiredRatio > 30.0) {
-        basePressure += 10.0; // 有线内存过多增加压力
+        wiredPressure = 10.0; // 有线内存过多增加压力
     }
+    wiredPressure *= 0.1;
+    
+    // 综合计算内存压力
+    basePressure = basePressure + swapPressure + inactivePressure + wiredPressure;
     
     // 限制在合理范围内
     m_memoryPressure = std::max(0.0, std::min(100.0, basePressure));

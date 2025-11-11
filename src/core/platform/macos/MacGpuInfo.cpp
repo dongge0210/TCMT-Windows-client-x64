@@ -190,7 +190,21 @@ double MacGpuInfo::GetPerformanceRating() const {
 }
 
 bool MacGpuInfo::Initialize() {
-    return GetGpuInfo() && GetGpuPerformance() && GetGpuTemperature() && GetGpuPowerInfo();
+    // 至少获取基本GPU信息
+    if (!GetGpuInfo()) {
+        return false;
+    }
+    
+    // 尝试获取其他信息，但不强制要求成功
+    GetGpuPerformance();
+    GetGpuTemperature();
+    GetGpuPowerInfo();
+    
+    m_initialized = true;
+    m_lastUpdateTime = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    
+    return true;
 }
 
 void MacGpuInfo::Cleanup() {
@@ -229,44 +243,66 @@ bool MacGpuInfo::GetGpuInfo() const {
         std::string model(hw_model);
         
         // 根据型号确定GPU信息
-        if (model.find("MacBook") != std::string::npos) {
-            m_vendor = "Apple";
-            if (model.find("M1") != std::string::npos) {
-                m_name = "Apple M1 GPU";
-                m_dedicatedMemory = 0; // 统一内存架构
-                m_sharedMemory = 8ULL * 1024 * 1024 * 1024; // 8GB
-                m_computeUnits = 8;
-                m_baseFrequency = 1066.0; // M1 GPU基础频率
-                m_maxFrequency = 1278.0; // M1 GPU最大频率
-                m_architecture = "Apple M1";
-                m_performanceRating = 100.0;
-            } else if (model.find("M2") != std::string::npos) {
+        m_vendor = "Apple";
+        
+        // 检测Apple Silicon芯片
+        if (model.find("M1") != std::string::npos) {
+            m_name = "Apple M1 GPU";
+            m_dedicatedMemory = 0; // 统一内存架构
+            m_sharedMemory = 8ULL * 1024 * 1024 * 1024; // 8GB
+            m_computeUnits = 8;
+            m_baseFrequency = 1066.0; // M1 GPU基础频率
+            m_maxFrequency = 1278.0; // M1 GPU最大频率
+            m_architecture = "Apple M1";
+            m_performanceRating = 100.0;
+        } else if (model.find("M2") != std::string::npos) {
+            m_name = "Apple M2 GPU";
+            m_dedicatedMemory = 0;
+            m_sharedMemory = 10ULL * 1024 * 1024 * 1024; // 10GB
+            m_computeUnits = 10;
+            m_baseFrequency = 1244.0; // M2 GPU基础频率
+            m_maxFrequency = 1398.0; // M2 GPU最大频率
+            m_architecture = "Apple M2";
+            m_performanceRating = 150.0;
+        } else if (model.find("M3") != std::string::npos) {
+            m_name = "Apple M3 GPU";
+            m_dedicatedMemory = 0;
+            m_sharedMemory = 18ULL * 1024 * 1024 * 1024; // 18GB
+            m_computeUnits = 16;
+            m_baseFrequency = 1350.0; // M3 GPU基础频率
+            m_maxFrequency = 1500.0; // M3 GPU最大频率
+            m_architecture = "Apple M3";
+            m_performanceRating = 200.0;
+        } else {
+            // 对于其他Mac型号（如Mac14,2），使用默认Apple GPU配置
+            // Mac14,2通常是M2 MacBook Air
+            if (model.find("Mac14") != std::string::npos) {
                 m_name = "Apple M2 GPU";
                 m_dedicatedMemory = 0;
                 m_sharedMemory = 10ULL * 1024 * 1024 * 1024; // 10GB
                 m_computeUnits = 10;
-                m_baseFrequency = 1244.0; // M2 GPU基础频率
-                m_maxFrequency = 1398.0; // M2 GPU最大频率
+                m_baseFrequency = 1244.0;
+                m_maxFrequency = 1398.0;
                 m_architecture = "Apple M2";
                 m_performanceRating = 150.0;
-            } else if (model.find("M3") != std::string::npos) {
-                m_name = "Apple M3 GPU";
+            } else if (model.find("Mac13") != std::string::npos) {
+                m_name = "Apple M1 GPU";
                 m_dedicatedMemory = 0;
-                m_sharedMemory = 18ULL * 1024 * 1024 * 1024; // 18GB
-                m_computeUnits = 16;
-                m_baseFrequency = 1350.0; // M3 GPU基础频率
-                m_maxFrequency = 1500.0; // M3 GPU最大频率
-                m_architecture = "Apple M3";
-                m_performanceRating = 200.0;
+                m_sharedMemory = 8ULL * 1024 * 1024 * 1024; // 8GB
+                m_computeUnits = 8;
+                m_baseFrequency = 1066.0;
+                m_maxFrequency = 1278.0;
+                m_architecture = "Apple M1";
+                m_performanceRating = 100.0;
             } else {
                 m_name = "Apple Integrated GPU";
                 m_dedicatedMemory = 0;
-                m_sharedMemory = 4ULL * 1024 * 1024 * 1024; // 默认4GB
-                m_computeUnits = 4;
-                m_baseFrequency = 800.0;
-                m_maxFrequency = 1000.0;
+                m_sharedMemory = 8ULL * 1024 * 1024 * 1024; // 默认8GB
+                m_computeUnits = 8;
+                m_baseFrequency = 1000.0;
+                m_maxFrequency = 1200.0;
                 m_architecture = "Apple";
-                m_performanceRating = 50.0;
+                m_performanceRating = 80.0;
             }
         }
     } else {
@@ -315,14 +351,20 @@ bool MacGpuInfo::GetGpuPerformance() const {
     
     // 模拟周期性负载变化（模拟实际应用场景）
     double cyclicLoad = sin(counter * 0.1) * 0.5 + 0.5; // 0-1之间变化
-    double burstLoad = sin(counter * 0.8) > 0.8 ? 1.5 : 0.0; // 突发负载
+    double burstLoad = sin(counter * 0.8) > 0.8 ? 0.3 : 0.0; // 突发负载，限制在合理范围
     
-    // 组合不同负载类型
-    double combinedLoad = baseLoad + (peakLoad - baseLoad) * cyclicLoad + burstLoad * 10.0;
+    // 组合不同负载类型，确保不超过峰值
+    double cyclicComponent = (peakLoad - baseLoad) * cyclicLoad;
+    double burstComponent = (peakLoad - baseLoad - cyclicComponent) * burstLoad;
+    double combinedLoad = baseLoad + cyclicComponent + burstComponent;
+    
+    // 确保在合理范围内
     m_gpuUsage = std::max(0.0, std::min(100.0, combinedLoad));
     
     // GPU内存使用率（通常比GPU核心使用率更稳定）
-    m_memoryUsage = m_gpuUsage * 0.8 + (rand() % 100 - 50) / 100.0 * 5.0;
+    double memoryBase = m_gpuUsage * 0.8;
+    double memoryVariation = ((rand() % 100 - 50) / 100.0) * 5.0; // ±2.5% 变化
+    m_memoryUsage = memoryBase + memoryVariation;
     m_memoryUsage = std::max(0.0, std::min(100.0, m_memoryUsage));
     
     // 视频编解码器使用率（通常较低，偶有峰值）

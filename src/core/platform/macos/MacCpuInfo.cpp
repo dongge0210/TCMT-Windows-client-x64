@@ -472,8 +472,10 @@ std::string MacCpuInfo::GetCpuName() {
 
 bool MacCpuInfo::GetSysctlInt(const char* name, int& value) {
     size_t size = sizeof(value);
-    return sysctlbyname(name, nullptr, &size, nullptr, 0) == 0 &&
-           sysctlbyname(name, nullptr, &size, &value, size) == 0;
+    if (sysctlbyname(name, &value, &size, nullptr, 0) != 0) {
+        return false;
+    }
+    return true;
 }
 
 bool MacCpuInfo::GetSysctlString(const char* name, std::string& value) {

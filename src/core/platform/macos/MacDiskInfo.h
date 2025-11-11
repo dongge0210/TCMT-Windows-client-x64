@@ -20,6 +20,7 @@ private:
     std::string m_lastError;
     uint64_t m_lastUpdateTime;
     bool m_dataValid;
+    std::string m_diskName;
     
     // 磁盘数据
     std::vector<DiskInfo> m_disks;
@@ -42,7 +43,7 @@ private:
     static constexpr double CRITICAL_USAGE_PERCENTAGE = 95.0;
 
 public:
-    MacDiskInfo();
+    MacDiskInfo(const std::string& diskName = "");
     virtual ~MacDiskInfo();
 
     // IBaseInfo 接口实现
@@ -80,6 +81,7 @@ public:
     virtual bool IsHDD() const override;
     virtual bool IsNVMe() const override;
     virtual std::string GetInterfaceType() const override;
+    virtual std::vector<DiskInfo> GetAllDisks() const;
 
 private:
     // 错误处理

@@ -74,7 +74,17 @@ std::unique_ptr<ICpuInfo> InfoFactory::CreateCpuInfo() {
 // 兼容性支持：创建原有类实例
 std::unique_ptr<CpuInfo> InfoFactory::CreateLegacyCpuInfo() {
     try {
+#ifdef PLATFORM_WINDOWS
         return std::make_unique<CpuInfo>();
+#elif defined(PLATFORM_MACOS)
+        // macOS不支持原有的CpuInfo类，返回nullptr
+        SetError("Legacy CpuInfo not supported on macOS");
+        return nullptr;
+#else
+        // 其他平台也不支持
+        SetError("Legacy CpuInfo not supported on this platform");
+        return nullptr;
+#endif
     } catch (const std::exception& e) {
         SetError(std::string("Failed to create legacy CPU info: ") + e.what());
         return nullptr;

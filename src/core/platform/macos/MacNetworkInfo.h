@@ -69,6 +69,8 @@ public:
     virtual NetworkInterface GetPrimaryInterface() const override;
     virtual uint64_t GetTotalRxBytes() const override;
     virtual uint64_t GetTotalTxBytes() const override;
+    virtual uint64_t GetTotalBytesReceived() const;
+    virtual uint64_t GetTotalBytesSent() const;
     virtual double GetCurrentDownloadSpeed() const override;
     virtual double GetCurrentUploadSpeed() const override;
     virtual double GetAverageDownloadSpeed(int minutes = 5) const override;
