@@ -139,12 +139,44 @@ ULONGLONG MemoryInfo::GetFreeMemory() const {
 // macOS特有：内存压力和交换信息实现
 double MemoryInfo::GetMemoryPressure() const {
 #ifdef PLATFORM_MACOS
-    // 计算内存压力：已使用内存占总内存的比例
-    ULONGLONG total = GetTotalPhysical();
-    ULONGLONG used = total - GetFreeMemory();
+    // 使用macOS系统的内存压力检测
+    try {
+        // 获取内存压力信息
+        mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+        vm_statistics64_data_t vmStats;
+        kern_return_t result = host_statistics64(mach_host_self(), HOST_VM_INFO64, 
+                                                (host_info64_t)&vmStats, &count);
+        
+        if (result == KERN_SUCCESS) {
+            // 计算可用内存（包括可回收的缓存）
+            uint64_t freeMemory = vmStats.free_count;
+            uint64_t inactiveMemory = vmStats.inactive_count;
+            uint64_t purgeableMemory = vmStats.purgeable_count;
+            
+            // 获取总物理内存
+            uint64_t totalMemory = 0;
+            size_t size = sizeof(totalMemory);
+            if (sysctlbyname("hw.memsize", &totalMemory, &size, nullptr, 0) == 0) {
+                totalMemory = totalMemory / vm_page_size;
+                
+                // 计算内存压力百分比
+                uint64_t availableMemory = freeMemory + inactiveMemory + purgeableMemory;
+                double pressure = 100.0 - (double)availableMemory / (double)totalMemory * 100.0;
+                
+                // 限制在0-100范围内
+                if (pressure < 0.0) pressure = 0.0;
+                if (pressure > 100.0) pressure = 100.0;
+                
+                return pressure;
+            }
+        }
+    }
+    catch (const std::exception& e) {
+        Logger::Error("获取macOS内存压力失败: " + std::string(e.what()));
+    }
     
-    if (total == 0) return 0.0;
-    return (double)used / (double)total * 100.0;
+    // 如果获取失败，返回保守估计
+    return 50.0;
 #else
     return 0.0;
 #endif
