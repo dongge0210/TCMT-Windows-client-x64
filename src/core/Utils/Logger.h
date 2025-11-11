@@ -6,7 +6,19 @@
 #include <fstream>
 #include <chrono>
 #include <initializer_list>
-#include <windows.h>
+#include "../common/PlatformDefs.h"
+
+#ifdef PLATFORM_WINDOWS
+    #include <windows.h>
+#elif defined(PLATFORM_MACOS)
+    #include <unistd.h>
+    #include <syslog.h>
+    #include <ctime>
+    #include <sys/time.h>
+#else
+    #include <ctime>
+    #include <sys/time.h>
+#endif
 #if __has_include(<format>)
   #include <format>
   #define LOGGER_HAS_STD_FORMAT 1
@@ -16,24 +28,28 @@
 
 // Severity levels
 enum LogLevel {
-    LOG_TRACE = 0,
-    LOG_DEBUG = 1,
-    LOG_INFO = 2,
-    LOG_WARNING = 3,
-    LOG_ERROR = 4,
-    LOG_CRITICAL = 5,
-    LOG_FATAL = 6
+    LL_TRACE = 0,
+    LL_DEBUG = 1,
+    LL_INFO = 2,
+    LL_WARNING = 3,
+    LL_ERROR = 4,
+    LL_CRITICAL = 5,
+    LL_FATAL = 6
 };
 
 // Console colors (Windows attributes)
-enum class ConsoleColor : WORD {
+#ifdef PLATFORM_WINDOWS
+    enum class ConsoleColor : WORD {
+#else
+    enum class ConsoleColor : uint16_t {
+#endif
     DEFAULT       = 7,
     TRACE_COLOR   = 13,  // magenta
     DEBUG_COLOR   = 9,   // blue
     INFO_COLOR    = 10,  // green
     WARN_COLOR    = 14,  // yellow
     ERROR_COLOR   = 12,  // light red
-    CRITICAL_COLOR= 12,  // light red
+    CRITICAL_COLOR= 5,   // purple
     FATAL_COLOR   = 4    // dark red
 };
 
@@ -51,6 +67,9 @@ public:
     // Initialization (simple and with rotation)
     static bool Initialize(const std::string& filePath);
     static bool InitializeWithRotation(const std::string& baseFilePath, size_t maxFileSizeBytes, int maxFiles);
+    
+    // Cross-platform initialization
+    static bool Initialize(const std::string& filePath, bool enableSyslog = false);
 
     // Configuration
     static void SetLogLevel(LogLevel level);
@@ -96,13 +115,24 @@ public:
     // Retrieval for UI / diagnostics
     static std::vector<LogEntry> GetRecentEntries(); // snapshot copy
     static bool IsInitialized();
+    
+    // Cleanup
+    static void Shutdown();
 
 private:
     static std::mutex mutex;
     static std::ofstream stream;
     static bool consoleEnabled;
     static LogLevel currentLevel;
-    static HANDLE consoleHandle;
+    #ifdef PLATFORM_WINDOWS
+        static HANDLE consoleHandle;
+    #elif defined(PLATFORM_MACOS)
+        static bool useSyslog;
+        static FILE* consoleHandle;
+    #else
+        static bool useSyslog;
+        static FILE* consoleHandle;
+    #endif
 
     // Rotation
     static size_t maxFileSize;
@@ -126,19 +156,19 @@ private:
 
 // Macros capturing source location & formatting
 #if LOGGER_HAS_STD_FORMAT
-#define LOG_T(cat, fmt, ...) Logger::Logf(LOG_TRACE,    cat, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
-#define LOG_D(cat, fmt, ...) Logger::Logf(LOG_DEBUG,    cat, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
-#define LOG_I(cat, fmt, ...) Logger::Logf(LOG_INFO,     cat, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
-#define LOG_W(cat, fmt, ...) Logger::Logf(LOG_WARNING,  cat, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
-#define LOG_E(cat, fmt, ...) Logger::Logf(LOG_ERROR,    cat, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
-#define LOG_C(cat, fmt, ...) Logger::Logf(LOG_CRITICAL, cat, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
-#define LOG_F(cat, fmt, ...) Logger::Logf(LOG_FATAL,    cat, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#define LOG_T(cat, fmt, ...) Logger::Logf(LL_TRACE,    cat, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#define LOG_D(cat, fmt, ...) Logger::Logf(LL_DEBUG,    cat, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#define LOG_I(cat, fmt, ...) Logger::Logf(LL_INFO,     cat, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#define LOG_W(cat, fmt, ...) Logger::Logf(LL_WARNING,  cat, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#define LOG_E(cat, fmt, ...) Logger::Logf(LL_ERROR,    cat, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#define LOG_C(cat, fmt, ...) Logger::Logf(LL_CRITICAL, cat, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#define LOG_F(cat, fmt, ...) Logger::Logf(LL_FATAL,    cat, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
 #else
-#define LOG_T(cat, msg) Logger::Log(LOG_TRACE,    cat, msg, __FILE__, __LINE__)
-#define LOG_D(cat, msg) Logger::Log(LOG_DEBUG,    cat, msg, __FILE__, __LINE__)
-#define LOG_I(cat, msg) Logger::Log(LOG_INFO,     cat, msg, __FILE__, __LINE__)
-#define LOG_W(cat, msg) Logger::Log(LOG_WARNING,  cat, msg, __FILE__, __LINE__)
-#define LOG_E(cat, msg) Logger::Log(LOG_ERROR,    cat, msg, __FILE__, __LINE__)
-#define LOG_C(cat, msg) Logger::Log(LOG_CRITICAL, cat, msg, __FILE__, __LINE__)
-#define LOG_F(cat, msg) Logger::Log(LOG_FATAL,    cat, msg, __FILE__, __LINE__)
+#define LOG_T(cat, msg) Logger::Log(LL_TRACE,    cat, msg, __FILE__, __LINE__)
+#define LOG_D(cat, msg) Logger::Log(LL_DEBUG,    cat, msg, __FILE__, __LINE__)
+#define LOG_I(cat, msg) Logger::Log(LL_INFO,     cat, msg, __FILE__, __LINE__)
+#define LOG_W(cat, msg) Logger::Log(LL_WARNING,  cat, msg, __FILE__, __LINE__)
+#define LOG_E(cat, msg) Logger::Log(LL_ERROR,    cat, msg, __FILE__, __LINE__)
+#define LOG_C(cat, msg) Logger::Log(LL_CRITICAL, cat, msg, __FILE__, __LINE__)
+#define LOG_F(cat, msg) Logger::Log(LL_FATAL,    cat, msg, __FILE__, __LINE__)
 #endif

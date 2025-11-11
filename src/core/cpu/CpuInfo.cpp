@@ -1,13 +1,32 @@
 ﻿#include "CpuInfo.h"
 #include "Logger.h"
 #include <intrin.h>
-#include <windows.h>
-#include <vector>
-#include <pdh.h>
-#include <algorithm>
-#include <powrprof.h> // CallNtPowerInformation
-#pragma comment(lib, "pdh.lib")
-#pragma comment(lib, "PowrProf.lib")
+
+#ifdef PLATFORM_WINDOWS
+    #include <windows.h>
+    #include <vector>
+    #include <pdh.h>
+    #include <algorithm>
+    #include <powrprof.h> // CallNtPowerInformation
+    #include <memory>
+    #pragma comment(lib, "pdh.lib")
+    #pragma comment(lib, "PowrProf.lib")
+#elif defined(PLATFORM_MACOS)
+    #include <sys/sysctl.h>
+    #include <mach/mach.h>
+    #include <mach/host_statistics.h>
+    #include <mach/mach_host.h>
+    #include <sys/utsname.h>
+    #include <thread>
+    #include <chrono>
+#elif defined(PLATFORM_LINUX)
+    #include <sys/sysinfo.h>
+    #include <fstream>
+    #include <sstream>
+    #include <unistd.h>
+    #include <thread>
+    #include <chrono>
+#endif
 
 // Define PDH constants if not available
 #ifndef PDH_CSTATUS_VALID_DATA
@@ -103,11 +122,25 @@ CpuInfo::CpuInfo() :
     lastSampleIntervalMs(0.0) {
 
     try {
+#ifdef PLATFORM_WINDOWS
         DetectCores();
         cpuName = GetNameFromRegistry();
         InitializeCounter();
         UpdateCoreSpeeds();  // 初始化频率信息
         InitializeFrequencyCounter();     // 初始化即时频率计数器
+#elif defined(PLATFORM_MACOS)
+        DetectCores();
+        cpuName = GetNameFromSysctl();
+        InitializeCounter();
+        UpdateCoreSpeeds();  // 初始化频率信息
+        InitializeFrequencyCounter();     // 初始化即时频率计数器
+#elif defined(PLATFORM_LINUX)
+        DetectCores();
+        cpuName = GetNameFromProcCpuinfo();
+        InitializeCounter();
+        UpdateCoreSpeeds();  // 初始化频率信息
+        InitializeFrequencyCounter();     // 初始化即时频率计数器
+#endif
     }
     catch (const std::exception& e) {
         Logger::Error("CPU信息初始化失败: " + std::string(e.what()));
@@ -318,6 +351,41 @@ std::string CpuInfo::GetNameFromRegistry() {
     return "Unknown CPU";
 }
 
+std::string CpuInfo::GetNameFromSysctl() {
+    size_t len = 0;
+    sysctlbyname("machdep.cpu.brand_string", nullptr, &len, nullptr, 0);
+    if (len > 0) {
+        std::string cpuModel;
+        cpuModel.resize(len);
+        sysctlbyname("machdep.cpu.brand_string", &cpuModel[0], &len, nullptr, 0);
+        cpuModel.resize(len - 1); // 移除null终止符
+        return cpuModel;
+    }
+    return "Unknown CPU";
+}
+
+std::string CpuInfo::GetNameFromProcCpuinfo() {
+    std::ifstream file("/proc/cpuinfo");
+    if (!file.is_open()) {
+        return "Unknown CPU";
+    }
+    
+    std::string line;
+    while (std::getline(file, line)) {
+        if (line.find("model name") != std::string::npos) {
+            size_t pos = line.find(':');
+            if (pos != std::string::npos) {
+                std::string cpuModel = line.substr(pos + 1);
+                // 移除前后空格
+                cpuModel.erase(0, cpuModel.find_first_not_of(' '));
+                cpuModel.erase(cpuModel.find_last_not_of(' ') + 1);
+                return cpuModel;
+            }
+        }
+    }
+    return "Unknown CPU";
+}
+
 int CpuInfo::GetTotalCores() const {
     return totalCores;
 }
@@ -378,4 +446,93 @@ bool CpuInfo::IsVirtualizationEnabled() const {
     }
 
     return isVMXEnabled;
+}
+
+// WinCpuAdapter 实现
+WinCpuAdapter::WinCpuAdapter() {
+    m_originalCpuInfo = std::make_unique<CpuInfo>();
+}
+
+WinCpuAdapter::~WinCpuAdapter() {
+    Cleanup();
+}
+
+double WinCpuAdapter::GetUsage() {
+    if (!m_originalCpuInfo) return 0.0;
+    return m_originalCpuInfo->GetUsage();
+}
+
+std::string WinCpuAdapter::GetName() {
+    if (!m_originalCpuInfo) return "";
+    return m_originalCpuInfo->GetName();
+}
+
+int WinCpuAdapter::GetTotalCores() const {
+    if (!m_originalCpuInfo) return 0;
+    return m_originalCpuInfo->GetTotalCores();
+}
+
+int WinCpuAdapter::GetSmallCores() const {
+    if (!m_originalCpuInfo) return 0;
+    return m_originalCpuInfo->GetSmallCores();
+}
+
+int WinCpuAdapter::GetLargeCores() const {
+    if (!m_originalCpuInfo) return 0;
+    return m_originalCpuInfo->GetLargeCores();
+}
+
+double WinCpuAdapter::GetLargeCoreSpeed() const {
+    if (!m_originalCpuInfo) return 0.0;
+    return m_originalCpuInfo->GetLargeCoreSpeed();
+}
+
+double WinCpuAdapter::GetSmallCoreSpeed() const {
+    if (!m_originalCpuInfo) return 0.0;
+    return m_originalCpuInfo->GetSmallCoreSpeed();
+}
+
+DWORD WinCpuAdapter::GetCurrentSpeed() const {
+    if (!m_originalCpuInfo) return 0;
+    return m_originalCpuInfo->GetCurrentSpeed();
+}
+
+bool WinCpuAdapter::IsHyperThreadingEnabled() const {
+    if (!m_originalCpuInfo) return false;
+    return m_originalCpuInfo->IsHyperThreadingEnabled();
+}
+
+bool WinCpuAdapter::IsVirtualizationEnabled() const {
+    if (!m_originalCpuInfo) return false;
+    return m_originalCpuInfo->IsVirtualizationEnabled();
+}
+
+double WinCpuAdapter::GetLastSampleIntervalMs() const {
+    if (!m_originalCpuInfo) return 0.0;
+    return m_originalCpuInfo->GetLastSampleIntervalMs();
+}
+
+double WinCpuAdapter::GetBaseFrequencyMHz() const {
+    if (!m_originalCpuInfo) return 0.0;
+    return m_originalCpuInfo->GetBaseFrequencyMHz();
+}
+
+double WinCpuAdapter::GetCurrentFrequencyMHz() const {
+    if (!m_originalCpuInfo) return 0.0;
+    return m_originalCpuInfo->GetCurrentFrequencyMHz();
+}
+
+bool WinCpuAdapter::Initialize() {
+    // CpuInfo类在构造时自动初始化，这里只需要确认对象存在
+    return m_originalCpuInfo != nullptr;
+}
+
+void WinCpuAdapter::Cleanup() {
+    // CpuInfo类在析构时自动清理，这里不需要额外操作
+}
+
+bool WinCpuAdapter::Update() {
+    // CpuInfo类在每次调用Get方法时自动更新数据
+    // 这里可以添加额外的更新逻辑，如果需要的话
+    return m_originalCpuInfo != nullptr;
 }
