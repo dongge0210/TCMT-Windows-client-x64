@@ -1,10 +1,10 @@
 #include "Logger.h"
+#include <codecvt>
 #include <sstream>
 #include <iomanip>
 #include <stdexcept>
 #include <algorithm>
 #include <filesystem>
-#include <codecvt>
 
 std::mutex Logger::mutex;
 std::ofstream Logger::stream;

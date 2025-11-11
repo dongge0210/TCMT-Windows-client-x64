@@ -42,7 +42,7 @@ public:
     bool IsMacSecureBootEnabled() const;
     std::string GetMacSystemIntegrityProtectionStatus() const;
     std::string GetMacSecureEnclaveVersion() const;
-#elif defined(PLATFORM_LINUX
+#elif defined(PLATFORM_LINUX)
     std::string GetLinuxDistribution() const;
     std::string GetLinuxKernelVersion() const;
     std::string GetLinuxDesktopEnvironment() const;
