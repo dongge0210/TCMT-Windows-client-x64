@@ -2,9 +2,9 @@ name: Build TCMT Windows Client
 
 on:
   push:
-    branches: [ main, dev, feature/iflow-cli-integration ]
+    branches: [ main, dev ]
   pull_request:
-    branches: [ main, dev, feature/iflow-cli-integration ]
+    branches: [ main, dev ]
   workflow_dispatch:
 
 permissions:
