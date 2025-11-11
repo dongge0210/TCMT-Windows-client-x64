@@ -8,14 +8,6 @@
 #ifdef PLATFORM_WINDOWS
     #include <windows.h>
     #include <pdh.h>
-    typedef unsigned long DWORD;
-    typedef unsigned long long ULONG;
-    typedef unsigned short WORD;
-    typedef unsigned int BOOL;
-    typedef void* HANDLE;
-    typedef void* PDH_HQUERY;
-    typedef void* PDH_HCOUNTER;
-    typedef unsigned long PDH_STATUS;
 #elif defined(PLATFORM_MACOS)
     #include <sys/sysctl.h>
     #include <mach/mach.h>
@@ -38,15 +30,15 @@ typedef unsigned short WORD;
 typedef unsigned int BOOL;
 
 #ifdef PLATFORM_WINDOWS
+    #define PDH_CSTATUS_VALID_DATA 0x00000000L
+    #define PDH_CSTATUS_NEW_DATA 0x00000001L
+    #ifndef ERROR_SUCCESS
+        #define ERROR_SUCCESS 0
+    #endif
+#else
     typedef void* HANDLE;
     typedef void* PDH_HQUERY;
     typedef void* PDH_HCOUNTER;
-    typedef unsigned long PDH_STATUS;
-    #define PDH_CSTATUS_VALID_DATA 0x00000000L
-    #define PDH_CSTATUS_NEW_DATA 0x00000001L
-    #define ERROR_SUCCESS 0
-#else
-    typedef void* HANDLE;
     typedef long PDH_STATUS;
     #define PDH_CSTATUS_VALID_DATA 0x00000000L
     #define PDH_CSTATUS_NEW_DATA 0x00000001L

@@ -104,7 +104,6 @@ jobs:
       - name: Build Solution
         id: build-solution
         shell: pwsh
-        continue-on-error: true
         run: |
           # First build .NET projects with dotnet build (which handles restore automatically)
           dotnet build ${{ env.SOLUTION_FILE_PATH }} --configuration ${{ env.BUILD_CONFIGURATION }} --verbosity minimal 2>&1 | Tee-Object -FilePath dotnet_build.log
@@ -124,7 +123,8 @@ jobs:
           $errorPatterns = @(
             'fatal error','fatal: ','error LNK\d{4}','LNK\d{4}',
             'unresolved external symbol','undefined reference',
-            'LINK : fatal error','error CS\d+:','NETSDK\d+:'
+            'LINK : fatal error','error CS\d+:','NETSDK\d+:',
+            'error C\d{4}:','##\[error\]'
           )
 
           Get-Content solution_build.log | ForEach-Object {
@@ -143,7 +143,8 @@ jobs:
             Write-Host "##[error] Build failed with $($fatalErrors.Count) fatal error lines."
             exit 1
           } elseif ($exitCode -ne 0) {
-            Write-Host "##[warning] Non-zero exit code ($exitCode) but no fatal patterns matched."
+            Write-Host "##[error] Build exited with non-zero code ($exitCode)."
+            exit 1
           } else {
             Write-Host "Build finished successfully."
           }
