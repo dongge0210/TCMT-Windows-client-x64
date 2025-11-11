@@ -159,7 +159,7 @@ std::string OSInfo::GetHostname() const {
     try {
         char hostname[256];
         if (gethostname(hostname, sizeof(hostname)) == 0) {
-            return std::string(hostname); // 修正：成功时返回主机名
+            return std::string(hostname); // Return hostname on success
         }
         return "Unknown"; // 失败时返回 Unknown
     }
