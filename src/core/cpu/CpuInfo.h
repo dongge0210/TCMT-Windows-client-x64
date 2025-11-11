@@ -3,6 +3,7 @@
 #include <string>
 #include <queue>
 #include <vector>
+#include <memory>
 
 #ifdef PLATFORM_WINDOWS
     #include <windows.h>
@@ -16,14 +17,37 @@
     typedef void* PDH_HCOUNTER;
     typedef unsigned long PDH_STATUS;
 #elif defined(PLATFORM_MACOS)
+    #include <sys/sysctl.h>
+    #include <mach/mach.h>
+    #include <mach/mach_types.h>
+    #include <mach/host_info.h>
+    #include <sys/utsname.h>
     typedef unsigned long DWORD;
     typedef unsigned long long ULONG;
-    typedef unsigned short WORD;
-    typedef unsigned int BOOL;
+#elif defined(PLATFORM_LINUX)
+    #include <sys/sysinfo.h>
+    #include <fstream>
+    #include <sstream>
+    #include <unistd.h>
+    typedef unsigned long DWORD;
+    typedef unsigned long long ULONG;
+#endif
+
+// 跨平台通用类型定义
+typedef unsigned short WORD;
+typedef unsigned int BOOL;
+
+#ifdef PLATFORM_WINDOWS
     typedef void* HANDLE;
     typedef void* PDH_HQUERY;
     typedef void* PDH_HCOUNTER;
     typedef unsigned long PDH_STATUS;
+    #define PDH_CSTATUS_VALID_DATA 0x00000000L
+    #define PDH_CSTATUS_NEW_DATA 0x00000001L
+    #define ERROR_SUCCESS 0
+#else
+    typedef void* HANDLE;
+    typedef long PDH_STATUS;
     #define PDH_CSTATUS_VALID_DATA 0x00000000L
     #define PDH_CSTATUS_NEW_DATA 0x00000001L
     #define ERROR_SUCCESS 0
@@ -61,6 +85,8 @@ private:
     void CleanupFrequencyCounter();
     void UpdateCoreSpeeds();             // 新增：更新核心频率
     std::string GetNameFromRegistry();
+    std::string GetNameFromSysctl();  // macOS
+    std::string GetNameFromProcCpuinfo(); // Linux
     double updateUsage();
     double updateInstantFrequencyMHz();
 
@@ -81,6 +107,7 @@ private:
     DWORD prevSampleTick = 0;            // 上一次之前的 Tick
     double lastSampleIntervalMs = 0.0;   // 最近一次采样间隔(毫秒)
 
+    #ifdef PLATFORM_WINDOWS
     // PDH 计数器相关（使用率）
     PDH_HQUERY queryHandle{};
     PDH_HCOUNTER counterHandle{};
@@ -92,6 +119,17 @@ private:
     bool freqCounterInitialized = false;
     DWORD lastFreqTick = 0;
     double cachedInstantMHz = 0.0;
+#else
+    // macOS/Linux 特有成员
+    void* queryHandle{};
+    void* counterHandle{};
+    bool counterInitialized = false;
+    void* freqQueryHandle{};
+    void* freqCounterHandle{};
+    bool freqCounterInitialized = false;
+    DWORD lastFreqTick = 0;
+    double cachedInstantMHz = 0.0;
+#endif
 };
 
 // 新增：跨平台CPU适配器接口

@@ -1,14 +1,32 @@
 ﻿#include "CpuInfo.h"
 #include "Logger.h"
 #include <intrin.h>
-#include <windows.h>
-#include <vector>
-#include <pdh.h>
-#include <algorithm>
-#include <powrprof.h> // CallNtPowerInformation
-#include <memory>
-#pragma comment(lib, "pdh.lib")
-#pragma comment(lib, "PowrProf.lib")
+
+#ifdef PLATFORM_WINDOWS
+    #include <windows.h>
+    #include <vector>
+    #include <pdh.h>
+    #include <algorithm>
+    #include <powrprof.h> // CallNtPowerInformation
+    #include <memory>
+    #pragma comment(lib, "pdh.lib")
+    #pragma comment(lib, "PowrProf.lib")
+#elif defined(PLATFORM_MACOS)
+    #include <sys/sysctl.h>
+    #include <mach/mach.h>
+    #include <mach/host_statistics.h>
+    #include <mach/mach_host.h>
+    #include <sys/utsname.h>
+    #include <thread>
+    #include <chrono>
+#elif defined(PLATFORM_LINUX)
+    #include <sys/sysinfo.h>
+    #include <fstream>
+    #include <sstream>
+    #include <unistd.h>
+    #include <thread>
+    #include <chrono>
+#endif
 
 // Define PDH constants if not available
 #ifndef PDH_CSTATUS_VALID_DATA
@@ -104,11 +122,25 @@ CpuInfo::CpuInfo() :
     lastSampleIntervalMs(0.0) {
 
     try {
+#ifdef PLATFORM_WINDOWS
         DetectCores();
         cpuName = GetNameFromRegistry();
         InitializeCounter();
         UpdateCoreSpeeds();  // 初始化频率信息
         InitializeFrequencyCounter();     // 初始化即时频率计数器
+#elif defined(PLATFORM_MACOS)
+        DetectCores();
+        cpuName = GetNameFromSysctl();
+        InitializeCounter();
+        UpdateCoreSpeeds();  // 初始化频率信息
+        InitializeFrequencyCounter();     // 初始化即时频率计数器
+#elif defined(PLATFORM_LINUX)
+        DetectCores();
+        cpuName = GetNameFromProcCpuinfo();
+        InitializeCounter();
+        UpdateCoreSpeeds();  // 初始化频率信息
+        InitializeFrequencyCounter();     // 初始化即时频率计数器
+#endif
     }
     catch (const std::exception& e) {
         Logger::Error("CPU信息初始化失败: " + std::string(e.what()));
@@ -315,6 +347,41 @@ std::string CpuInfo::GetNameFromRegistry() {
             return std::string(buffer, size - 1);
         }
         RegCloseKey(hKey);
+    }
+    return "Unknown CPU";
+}
+
+std::string CpuInfo::GetNameFromSysctl() {
+    size_t len = 0;
+    sysctlbyname("machdep.cpu.brand_string", nullptr, &len, nullptr, 0);
+    if (len > 0) {
+        std::string cpuModel;
+        cpuModel.resize(len);
+        sysctlbyname("machdep.cpu.brand_string", &cpuModel[0], &len, nullptr, 0);
+        cpuModel.resize(len - 1); // 移除null终止符
+        return cpuModel;
+    }
+    return "Unknown CPU";
+}
+
+std::string CpuInfo::GetNameFromProcCpuinfo() {
+    std::ifstream file("/proc/cpuinfo");
+    if (!file.is_open()) {
+        return "Unknown CPU";
+    }
+    
+    std::string line;
+    while (std::getline(file, line)) {
+        if (line.find("model name") != std::string::npos) {
+            size_t pos = line.find(':');
+            if (pos != std::string::npos) {
+                std::string cpuModel = line.substr(pos + 1);
+                // 移除前后空格
+                cpuModel.erase(0, cpuModel.find_first_not_of(' '));
+                cpuModel.erase(cpuModel.find_last_not_of(' ') + 1);
+                return cpuModel;
+            }
+        }
     }
     return "Unknown CPU";
 }

@@ -11,6 +11,9 @@ class MacMemoryAdapter;
 class MacGpuAdapter;
 class MacSystemInfo;
 class MacBatteryInfo;
+class MacCpuInfo;
+class MacMemoryInfo;
+class MacHardwareInfo;
 #endif
 
 class InfoFactory {

@@ -1,10 +1,27 @@
 ﻿// DataStruct.h
 #pragma once
-#include <windows.h>
+#include "../common/PlatformDefs.h"
 #include <string>
 #include <vector>
 #include <stdint.h>
 #include "usb/USBInfo.h"
+
+#ifdef PLATFORM_WINDOWS
+    #include <windows.h>
+#elif defined(PLATFORM_MACOS) || defined(PLATFORM_LINUX)
+    #include <sys/time.h>
+    #include <time.h>
+#endif
+
+// 跨平台时间结构
+struct CrossPlatformTime {
+#ifdef PLATFORM_WINDOWS
+    SYSTEMTIME windowsTime;
+#else
+    time_t unixTime;
+    uint32_t milliseconds; // 毫秒部分
+#endif
+};
 
 #pragma pack(push, 1) // 确保内存对齐
 
@@ -75,7 +92,7 @@ struct PhysicalDiskSmartData {
     char logicalDriveLetters[8];   // 关联的驱动器盘符
     int logicalDriveCount;         // 关联驱动器数量
     
-    SYSTEMTIME lastScanTime;       // 最后扫描时间
+    CrossPlatformTime lastScanTime; // 最后扫描时间
 };
 
 // GPU信息
@@ -98,12 +115,23 @@ struct NetworkAdapterData {
 
 // 磁盘信息
 struct DiskData {
-    char letter;          // 盘符（如'C'）
+    char letter;          // 盘符（如'C'），macOS/Linux上为0
     std::string label;    // 卷标
     std::string fileSystem;// 文件系统
     uint64_t totalSize = 0; // 总容量（字节）
     uint64_t usedSpace = 0; // 已用空间（字节）
     uint64_t freeSpace = 0; // 可用空间（字节）
+    
+    // 跨平台特有字段
+    std::string mountPoint;   // macOS/Linux挂载点
+    std::string devicePath;   // 设备路径（如 /dev/disk1s1）
+    bool isRemovable = false; // 是否为可移动设备
+    bool isSSD = false;       // 是否为SSD
+    std::string interfaceType; // SATA, NVMe, USB等
+    std::string diskUUID;     // 磁盘UUID（macOS）
+    std::string volumeUUID;   // 卷UUID（macOS）
+    bool isAPFS = false;      // 是否为APFS文件系统（macOS）
+    bool isEncrypted = false; // 是否加密（macOS）
 };
 
 // 温度传感器信息
@@ -190,7 +218,16 @@ struct SystemInfo {
     std::string tmpDetectionMethod; // 检测方法
     bool tmpWmiDetectionWorked = false; // WMI检测是否成功
     bool tmpTbsDetectionWorked = false; // TBS检测是否成功
-    SYSTEMTIME lastUpdate;
+    CrossPlatformTime lastUpdate;
+    
+    // 跨平台内存分区信息 (macOS特有)
+    uint64_t activeMemory = 0;      // 活跃内存 (字节)
+    uint64_t inactiveMemory = 0;    // 非活跃内存 (字节)
+    uint64_t wiredMemory = 0;       // 有线内存 (字节, macOS)
+    uint64_t compressedMemory = 0;  // 压缩内存 (字节, macOS)
+    double memoryPressure = 0.0;    // 内存压力 (0.0-1.0, macOS)
+    uint64_t swapTotal = 0;         // 总交换空间 (字节)
+    uint64_t swapUsed = 0;          // 已用交换空间 (字节)
 };
 
 // 共享内存主结构
@@ -228,14 +265,17 @@ struct SharedMemoryBlock {
 
     // USB设备信息
     struct USBDeviceData {
-        char drivePath[4];        // 驱动器路径 (如 "E:\\")
-        char volumeLabel[32];     // 卷标名称
+        char drivePath[256];      // 驱动器路径 (Windows: "E:\\", macOS/Linux: "/Volumes/USB")
+        char volumeLabel[64];     // 卷标名称
+        char devicePath[64];      // 设备路径 (macOS/Linux: "/dev/disk2s1")
+        char mountPoint[64];      // 挂载点 (macOS/Linux特有)
         uint64_t totalSize;       // 总容量（字节）
         uint64_t freeSpace;       // 可用空间（字节）
         uint8_t isUpdateReady;    // 是否包含update文件夹
         uint8_t state;            // 状态 (0=Removed, 1=Inserted, 2=UpdateReady)
+        uint8_t isRemovable;      // 是否为可移动设备
         uint8_t reserved;         // 对齐
-        SYSTEMTIME lastUpdate;    // 最后更新时间
+        CrossPlatformTime lastUpdate; // 最后更新时间
     };
     
     USBDeviceData usbDevices[8];  // 最多8个USB设备
@@ -246,4 +286,4 @@ struct SharedMemoryBlock {
 
 #pragma pack(pop)
 
-static_assert(sizeof(SharedMemoryBlock) ==3212, "SharedMemoryBlock size mismatch – update C# offsets if this fails");
+static_assert(sizeof(SharedMemoryBlock) == 3212 + 381, "SharedMemoryBlock size mismatch – update C# offsets if this fails");

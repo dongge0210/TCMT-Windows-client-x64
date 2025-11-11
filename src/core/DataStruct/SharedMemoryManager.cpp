@@ -60,22 +60,23 @@ inline std::string FallbackFormatWindowsErrorMessage(DWORD errorCode) {
 
 
 // Initialize static members
+#ifdef PLATFORM_WINDOWS
 HANDLE SharedMemoryManager::hMapFile = NULL;
+HANDLE SharedMemoryManager::hMutex = NULL;
+#elif defined(PLATFORM_MACOS) || defined(PLATFORM_LINUX)
+int SharedMemoryManager::shmFd = -1;
+sem_t* SharedMemoryManager::semaphore = nullptr;
+std::string SharedMemoryManager::shmName = "/SystemMonitorSharedMemory";
+std::string SharedMemoryManager::semName = "/SystemMonitorSemaphore";
+#endif
 SharedMemoryBlock* SharedMemoryManager::pBuffer = nullptr;
 std::string SharedMemoryManager::lastError = "";
-WmiManager* SharedMemoryManager::wmiManager = nullptr;
+void* SharedMemoryManager::serviceManager = nullptr;
 USBInfoManager* SharedMemoryManager::usbManager = nullptr;
-// 跨进程互斥体用于同步共享内存
-static HANDLE g_hMutex = NULL;
 
 bool SharedMemoryManager::InitSharedMemory() {
     // Clear any previous error
     lastError.clear();
-    
-    // 初始化WMI管理器
-    if (!wmiManager) {
-        wmiManager = new WmiManager();
-    }
     
     // 初始化USB监控管理器
     if (!usbManager) {
@@ -87,6 +88,26 @@ bool SharedMemoryManager::InitSharedMemory() {
             Logger::Warn("USB监控管理器初始化失败");
         }
     }
+
+#ifdef PLATFORM_WINDOWS
+    // Windows特定初始化
+    return InitWindowsSharedMemory();
+#elif defined(PLATFORM_MACOS) || defined(PLATFORM_LINUX)
+    // POSIX共享内存初始化
+    return InitPosixSharedMemory();
+#else
+    lastError = "不支持的平台";
+    Logger::Error(lastError);
+    return false;
+#endif
+}
+
+#ifdef PLATFORM_WINDOWS
+bool SharedMemoryManager::InitWindowsSharedMemory() {
+    // 初始化WMI管理器
+    if (!serviceManager) {
+        serviceManager = new WmiManager();
+    }
     
     try {
         // Try to enable privileges needed for creating global objects
@@ -96,13 +117,12 @@ bool SharedMemoryManager::InitSharedMemory() {
         }
     } catch(...) {
         Logger::Warn("启用 SeCreateGlobalPrivilege 时发生异常 - 尝试继续");
-        // Continue execution as this is not critical
     }
 
     // 创建全局互斥体用于多进程同步
-    if (!g_hMutex) {
-        g_hMutex = CreateMutexW(NULL, FALSE, L"Global\\SystemMonitorSharedMemoryMutex");
-        if (!g_hMutex) {
+    if (!hMutex) {
+        hMutex = CreateMutexW(NULL, FALSE, L"Global\\SystemMonitorSharedMemoryMutex");
+        if (!hMutex) {
             Logger::Error("未能创建全局互斥体用于共享内存同步");
             return false;
         }
@@ -115,16 +135,7 @@ bool SharedMemoryManager::InitSharedMemory() {
     // Initialize the security descriptor
     if (!InitializeSecurityDescriptor(&securityDescriptor, SECURITY_DESCRIPTOR_REVISION)) {
         DWORD errorCode = ::GetLastError();
-        std::stringstream ss;
-        ss << "未能初始化安全描述符。错误码: " << errorCode
-           << " ("
-           #ifdef WINUTILS_IMPLEMENTED
-                << WinUtils::FormatWindowsErrorMessage(errorCode)
-           #else
-                << FallbackFormatWindowsErrorMessage(errorCode)
-           #endif
-           << ")";
-        lastError = ss.str();
+        lastError = "未能初始化安全描述符。错误码: " + std::to_string(errorCode);
         Logger::Error(lastError);
         return false;
     }
@@ -132,16 +143,7 @@ bool SharedMemoryManager::InitSharedMemory() {
     // Set the DACL to NULL for unrestricted access
     if (!SetSecurityDescriptorDacl(&securityDescriptor, TRUE, NULL, FALSE)) {
         DWORD errorCode = ::GetLastError();
-        std::stringstream ss;
-        ss << "未能设置安全描述符 DACL。错误码: " << errorCode
-           << " ("
-           #ifdef WINUTILS_IMPLEMENTED
-                << WinUtils::FormatWindowsErrorMessage(errorCode)
-           #else
-                << FallbackFormatWindowsErrorMessage(errorCode)
-           #endif
-           << ")";
-        lastError = ss.str();
+        lastError = "未能设置安全描述符 DACL。错误码: " + std::to_string(errorCode);
         Logger::Error(lastError);
         return false;
     }
@@ -187,20 +189,10 @@ bool SharedMemoryManager::InitSharedMemory() {
         // If still NULL after fallbacks, report error
         if (hMapFile == NULL) {
             errorCode = ::GetLastError();
-            std::stringstream ss;
-            ss << "未能创建共享内存。错误码: " << errorCode
-               << " ("
-               #ifdef WINUTILS_IMPLEMENTED
-                    << WinUtils::FormatWindowsErrorMessage(errorCode)
-               #else
-                    << FallbackFormatWindowsErrorMessage(errorCode)
-               #endif
-               << ")";
-            // Possibly shared memory already exists
+            lastError = "未能创建共享内存。错误码: " + std::to_string(errorCode);
             if (errorCode == ERROR_ALREADY_EXISTS) {
-                ss << " (共享内存已存在)";
+                lastError += " (共享内存已存在)";
             }
-            lastError = ss.str();
             Logger::Error(lastError);
             return false;
         }
@@ -219,39 +211,77 @@ bool SharedMemoryManager::InitSharedMemory() {
         MapViewOfFile(hMapFile, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(SharedMemoryBlock))
     );
     if (pBuffer == nullptr) {
-        DWORD errorCode = ::GetLastError();
-        std::stringstream ss;
-        ss << "未能映射共享内存视图。错误码: " << errorCode
-           << " ("
-           #ifdef WINUTILS_IMPLEMENTED
-                << WinUtils::FormatWindowsErrorMessage(errorCode)
-           #else
-                << FallbackFormatWindowsErrorMessage(errorCode)
-           #endif
-           << ")";
-        lastError = ss.str();
+        errorCode = ::GetLastError();
+        lastError = "未能映射共享内存视图。错误码: " + std::to_string(errorCode);
         Logger::Error(lastError);
         CloseHandle(hMapFile);
         hMapFile = NULL;
         return false;
     }
 
-
-    // 不再在共享内存结构体中初始化CriticalSection
-
     // Zero out the shared memory to avoid dirty data (only on first creation)
     if (errorCode != ERROR_ALREADY_EXISTS) {
         memset(pBuffer, 0, sizeof(SharedMemoryBlock));
     }
 
-    Logger::Info("共享内存成功初始化.");
+    Logger::Info("Windows共享内存成功初始化.");
     StartDiagnosticsPipeThread();
     DiagnosticsPipeAppendLog("SharedMemory initialized");
     return true;
 }
+#elif defined(PLATFORM_MACOS) || defined(PLATFORM_LINUX)
+bool SharedMemoryManager::InitPosixSharedMemory() {
+    // 创建或打开POSIX共享内存
+    shmFd = shm_open(shmName.c_str(), O_CREAT | O_RDWR, 0666);
+    if (shmFd == -1) {
+        lastError = "无法打开共享内存: " + std::string(strerror(errno));
+        Logger::Error(lastError);
+        return false;
+    }
+
+    // 设置共享内存大小
+    if (ftruncate(shmFd, sizeof(SharedMemoryBlock)) == -1) {
+        lastError = "无法设置共享内存大小: " + std::string(strerror(errno));
+        Logger::Error(lastError);
+        close(shmFd);
+        shmFd = -1;
+        return false;
+    }
+
+    // 映射到进程地址空间
+    pBuffer = static_cast<SharedMemoryBlock*>(
+        mmap(nullptr, sizeof(SharedMemoryBlock), PROT_READ | PROT_WRITE, MAP_SHARED, shmFd, 0)
+    );
+    if (pBuffer == MAP_FAILED) {
+        lastError = "无法映射共享内存: " + std::string(strerror(errno));
+        Logger::Error(lastError);
+        close(shmFd);
+        shmFd = -1;
+        pBuffer = nullptr;
+        return false;
+    }
+
+    // 创建或打开信号量用于同步
+    semaphore = sem_open(semName.c_str(), O_CREAT, 0666, 1);
+    if (semaphore == SEM_FAILED) {
+        lastError = "无法创建信号量: " + std::string(strerror(errno));
+        Logger::Error(lastError);
+        munmap(pBuffer, sizeof(SharedMemoryBlock));
+        close(shmFd);
+        shmFd = -1;
+        pBuffer = nullptr;
+        return false;
+    }
+
+    Logger::Info("POSIX共享内存成功初始化.");
+    return true;
+}
+#endif
 
 void SharedMemoryManager::CleanupSharedMemory() {
     StopDiagnosticsPipeThread();
+    
+#ifdef PLATFORM_WINDOWS
     if (pBuffer) {
         UnmapViewOfFile(pBuffer);
         pBuffer = nullptr;
@@ -260,10 +290,34 @@ void SharedMemoryManager::CleanupSharedMemory() {
         CloseHandle(hMapFile);
         hMapFile = NULL;
     }
-    if (wmiManager) {
-        delete wmiManager;
-        wmiManager = nullptr;
+    if (hMutex) {
+        CloseHandle(hMutex);
+        hMutex = NULL;
     }
+    if (serviceManager) {
+        delete static_cast<WmiManager*>(serviceManager);
+        serviceManager = nullptr;
+    }
+#elif defined(PLATFORM_MACOS) || defined(PLATFORM_LINUX)
+    if (pBuffer) {
+        munmap(pBuffer, sizeof(SharedMemoryBlock));
+        pBuffer = nullptr;
+    }
+    if (shmFd != -1) {
+        close(shmFd);
+        shmFd = -1;
+    }
+    if (semaphore) {
+        sem_close(semaphore);
+        semaphore = nullptr;
+        sem_unlink(semName.c_str());
+    }
+    shm_unlink(shmName.c_str());
+    if (serviceManager) {
+        delete serviceManager;
+        serviceManager = nullptr;
+    }
+#endif
     
     if (usbManager) {
         usbManager->Cleanup();
@@ -283,9 +337,24 @@ void SharedMemoryManager::WriteToSharedMemory(const SystemInfo& systemInfo) {
         return;
     }
 
-    DWORD waitResult = WaitForSingleObject(g_hMutex, 5000); // 最多等5秒
+    // 跨平台同步
+    bool lockAcquired = false;
+#ifdef PLATFORM_WINDOWS
+    DWORD waitResult = WaitForSingleObject(hMutex, 5000); // 最多等5秒
     if (waitResult != WAIT_OBJECT_0) {
         Logger::Critical("未能获取共享内存互斥体");
+        return;
+    }
+    lockAcquired = true;
+#elif defined(PLATFORM_MACOS) || defined(PLATFORM_LINUX)
+    if (sem_wait(semaphore) != 0) {
+        Logger::Critical("未能获取共享内存信号量");
+        return;
+    }
+    lockAcquired = true;
+#endif
+
+    if (!lockAcquired) {
         return;
     }
 
@@ -349,9 +418,10 @@ void SharedMemoryManager::WriteToSharedMemory(const SystemInfo& systemInfo) {
         pBuffer->smartDiskCount = 0;
         memset(pBuffer->smartDisks, 0, sizeof(pBuffer->smartDisks));
 
-        // 主板/BIOS信息采集
+        // 主板/BIOS信息采集（跨平台）
         try {
-            MotherboardInfo motherboardInfo = MotherboardInfoCollector::CollectMotherboardInfo(GetWmiService());
+#ifdef PLATFORM_WINDOWS
+            MotherboardInfo motherboardInfo = MotherboardInfoCollector::CollectMotherboardInfo(static_cast<IWbemServices*>(GetSystemService()));
             if (motherboardInfo.isValid) {
                 strncpy_s(pBuffer->baseboardManufacturer, sizeof(pBuffer->baseboardManufacturer), 
                            motherboardInfo.manufacturer.c_str(), _TRUNCATE);
@@ -368,25 +438,16 @@ void SharedMemoryManager::WriteToSharedMemory(const SystemInfo& systemInfo) {
                 strncpy_s(pBuffer->biosDate, sizeof(pBuffer->biosDate), 
                            motherboardInfo.biosReleaseDate.c_str(), _TRUNCATE);
             } else {
-                // 采集失败时使用默认值
-                strcpy_s(pBuffer->baseboardManufacturer, sizeof(pBuffer->baseboardManufacturer), "未知");
-                strcpy_s(pBuffer->baseboardProduct, sizeof(pBuffer->baseboardProduct), "未知");
-                strcpy_s(pBuffer->baseboardVersion, sizeof(pBuffer->baseboardVersion), "未知");
-                strcpy_s(pBuffer->baseboardSerial, sizeof(pBuffer->baseboardSerial), "未知");
-                strcpy_s(pBuffer->biosVendor, sizeof(pBuffer->biosVendor), "未知");
-                strcpy_s(pBuffer->biosVersion, sizeof(pBuffer->biosVersion), "未知");
-                strcpy_s(pBuffer->biosDate, sizeof(pBuffer->biosDate), "未知");
+                SetDefaultMotherboardInfo();
             }
+#elif defined(PLATFORM_MACOS)
+            CollectMacMotherboardInfo();
+#elif defined(PLATFORM_LINUX)
+            CollectLinuxMotherboardInfo();
+#endif
         } catch (const std::exception& e) {
             Logger::Error("采集主板/BIOS信息异常: " + std::string(e.what()));
-            // 异常时使用默认值
-            strcpy_s(pBuffer->baseboardManufacturer, sizeof(pBuffer->baseboardManufacturer), "异常");
-            strcpy_s(pBuffer->baseboardProduct, sizeof(pBuffer->baseboardProduct), "异常");
-            strcpy_s(pBuffer->baseboardVersion, sizeof(pBuffer->baseboardVersion), "异常");
-            strcpy_s(pBuffer->baseboardSerial, sizeof(pBuffer->baseboardSerial), "异常");
-            strcpy_s(pBuffer->biosVendor, sizeof(pBuffer->biosVendor), "异常");
-            strcpy_s(pBuffer->biosVersion, sizeof(pBuffer->biosVersion), "异常");
-            strcpy_s(pBuffer->biosDate, sizeof(pBuffer->biosDate), "异常");
+            SetDefaultMotherboardInfo();
         }
 
         // TPM信息
@@ -526,12 +587,85 @@ void SharedMemoryManager::WriteToSharedMemory(const SystemInfo& systemInfo) {
         }
     }
     
-    ReleaseMutex(g_hMutex);
+    // 释放跨平台同步锁
+#ifdef PLATFORM_WINDOWS
+    ReleaseMutex(hMutex);
+#elif defined(PLATFORM_MACOS) || defined(PLATFORM_LINUX)
+    sem_post(semaphore);
+#endif
 }
 
-IWbemServices* SharedMemoryManager::GetWmiService() {
-    if (wmiManager && wmiManager->IsInitialized()) {
-        return wmiManager->GetWmiService();
+void* SharedMemoryManager::GetSystemService() {
+#ifdef PLATFORM_WINDOWS
+    if (serviceManager && static_cast<WmiManager*>(serviceManager)->IsInitialized()) {
+        return static_cast<WmiManager*>(serviceManager)->GetWmiService();
     }
+#elif defined(PLATFORM_MACOS) || defined(PLATFORM_LINUX)
+    // macOS/Linux系统服务访问
+    return serviceManager;
+#endif
     return nullptr;
+}
+
+#ifdef PLATFORM_MACOS
+void SharedMemoryManager::CollectMacMotherboardInfo() {
+    // 使用system_profiler获取主板信息
+    FILE* pipe = popen("system_profiler SPHardwareDataType", "r");
+    if (!pipe) {
+        SetDefaultMotherboardInfo();
+        return;
+    }
+    
+    char buffer[512];
+    std::string result;
+    while (fgets(buffer, sizeof(buffer), pipe)) {
+        result += buffer;
+    }
+    pclose(pipe);
+    
+    // 解析主板信息
+    std::istringstream iss(result);
+    std::string line;
+    bool foundManufacturer = false;
+    
+    while (std::getline(iss, line)) {
+        if (line.find("Manufacturer:") != std::string::npos) {
+            std::string manufacturer = line.substr(line.find(":") + 2);
+            manufacturer.erase(0, manufacturer.find_first_not_of(" \t"));
+            manufacturer.erase(manufacturer.find_last_not_of(" \t\r\n") + 1);
+            strncpy_s(pBuffer->baseboardManufacturer, sizeof(pBuffer->baseboardManufacturer), 
+                       manufacturer.c_str(), _TRUNCATE);
+            foundManufacturer = true;
+        }
+        // 可以添加更多字段解析
+    }
+    
+    if (!foundManufacturer) {
+        SetDefaultMotherboardInfo();
+    }
+}
+#elif defined(PLATFORM_LINUX)
+void SharedMemoryManager::CollectLinuxMotherboardInfo() {
+    // 从/proc/cpuinfo和DMI获取主板信息
+    std::ifstream dmi("/sys/class/dmi/id/board_vendor");
+    if (dmi.is_open()) {
+        std::string vendor;
+        std::getline(dmi, vendor);
+        strncpy_s(pBuffer->baseboardManufacturer, sizeof(pBuffer->baseboardManufacturer), 
+                   vendor.c_str(), _TRUNCATE);
+        dmi.close();
+    } else {
+        SetDefaultMotherboardInfo();
+    }
+}
+#endif
+
+void SharedMemoryManager::SetDefaultMotherboardInfo() {
+    strcpy_s(pBuffer->baseboardManufacturer, sizeof(pBuffer->baseboardManufacturer), "未知");
+    strcpy_s(pBuffer->baseboardProduct, sizeof(pBuffer->baseboardProduct), "未知");
+    strcpy_s(pBuffer->baseboardVersion, sizeof(pBuffer->baseboardVersion), "未知");
+    strcpy_s(pBuffer->baseboardSerial, sizeof(pBuffer->baseboardSerial), "未知");
+    strcpy_s(pBuffer->biosVendor, sizeof(pBuffer->biosVendor), "未知");
+    strcpy_s(pBuffer->biosVersion, sizeof(pBuffer->biosVersion), "未知");
+    strcpy_s(pBuffer->biosDate, sizeof(pBuffer->biosDate), "未知");
 }

@@ -1,103 +1,225 @@
 ﻿// DiskInfo.cpp
 #include "DiskInfo.h"
-#include "../Utils/WinUtils.h"
 #include "../Utils/Logger.h"
-#include "../Utils/WmiManager.h"
-#include <wbemidl.h>
-#include <comdef.h>
-#include <shellapi.h> // SHGetFileInfoW fallback display name
-#include <algorithm>
-#pragma comment(lib, "wbemuuid.lib")
-#pragma comment(lib, "Shell32.lib")
 
-DiskInfo::DiskInfo() { 
+#ifdef PLATFORM_WINDOWS
+    #include "../Utils/WinUtils.h"
+    #include "../Utils/WmiManager.h"
+    #include <wbemidl.h>
+    #include <comdef.h>
+    #include <shellapi.h>
+    #include <algorithm>
+    #pragma comment(lib, "wbemuuid.lib")
+    #pragma comment(lib, "Shell32.lib")
+#elif defined(PLATFORM_MACOS)
+    #include <sys/sysctl.h>
+    #include <sys/mount.h>
+    #include <diskarbitration/diskarbitration.h>
+    #include <IOKit/IOKitLib.h>
+    #include <IOKit/storage/IOBlockStorageDevice.h>
+    #include <CoreFoundation/CoreFoundation.h>
+    #include <unistd.h>
+    #include <fstream>
+    #include <sstream>
+    #include <algorithm>
+#elif defined(PLATFORM_LINUX)
+    #include <sys/statvfs.h>
+    #include <fstream>
+    #include <sstream>
+    #include <algorithm>
+    #include <glob.h>
+#endif
+
+DiskInfo::DiskInfo() : initialized(false) { 
     Logger::Debug("DiskInfo: 初始化磁盘信息");
     QueryDrives(); 
+}
+
+DiskInfo::~DiskInfo() {
+    Logger::Debug("DiskInfo: 清理磁盘信息");
 }
 
 void DiskInfo::QueryDrives() {
     Logger::Debug("DiskInfo: 开始查询驱动器信息");
     drives.clear();
-    DWORD driveMask = GetLogicalDrives();
-    if (driveMask == 0) { Logger::Error("GetLogicalDrives 失败"); return; }
-    Logger::Debug("DiskInfo: 检测到驱动器掩码: " + std::to_string(driveMask));
     
-    int validDriveCount = 0;
-    for (int i = 0; i < 26; ++i) {
-        if ((driveMask & (1 << i)) == 0) continue;
-        char driveLetter = static_cast<char>('A' + i);
-        if (driveLetter == 'A' || driveLetter == 'B') continue; // 跳过软驱
-        std::wstring rootPath; rootPath.reserve(4); rootPath.push_back(static_cast<wchar_t>(L'A'+i)); rootPath.append(L":\\");
-        Logger::Debug(L"DiskInfo: 检查驱动器 " + rootPath);
+    try {
+#ifdef PLATFORM_WINDOWS
+        QueryWindowsDrives();
+#elif defined(PLATFORM_MACOS)
+        QueryMacDrives();
+#elif defined(PLATFORM_LINUX)
+        QueryLinuxDrives();
+#endif
+        initialized = true;
+    }
+    catch (const std::exception& e) {
+        Logger::Error("DiskInfo查询失败: " + std::string(e.what()));
+        initialized = false;
+    }
+}
+
+// macOS磁盘查询实现
+#ifdef PLATFORM_MACOS
+void DiskInfo::QueryMacDrives() {
+    Logger::Debug("DiskInfo: 查询macOS磁盘信息");
+    
+    struct statfs *mounts;
+    int count = getmntinfo(&mounts, MNT_WAIT);
+    if (count == 0) {
+        Logger::Error("获取挂载点信息失败");
+        return;
+    }
+    
+    for (int i = 0; i < count; i++) {
+        DriveInfo info;
+        info.mountPoint = mounts[i].f_mntonname;
+        info.devicePath = mounts[i].f_mntfromname;
+        info.letter = 0; // macOS不使用驱动器字母
         
-        UINT driveType = GetDriveTypeW(rootPath.c_str());
-        if (!(driveType == DRIVE_FIXED || driveType == DRIVE_REMOVABLE)) {
-            Logger::Debug(L"DiskInfo: 驱动器 " + rootPath + L" 类型不匹配，跳过");
+        // 过滤掉不需要的挂载点
+        if (info.mountPoint.empty() || 
+            info.mountPoint == "/dev" || 
+            info.mountPoint.find("/net/") == 0 ||
+            info.mountPoint.find("/home/") == 0) {
             continue;
         }
-        Logger::Debug(L"DiskInfo: 驱动器 " + rootPath + L" 类型匹配");
         
-        ULARGE_INTEGER freeBytesAvailable{}; ULARGE_INTEGER totalBytes{}; ULARGE_INTEGER totalFreeBytes{};
-        if (!GetDiskFreeSpaceExW(rootPath.c_str(), &freeBytesAvailable, &totalBytes, &totalFreeBytes)) { Logger::Warn(L"GetDiskFreeSpaceEx 失败: " + rootPath); continue; }
-        if (totalBytes.QuadPart == 0) continue;
-        DriveInfo info{}; info.letter = driveLetter; info.totalSize = totalBytes.QuadPart; info.freeSpace = totalFreeBytes.QuadPart; info.usedSpace = (totalBytes.QuadPart >= totalFreeBytes.QuadPart)? (totalBytes.QuadPart - totalFreeBytes.QuadPart):0ULL;
-        Logger::Debug(L"DiskInfo: 驱动器 " + rootPath + L" 空间信息 - 总计: " + std::to_wstring(info.totalSize) + L", 可用: " + std::to_wstring(info.freeSpace));
+        // 获取磁盘空间信息
+        struct statvfs fs;
+        if (statvfs(info.mountPoint.c_str(), &fs) == 0) {
+            info.totalSize = fs.f_blocks * fs.f_frsize;
+            info.freeSpace = fs.f_bavail * fs.f_frsize;
+            info.usedSpace = info.totalSize - info.freeSpace;
+        }
         
-        // 获取卷标 / 文件系统
-        wchar_t volumeName[MAX_PATH + 1] = {0};
-        wchar_t fileSystemName[MAX_PATH + 1] = {0};
-        DWORD fsFlags = 0;
-        BOOL gotInfo = GetVolumeInformationW(rootPath.c_str(), volumeName, MAX_PATH, nullptr, nullptr, &fsFlags, fileSystemName, MAX_PATH);
-        if (!gotInfo) {
-            info.label = L""; // 空表示未命名或获取失败
-            info.fileSystem = L"未知";
-            Logger::Warn(L"GetVolumeInformation 失败: " + rootPath);
-        } else {
-            info.label = volumeName;
-            info.fileSystem = fileSystemName;
-            Logger::Debug(L"DiskInfo: 驱动器 " + rootPath + L" 卷标: " + info.label + L", 文件系统: " + info.fileSystem);
-        }
-        // 若卷标仍为空，尝试通过卷 GUID 路径再次获取（更稳健）
-        if (info.label.empty()) {
-            wchar_t volumeGuidPath[MAX_PATH + 1] = {0};
-            if (GetVolumeNameForVolumeMountPointW(rootPath.c_str(), volumeGuidPath, MAX_PATH)) {
-                wchar_t volumeName2[MAX_PATH + 1] = {0};
-                wchar_t fileSystemName2[MAX_PATH + 1] = {0};
-                DWORD fsFlags2 = 0;
-                if (GetVolumeInformationW(volumeGuidPath, volumeName2, MAX_PATH, nullptr, nullptr, &fsFlags2, fileSystemName2, MAX_PATH)) {
-                    if (volumeName2[0] != L'\0') info.label = volumeName2;
-                    if (fileSystemName2[0] != L'\0') info.fileSystem = fileSystemName2;
-                    Logger::Debug(L"DiskInfo: 通过GUID路径获取驱动器 " + rootPath + L" 信息 - 卷标: " + info.label + L", 文件系统: " + info.fileSystem);
-                }
-            }
-        }
-        // 若仍为空，使用 Shell 友好显示名作为兜底（本地磁盘等）
-        if (info.label.empty()) {
-            SHFILEINFOW sfi{};
-            if (SHGetFileInfoW(rootPath.c_str(), FILE_ATTRIBUTE_DIRECTORY, &sfi, sizeof(sfi), SHGFI_DISPLAYNAME | SHGFI_USEFILEATTRIBUTES)) {
-                if (sfi.szDisplayName[0] != L'\0') {
-                    info.label = sfi.szDisplayName; // 例如：本地磁盘 (C:)
-                    Logger::Debug(L"DiskInfo: 通过Shell获取驱动器 " + rootPath + L" 显示名称: " + info.label);
-                }
-            }
-        }
-        // 最后兜底
-        if (info.label.empty()) { 
-            info.label = L"未命名";
-            Logger::Debug(L"DiskInfo: 驱动器 " + rootPath + L" 使用默认卷标: " + info.label);
-        }
-        if (info.fileSystem.empty()) { 
-            info.fileSystem = L"未知";
-            Logger::Debug(L"DiskInfo: 驱动器 " + rootPath + L" 使用默认文件系统: " + info.fileSystem);
-        }
-
-        drives.push_back(std::move(info));
-        validDriveCount++;
-        Logger::Debug(L"DiskInfo: 成功添加驱动器 " + rootPath);
+        // 获取文件系统类型
+        info.fileSystem = GetMacFileSystem(info.mountPoint);
+        
+        // 获取卷标
+        info.label = GetMacDiskLabel(info.mountPoint);
+        
+        // 检查是否为可移动设备
+        info.isRemovable = (info.mountPoint == "/Volumes" || 
+                           info.devicePath.find("/dev/disk") == 0);
+        
+        // 获取磁盘属性
+        GetMacDiskProperties(info.devicePath, info);
+        
+        drives.push_back(info);
+        Logger::Debug("DiskInfo: 添加macOS磁盘 - 挂载点: " + info.mountPoint + 
+                     ", 设备: " + info.devicePath + 
+                     ", 文件系统: " + info.fileSystem);
     }
-    std::sort(drives.begin(), drives.end(), [](const DriveInfo& a,const DriveInfo& b){return a.letter<b.letter;});
-    Logger::Debug("DiskInfo: 驱动器查询完成，共找到 " + std::to_string(validDriveCount) + " 个有效驱动器");
+    
+    Logger::Debug("DiskInfo: macOS磁盘查询完成，共找到 " + std::to_string(drives.size()) + " 个磁盘");
 }
+
+void DiskInfo::GetMacDiskProperties(const std::string& devicePath, DriveInfo& info) const {
+    try {
+        // 检查是否为SSD
+        info.isSSD = IsMacSSD(devicePath);
+        
+        // 确定接口类型
+        if (devicePath.find("disk1") != std::string::npos) {
+            info.interfaceType = "Internal";
+        } else if (devicePath.find("disk2") != std::string::npos) {
+            info.interfaceType = "External";
+        } else {
+            info.interfaceType = "Unknown";
+        }
+        
+        // 检查APFS和加密状态
+        info.isAPFS = (info.fileSystem == "apfs");
+        info.isEncrypted = false; // 需要进一步检查
+        
+        // 获取性能信息
+        GetMacDiskPerformance(devicePath, info);
+    }
+    catch (const std::exception& e) {
+        Logger::Error("获取macOS磁盘属性失败: " + std::string(e.what()));
+    }
+}
+
+bool DiskInfo::IsMacSSD(const std::string& devicePath) const {
+    try {
+        // 通过IOKit检查设备类型
+        std::string command = "diskutil info " + devicePath + " | grep 'Solid State'";
+        FILE* pipe = popen(command.c_str(), "r");
+        if (!pipe) return false;
+        
+        char buffer[128];
+        std::string result;
+        while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+            result += buffer;
+        }
+        pclose(pipe);
+        
+        return result.find("Solid State") != std::string::npos;
+    }
+    catch (const std::exception& e) {
+        Logger::Error("检查SSD状态失败: " + std::string(e.what()));
+        return false;
+    }
+}
+
+std::string DiskInfo::GetMacFileSystem(const std::string& mountPoint) const {
+    struct statfs fs;
+    if (statfs(mountPoint.c_str(), &fs) == 0) {
+        if (strcmp(fs.f_fstypename, "apfs") == 0) return "apfs";
+        if (strcmp(fs.f_fstypename, "hfs") == 0) return "hfs";
+        if (strcmp(fs.f_fstypename, "exfat") == 0) return "exfat";
+        if (strcmp(fs.f_fstypename, "ntfs") == 0) return "ntfs";
+        if (strcmp(fs.f_fstypename, "ext4") == 0) return "ext4";
+        return fs.f_fstypename;
+    }
+    return "Unknown";
+}
+
+std::string DiskInfo::GetMacDiskLabel(const std::string& mountPoint) const {
+    try {
+        std::string command = "diskutil info " + mountPoint + " | grep 'Volume Name'";
+        FILE* pipe = popen(command.c_str(), "r");
+        if (!pipe) return "";
+        
+        char buffer[256];
+        std::string result;
+        while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+            result += buffer;
+        }
+        pclose(pipe);
+        
+        // 解析卷标
+        size_t pos = result.find(":");
+        if (pos != std::string::npos) {
+            std::string label = result.substr(pos + 1);
+            // 移除前后空格
+            label.erase(0, label.find_first_not_of(" \t\n\r"));
+            label.erase(label.find_last_not_of(" \t\n\r") + 1);
+            return label;
+        }
+    }
+    catch (const std::exception& e) {
+        Logger::Error("获取macOS磁盘卷标失败: " + std::string(e.what()));
+    }
+    
+    return "";
+}
+
+void DiskInfo::GetMacDiskPerformance(const std::string& devicePath, DriveInfo& info) const {
+    try {
+        // 这里可以添加性能监控逻辑
+        // 暂时留空，后续可以添加IO统计
+    }
+    catch (const std::exception& e) {
+        Logger::Error("获取macOS磁盘性能信息失败: " + std::string(e.what()));
+    }
+}
+#endif
+
+// Windows实现（保持原有逻辑）
+#ifdef PLATFORM_WINDOWS
+void DiskInfo::QueryWindowsDrives() {
 
 void DiskInfo::Refresh() { 
     Logger::Debug("DiskInfo: 刷新磁盘信息");
@@ -110,14 +232,28 @@ std::vector<DiskData> DiskInfo::GetDisks() {
     std::vector<DiskData> disks; disks.reserve(drives.size());
     for (const auto& drive : drives) { 
         DiskData d; 
-        d.letter=drive.letter; 
-        d.totalSize=drive.totalSize; 
-        d.freeSpace=drive.freeSpace; 
-        d.usedSpace=drive.usedSpace; 
-        d.label=WinUtils::WstringToString(drive.label); 
-        d.fileSystem=WinUtils::WstringToString(drive.fileSystem); 
+#ifdef PLATFORM_WINDOWS
+        d.letter = drive.letter; 
+        d.label = WinUtils::WstringToString(drive.label); 
+        d.fileSystem = WinUtils::WstringToString(drive.fileSystem); 
+#else
+        // macOS/Linux使用挂载点作为标识
+        d.letter = 0; // 不使用驱动器字母
+        d.label = drive.label;
+        d.fileSystem = drive.fileSystem;
+        d.mountPoint = drive.mountPoint;
+        d.devicePath = drive.devicePath;
+#endif
+        d.totalSize = drive.totalSize; 
+        d.freeSpace = drive.freeSpace; 
+        d.usedSpace = drive.usedSpace; 
         disks.push_back(std::move(d)); 
+        
+#ifdef PLATFORM_WINDOWS
         Logger::Debug("DiskInfo: 添加磁盘数据 - 驱动器 " + std::string(1, d.letter) + ": " + d.label);
+#else
+        Logger::Debug("DiskInfo: 添加磁盘数据 - 挂载点 " + d.mountPoint + ": " + d.label);
+#endif
     }
     Logger::Debug("DiskInfo: 磁盘数据获取完成，共 " + std::to_string(disks.size()) + " 个磁盘");
     return disks;
