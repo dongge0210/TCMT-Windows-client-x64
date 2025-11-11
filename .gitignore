@@ -97,3 +97,5 @@ gha-creds-*.json
 *.srctrlbm
 *.srctrldb
 *.srctrlprj
+
+sourcetrail_dependencies
