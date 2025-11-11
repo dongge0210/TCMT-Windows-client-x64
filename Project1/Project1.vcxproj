@@ -131,7 +131,7 @@
 NOMINMAX;
 _WINSOCK_DEPRECATED_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <CompileAsManaged>false</CompileAsManaged>
+      <CompileAsManaged>true</CompileAsManaged>
       <CompileAsWinRT>false</CompileAsWinRT>
       <MultiProcessorCompilation>false</MultiProcessorCompilation>
       <AdditionalIncludeDirectories>GeneratedFiles\$(ConfigurationName);GeneratedFiles;$(ProjectDir)../src/core/Utils;$(WindowsSDK_MetadataPath);$(ProjectDir)../src/core;$(ProjectDir)../src;$(ProjectDir)src;$(CUDA_PATH)\include;$(SolutionDir)src\third_party\LibreHardwareMonitor\LibreHardwareMonitorLib\obj\Debug\net8.0;$(ProjectDir)\GeneratedFiles;F:\Win_x64-10.lastest-sysMonitor\src\third_party\tpm2-tss\src\tss2-fapi;F:\Win_x64-10.lastest-sysMonitor\src\third_party\tpm2-tss\src\tss2-fapi\api;F:\Win_x64-10.lastest-sysMonitor\src\third_party\tpm2-tss\include\tss2;F:\Win_x64-10.lastest-sysMonitor\src\third_party\tpm2-tss\src\tss2-esys\api;$(SolutionDir)src\third_party\USBMonitor-cpp\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -210,11 +210,6 @@ _WINSOCK_DEPRECATED_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefiniti
     <ClCompile Include="..\src\core\network\NetworkAdapter.cpp" />
     <ClCompile Include="..\src\core\os\OSInfo.cpp" />
     <ClCompile Include="..\src\core\temperature\TemperatureWrapper.cpp" />
-    <ClCompile Include="..\src\core\tpm\TpmInfo.cpp" />
-    <ClCompile Include="..\src\core\tpm\TpmInfoEnhanced.cpp" />
-    <ClCompile Include="..\src\core\usb\USBInfo.cpp" />
-    <ClCompile Include="..\src\core\Utils\MotherboardInfo.cpp" />
-    <ClCompile Include="..\src\core\Utils\LibreHardwareMonitorBridge.cpp" />
     <ClCompile Include="..\src\core\tpm\TpmInfo.cpp" />
     <ClCompile Include="..\src\core\tpm\TpmInfoEnhanced.cpp" />
     <ClCompile Include="..\src\core\usb\USBInfo.cpp" />

@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 #include <stdint.h>
-#include "usb/USBInfo.h"
+#include "../usb/USBInfo.h"
 
 #ifdef PLATFORM_WINDOWS
     #include <windows.h>

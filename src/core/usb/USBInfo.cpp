@@ -35,7 +35,7 @@
     using namespace std::chrono_literals;
 #endif
 
-// USB监控实现类
+// USB monitoring implementation class
 class USBInfoManager::USBMonitorImpl {
 public:
     USBMonitorImpl(USBInfoManager* parent) : parentManager(parent), stopFlag(false) {}
@@ -96,6 +96,7 @@ void USBInfoManager::USBMonitorImpl::MonitorMacUSBDevices() {
         int count = getmntinfo(&mounts, MNT_WAIT);
         if (count == 0) return;
         
+<<<<<<< HEAD
         std::set<std::string> newMountPoints;
         
         for (int i = 0; i < count; i++) {
@@ -342,7 +343,7 @@ void USBInfoManager::USBMonitorImpl::DetectUSBChanges() {
             // 检查新插入的设备
             for (const auto& path : newUSBPaths) {
                 if (currentUSBPaths.find(path) == currentUSBPaths.end()) {
-                    // 新设备插入
+                    // New device inserted
                     USBDeviceInfo deviceInfo;
                     if (parentManager->GetDriveInfo(path, deviceInfo)) {
                         deviceInfo.state = USBState::Inserted;
@@ -356,7 +357,7 @@ void USBInfoManager::USBMonitorImpl::DetectUSBChanges() {
                         currentDevices.push_back(deviceInfo);
                         currentUSBPaths.insert(path);
                         
-                        // 通知状态变化
+                        // Notify state change
                         if (parentManager->stateCallback) {
                             parentManager->stateCallback(deviceInfo);
                         }
@@ -364,10 +365,10 @@ void USBInfoManager::USBMonitorImpl::DetectUSBChanges() {
                 }
             }
             
-            // 检查拔出的设备
+            // Check for removed devices
             for (auto it = currentDevices.begin(); it != currentDevices.end();) {
                 if (newUSBPaths.find(it->drivePath) == newUSBPaths.end()) {
-                    // 设备拔出
+                    // Device removed
                     Logger::Info("USB device removed: " + it->drivePath);
                     
                     USBDeviceInfo removedDevice = *it;
@@ -506,6 +507,7 @@ bool USBInfoManager::GetDriveInfo(const std::string& drivePath, USBDeviceInfo& i
 
 bool USBInfoManager::HasUpdateFolder(const std::string& path) {
     try {
+<<<<<<< HEAD
 #ifdef PLATFORM_WINDOWS
         std::filesystem::path updatePath = std::filesystem::path(path) / "update";
         if (std::filesystem::exists(updatePath) && std::filesystem::is_directory(updatePath)) {
