@@ -1,13 +1,32 @@
 ﻿#include "CpuInfo.h"
-#include "Logger.h"
-#include <intrin.h>
-#include <windows.h>
-#include <vector>
-#include <pdh.h>
-#include <algorithm>
-#include <powrprof.h> // CallNtPowerInformation
-#pragma comment(lib, "pdh.lib")
-#pragma comment(lib, "PowrProf.lib")
+#include "../Utils/Logger.h"
+#include "../Utils/CrossPlatformSystemInfo.h"
+
+#ifdef PLATFORM_WINDOWS
+    #include <windows.h>
+    #include <Pdh.h>
+    #include <comdef.h>
+    #include <algorithm>
+    #pragma comment(lib, "Pdh.lib")
+#elif defined(__APPLE__)
+    #include <mach/mach.h>
+    #include <mach/processor_info.h>
+    #include <sys/sysctl.h>
+    #include <sys/types.h>
+    #include <unistd.h>
+    #include <fstream>
+    #include <sstream>
+    #include <algorithm>
+    #include <CoreFoundation/CoreFoundation.h>
+    #include <IOKit/IOKitLib.h>
+#elif defined(__linux__)
+    #include <fstream>
+    #include <sstream>
+    #include <algorithm>
+    #include <unistd.h>
+    #include <sys/types.h>
+    #include <dirent.h>
+#endif
 
 // Define PDH constants if not available
 #ifndef PDH_CSTATUS_VALID_DATA
@@ -44,6 +63,8 @@ static void QueryBaseAndCurrentFrequencyFallback(double& baseMHz, double& curren
 void CpuInfo::InitializeFrequencyCounter()
 {
     if (freqCounterInitialized) return;
+    
+#ifdef PLATFORM_WINDOWS
     PDH_STATUS s = PdhOpenQuery(NULL, 0, &freqQueryHandle);
     if (s != ERROR_SUCCESS) { Logger::Warn("无法打开PDH频率查询"); return; }
     // English name to avoid localization: Processor Information(_Total)\\Processor Frequency
@@ -52,6 +73,13 @@ void CpuInfo::InitializeFrequencyCounter()
     s = PdhCollectQueryData(freqQueryHandle); // prime
     if (s != ERROR_SUCCESS) { Logger::Warn("无法读取频率计数器初值"); PdhCloseQuery(freqQueryHandle); return; }
     freqCounterInitialized = true;
+#elif defined(__APPLE__)
+    // macOS 使用 sysctl 获取频率信息
+    freqCounterInitialized = true;
+#elif defined(__linux__)
+    // Linux 使用 /proc/cpuinfo 获取频率信息
+    freqCounterInitialized = true;
+#endif
 }
 
 void CpuInfo::CleanupFrequencyCounter()
@@ -103,11 +131,25 @@ CpuInfo::CpuInfo() :
     lastSampleIntervalMs(0.0) {
 
     try {
+#ifdef PLATFORM_WINDOWS
         DetectCores();
         cpuName = GetNameFromRegistry();
         InitializeCounter();
         UpdateCoreSpeeds();  // 初始化频率信息
         InitializeFrequencyCounter();     // 初始化即时频率计数器
+#elif defined(PLATFORM_MACOS)
+        DetectCores();
+        cpuName = GetNameFromSysctl();
+        InitializeCounter();
+        UpdateCoreSpeeds();  // 初始化频率信息
+        InitializeFrequencyCounter();     // 初始化即时频率计数器
+#elif defined(PLATFORM_LINUX)
+        DetectCores();
+        cpuName = GetNameFromProcCpuinfo();
+        InitializeCounter();
+        UpdateCoreSpeeds();  // 初始化频率信息
+        InitializeFrequencyCounter();     // 初始化即时频率计数器
+#endif
     }
     catch (const std::exception& e) {
         Logger::Error("CPU信息初始化失败: " + std::string(e.what()));
@@ -120,6 +162,7 @@ CpuInfo::~CpuInfo() {
 }
 
 void CpuInfo::InitializeCounter() {
+#ifdef PLATFORM_WINDOWS
     PDH_STATUS status = PdhOpenQuery(NULL, 0, &queryHandle);
     if (status != ERROR_SUCCESS) {
         Logger::Error("无法打开性能计数器查询");
@@ -148,6 +191,13 @@ void CpuInfo::InitializeCounter() {
 
     counterInitialized = true;
     Logger::Debug("CPU性能计数器初始化完成");
+#elif defined(__APPLE__)
+    // macOS 使用 host_statistics 获取 CPU 信息
+    counterInitialized = true;
+#elif defined(__linux__)
+    // Linux 使用 /proc/stat 获取 CPU 信息
+    counterInitialized = true;
+#endif
 }
 
 double CpuInfo::GetLargeCoreSpeed() const {
@@ -184,6 +234,7 @@ void CpuInfo::CleanupCounter() {
 }
 
 void CpuInfo::DetectCores() {
+#ifdef PLATFORM_WINDOWS
     SYSTEM_INFO sysInfo;
     GetSystemInfo(&sysInfo);
     totalCores = sysInfo.dwNumberOfProcessors;
@@ -199,6 +250,78 @@ void CpuInfo::DetectCores() {
             }
         }
     }
+    
+#elif defined(__APPLE__)
+    // macOS 使用 sysctl 获取核心数量
+    int physicalCores = 0;
+    int logicalCores = 0;
+    size_t size = sizeof(int);
+    
+    // 获取物理核心数
+    if (sysctlbyname("hw.physicalcpu", &physicalCores, &size, nullptr, 0) == 0) {
+        totalCores = physicalCores;
+    }
+    
+    // 获取逻辑核心数
+    if (sysctlbyname("hw.logicalcpu", &logicalCores, &size, nullptr, 0) == 0) {
+        if (totalCores == 0) {
+            totalCores = logicalCores;
+        }
+    }
+    
+    // 检测性能核心和能效核心 (Apple Silicon)
+    natural_t numCPUs = 0;
+    processor_cpu_load_info_t *cpuLoadInfo = nullptr;
+    mach_msg_type_number_t numCpuInfo;
+    
+    if (host_processor_info(mach_host_self(), &numCPUs, &cpuLoadInfo, &numCpuInfo) == KERN_SUCCESS) {
+        // Apple Silicon 通常有性能核(P-cores)和能效核(E-cores)
+        // 这里简化处理，假设物理核心数为性能核心数
+        largeCores = physicalCores;
+        smallCores = logicalCores - physicalCores;
+        
+        vm_deallocate(mach_task_self(), (vm_size_t)(numCPUs * sizeof(processor_cpu_load_info_t)), (vm_address_t)cpuLoadInfo, 0);
+    }
+    
+#elif defined(__linux__)
+    // Linux 使用 /proc/cpuinfo 获取核心信息
+    std::ifstream cpuinfo("/proc/cpuinfo");
+    if (!cpuinfo.is_open()) {
+        totalCores = 1;
+        largeCores = 1;
+        smallCores = 0;
+        return;
+    }
+    
+    std::string line;
+    int processorCount = 0;
+    std::set<int> physicalCoreIds;
+    
+    while (std::getline(cpuinfo, line)) {
+        if (line.find("processor") == 0) {
+            processorCount++;
+        } else if (line.find("physical id") == 0) {
+            size_t pos = line.find(':');
+            if (pos != std::string::npos) {
+                int physicalId = std::stoi(line.substr(pos + 1));
+                physicalCoreIds.insert(physicalId);
+            }
+        }
+    }
+    
+    totalCores = processorCount;
+    
+    // 简化处理：假设物理核心数为性能核心，逻辑核心数减去物理核心数为能效核心
+    largeCores = physicalCoreIds.size();
+    smallCores = processorCount - largeCores;
+    
+    cpuinfo.close();
+    
+#else
+    totalCores = 1;
+    largeCores = 1;
+    smallCores = 0;
+#endif
 }
 
 void CpuInfo::UpdateCoreSpeeds() {
@@ -241,6 +364,7 @@ double CpuInfo::updateUsage() {
         return cpuUsage;
     }
 
+#ifdef PLATFORM_WINDOWS
     // 检查时间间隔，确保两次采样之间有足够间隔
     static DWORD lastCollectTime = 0;
     DWORD currentTime = GetTickCount();
@@ -289,6 +413,95 @@ double CpuInfo::updateUsage() {
         Logger::Warn("CPU使用率数据无效，状态: " + std::to_string(counterValue.CStatus));
     }
     return cpuUsage;
+    
+#elif defined(__APPLE__)
+    // macOS 使用 host_statistics 获取 CPU 使用率
+    static mach_port_t host_port = 0;
+    if (host_port == 0) {
+        host_port = mach_host_self();
+    }
+    
+    host_cpu_load_info_data_t cpuinfo;
+    mach_msg_type_number_t count = HOST_CPU_LOAD_INFO_COUNT;
+    
+    if (host_statistics(host_port, HOST_CPU_LOAD_INFO, (host_info_t)&cpuinfo, &count) == KERN_SUCCESS) {
+        unsigned long totalTicks = 0;
+        unsigned long idleTicks = 0;
+        
+        for (int i = 0; i < CPU_STATE_MAX; i++) {
+            totalTicks += cpuinfo.cpu_ticks[i];
+        }
+        
+        idleTicks = cpuinfo.cpu_ticks[CPU_STATE_IDLE];
+        
+        if (totalTicks > 0) {
+            static unsigned long prevTotalTicks = 0;
+            static unsigned long prevIdleTicks = 0;
+            
+            if (prevTotalTicks > 0) {
+                unsigned long totalDiff = totalTicks - prevTotalTicks;
+                unsigned long idleDiff = idleTicks - prevIdleTicks;
+                
+                if (totalDiff > 0) {
+                    double newUsage = 100.0 * (1.0 - (double)idleDiff / totalDiff);
+                    if (newUsage < 0.0) newUsage = 0.0;
+                    if (newUsage > 100.0) newUsage = 100.0;
+                    if (cpuUsage > 0.0) cpuUsage = (cpuUsage * 0.8) + (newUsage * 0.2); else cpuUsage = newUsage;
+                }
+            }
+            
+            prevTotalTicks = totalTicks;
+            prevIdleTicks = idleTicks;
+        }
+    }
+    
+    return cpuUsage;
+    
+#elif defined(__linux__)
+    // Linux 使用 /proc/stat 获取 CPU 使用率
+    static std::ifstream procStat("/proc/stat");
+    if (!procStat.is_open()) {
+        return cpuUsage;
+    }
+    
+    std::string line;
+    if (std::getline(procStat, line)) {
+        if (line.find("cpu ") == 0) {
+            std::istringstream iss(line);
+            std::string cpuLabel;
+            unsigned long user, nice, system, idle, iowait, irq, softirq;
+            
+            iss >> cpuLabel >> user >> nice >> system >> idle >> iowait >> irq >> softirq;
+            
+            unsigned long totalTicks = user + nice + system + idle + iowait + irq + softirq;
+            unsigned long idleTicks = idle + iowait;
+            
+            static unsigned long prevTotalTicks = 0;
+            static unsigned long prevIdleTicks = 0;
+            
+            if (prevTotalTicks > 0) {
+                unsigned long totalDiff = totalTicks - prevTotalTicks;
+                unsigned long idleDiff = idleTicks - prevIdleTicks;
+                
+                if (totalDiff > 0) {
+                    double newUsage = 100.0 * (1.0 - (double)idleDiff / totalDiff);
+                    if (newUsage < 0.0) newUsage = 0.0;
+                    if (newUsage > 100.0) newUsage = 100.0;
+                    if (cpuUsage > 0.0) cpuUsage = (cpuUsage * 0.8) + (newUsage * 0.2); else cpuUsage = newUsage;
+                }
+            }
+            
+            prevTotalTicks = totalTicks;
+            prevIdleTicks = idleTicks;
+        }
+    }
+    
+    procStat.close();
+    return cpuUsage;
+    
+#else
+    return 0.0; // 不支持的平台
+#endif
 }
 
 double CpuInfo::GetUsage() {
@@ -315,6 +528,67 @@ std::string CpuInfo::GetNameFromRegistry() {
         }
         RegCloseKey(hKey);
     }
+    return "Unknown CPU";
+}
+
+std::string CpuInfo::GetNameFromSysctl() {
+    size_t len = 0;
+    sysctlbyname("machdep.cpu.brand_string", nullptr, &len, nullptr, 0);
+    if (len > 0) {
+        std::string cpuModel;
+        cpuModel.resize(len);
+        sysctlbyname("machdep.cpu.brand_string", &cpuModel[0], &len, nullptr, 0);
+        cpuModel.resize(len - 1); // 移除null终止符
+        return cpuModel;
+    }
+    return "Unknown CPU";
+}
+
+std::string CpuInfo::GetNameFromProcCpuinfo() {
+    std::ifstream file("/proc/cpuinfo");
+    if (!file.is_open()) {
+        return "Unknown CPU";
+    }
+    
+    std::string line;
+    while (std::getline(file, line)) {
+        if (line.find("model name") != std::string::npos) {
+            size_t pos = line.find(':');
+            if (pos != std::string::npos) {
+                std::string cpuModel = line.substr(pos + 1);
+                // 移除前后空格
+                cpuModel.erase(0, cpuModel.find_first_not_of(' '));
+                cpuModel.erase(cpuModel.find_last_not_of(' ') + 1);
+                return cpuModel;
+            }
+        }
+    }
+    return "Unknown CPU";
+}
+
+std::string CpuInfo::GetNameFromSysctl() {
+    // macOS 使用 sysctl 获取 CPU 信息
+    size_t size = 0;
+    sysctlbyname("machdep.cpu.brand_string", nullptr, &size, nullptr, 0);
+    
+    if (size > 0) {
+        std::vector<char> buffer(size);
+        if (sysctlbyname("machdep.cpu.brand_string", buffer.data(), &size, nullptr, 0) == 0) {
+            return std::string(buffer.data());
+        }
+    }
+    
+    // 如果品牌字符串获取失败，尝试其他方法
+    size_t modelSize = 0;
+    sysctlbyname("hw.model", nullptr, &modelSize, nullptr, 0);
+    
+    if (modelSize > 0) {
+        std::vector<char> modelBuffer(modelSize);
+        if (sysctlbyname("hw.model", modelBuffer.data(), &modelSize, nullptr, 0) == 0) {
+            return std::string(modelBuffer.data()) + " CPU";
+        }
+    }
+    
     return "Unknown CPU";
 }
 
@@ -378,4 +652,93 @@ bool CpuInfo::IsVirtualizationEnabled() const {
     }
 
     return isVMXEnabled;
+}
+
+// WinCpuAdapter 实现
+WinCpuAdapter::WinCpuAdapter() {
+    m_originalCpuInfo = std::make_unique<CpuInfo>();
+}
+
+WinCpuAdapter::~WinCpuAdapter() {
+    Cleanup();
+}
+
+double WinCpuAdapter::GetUsage() {
+    if (!m_originalCpuInfo) return 0.0;
+    return m_originalCpuInfo->GetUsage();
+}
+
+std::string WinCpuAdapter::GetName() {
+    if (!m_originalCpuInfo) return "";
+    return m_originalCpuInfo->GetName();
+}
+
+int WinCpuAdapter::GetTotalCores() const {
+    if (!m_originalCpuInfo) return 0;
+    return m_originalCpuInfo->GetTotalCores();
+}
+
+int WinCpuAdapter::GetSmallCores() const {
+    if (!m_originalCpuInfo) return 0;
+    return m_originalCpuInfo->GetSmallCores();
+}
+
+int WinCpuAdapter::GetLargeCores() const {
+    if (!m_originalCpuInfo) return 0;
+    return m_originalCpuInfo->GetLargeCores();
+}
+
+double WinCpuAdapter::GetLargeCoreSpeed() const {
+    if (!m_originalCpuInfo) return 0.0;
+    return m_originalCpuInfo->GetLargeCoreSpeed();
+}
+
+double WinCpuAdapter::GetSmallCoreSpeed() const {
+    if (!m_originalCpuInfo) return 0.0;
+    return m_originalCpuInfo->GetSmallCoreSpeed();
+}
+
+DWORD WinCpuAdapter::GetCurrentSpeed() const {
+    if (!m_originalCpuInfo) return 0;
+    return m_originalCpuInfo->GetCurrentSpeed();
+}
+
+bool WinCpuAdapter::IsHyperThreadingEnabled() const {
+    if (!m_originalCpuInfo) return false;
+    return m_originalCpuInfo->IsHyperThreadingEnabled();
+}
+
+bool WinCpuAdapter::IsVirtualizationEnabled() const {
+    if (!m_originalCpuInfo) return false;
+    return m_originalCpuInfo->IsVirtualizationEnabled();
+}
+
+double WinCpuAdapter::GetLastSampleIntervalMs() const {
+    if (!m_originalCpuInfo) return 0.0;
+    return m_originalCpuInfo->GetLastSampleIntervalMs();
+}
+
+double WinCpuAdapter::GetBaseFrequencyMHz() const {
+    if (!m_originalCpuInfo) return 0.0;
+    return m_originalCpuInfo->GetBaseFrequencyMHz();
+}
+
+double WinCpuAdapter::GetCurrentFrequencyMHz() const {
+    if (!m_originalCpuInfo) return 0.0;
+    return m_originalCpuInfo->GetCurrentFrequencyMHz();
+}
+
+bool WinCpuAdapter::Initialize() {
+    // CpuInfo类在构造时自动初始化，这里只需要确认对象存在
+    return m_originalCpuInfo != nullptr;
+}
+
+void WinCpuAdapter::Cleanup() {
+    // CpuInfo类在析构时自动清理，这里不需要额外操作
+}
+
+bool WinCpuAdapter::Update() {
+    // CpuInfo类在每次调用Get方法时自动更新数据
+    // 这里可以添加额外的更新逻辑，如果需要的话
+    return m_originalCpuInfo != nullptr;
 }

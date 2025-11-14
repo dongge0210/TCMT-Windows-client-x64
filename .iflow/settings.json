@@ -28,5 +28,6 @@
         "mcp-server-spec-driven-development@latest"
       ]
     }
-  }
+  },
+  "outputStyle": "CodeFlow Expert"
 }

@@ -1,9 +1,12 @@
 #include "DataStruct.h"
 #include "SharedMemoryManager.h"
-#include "../utils/WinUtils.h"
 #include <iostream>
 #include <string>
 #include <cwchar>
+
+#ifdef PLATFORM_WINDOWS
+#include "../Utils/WinUtils.h"
+#endif
 
 // Remove the global variables and function definitions
 // that are now in SharedMemoryManager

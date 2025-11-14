@@ -63,6 +63,15 @@
     <ClInclude Include="..\src\core\tpm\TpmInfo.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\core\Utils\MotherboardInfo.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\core\usb\USBInfo.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\core\tpm\TpmInfoEnhanced.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\src\core\Utils\Logger.cpp">
@@ -111,6 +120,15 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="..\src\core\tpm\TpmInfo.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\core\Utils\MotherboardInfo.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\core\tpm\TpmInfoEnhanced.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\core\usb\USBInfo.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
   </ItemGroup>

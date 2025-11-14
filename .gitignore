@@ -85,10 +85,17 @@ Project1/x64/
 
 # History huh..
 /弃用
-Qt-Widgets-TC-monitor/qt_monitor.log
 UI_README.md
 /build_failure_analysis.md
 /.litho
 
-.iflow/
 gha-creds-*.json
+*.txt
+/.codemap
+/.iflow
+
+*.srctrlbm
+*.srctrldb
+*.srctrlprj
+
+sourcetrail_dependencies

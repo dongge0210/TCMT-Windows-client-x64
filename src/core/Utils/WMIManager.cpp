@@ -1,5 +1,7 @@
 ﻿#include "WmiManager.h"
 #include "Logger.h"
+
+#ifdef PLATFORM_WINDOWS
 #include <comdef.h>
 
 WmiManager::WmiManager() : initialized(false), pLoc(nullptr), pSvc(nullptr) {
@@ -135,3 +137,4 @@ HRESULT STDMETHODCALLTYPE WmiManager::QueryService(REFGUID guidService, REFIID r
     *ppvObject = nullptr;
     return E_NOINTERFACE;
 }
+#endif

@@ -1,20 +1,34 @@
 // file: src/core/tpm/TpmInfo.cpp
 #include "TpmInfo.h"
 #include "../Utils/Logger.h"
-#include "../Utils/WmiManager.h"
-#include "../Utils/WinUtils.h"
 
-#define WIN32_LEAN_AND_MEAN
-#include <tbs.h>
-#include <wbemidl.h>
-#include <comutil.h>
-#include <string>
-#include <cwchar>
-
-#pragma comment(lib, "tbs.lib")
-#pragma comment(lib, "ole32.lib")
-#pragma comment(lib, "oleaut32.lib")
-#pragma comment(lib, "wbemuuid.lib")
+#ifdef PLATFORM_WINDOWS
+    #include "../Utils/WmiManager.h"
+    #include "../Utils/WinUtils.h"
+    #define WIN32_LEAN_AND_MEAN
+    #include <tbs.h>
+    #include <wbemidl.h>
+    #include <comutil.h>
+    #include <string>
+    #include <cwchar>
+    #pragma comment(lib, "tbs.lib")
+    #pragma comment(lib, "ole32.lib")
+    #pragma comment(lib, "oleaut32.lib")
+    #pragma comment(lib, "wbemuuid.lib")
+#elif defined(PLATFORM_MACOS)
+    #include <sys/sysctl.h>
+    #include <IOKit/IOKitLib.h>
+    #include <CoreFoundation/CoreFoundation.h>
+    #include <unistd.h>
+    #include <fstream>
+    #include <sstream>
+#elif defined(PLATFORM_LINUX)
+    #include <sys/sysinfo.h>
+    #include <fstream>
+    #include <sstream>
+    #include <unistd.h>
+    #include <glob.h>
+#endif
 
 namespace {
     struct TbsContextGuard {
@@ -57,12 +71,13 @@ namespace {
     }
 }
 
-TpmInfo::TpmInfo(WmiManager& manager) : wmiManager(manager) {
+#ifdef PLATFORM_WINDOWS
+TpmInfo::TpmInfo(WmiManager& manager) : wmiManager(&manager) {
     hasTpm = false;
-    tpmData.detectionMethod = L"NONE";
+    tpmData.detectionMethod = "NONE";
     tpmData.wmiDetectionWorked = false;
     tpmData.tbsDetectionWorked = false;
-    tpmData.status = L"Unknown";
+    tpmData.status = "Unknown";
     tpmData.errorMessage.clear();
 
     Logger::Info("TPM detection start (TBS primary, WMI fallback)");
@@ -75,21 +90,256 @@ TpmInfo::TpmInfo(WmiManager& manager) : wmiManager(manager) {
     DetermineDetectionMethod();
 
     if (hasTpm) {
-        Logger::Info("TPM detected: " +
-            WinUtils::WstringToString(tpmData.manufacturerName) + " v" +
-            WinUtils::WstringToString(tpmData.version) + " (" +
-            WinUtils::WstringToString(tpmData.status) + ") [method: " +
-            WinUtils::WstringToString(tpmData.detectionMethod) + "]");
+        Logger::Info("TPM detected: " + tpmData.manufacturerName + " v" + 
+                     tpmData.version + " (" + tpmData.status + ") [method: " + 
+                     tpmData.detectionMethod + "]");
     }
     else {
-        Logger::Info("No TPM detected: " + WinUtils::WstringToString(tpmData.errorMessage));
+        Logger::Info("No TPM detected: " + tpmData.errorMessage);
     }
+}
+#else
+TpmInfo::TpmInfo() {
+    hasTpm = false;
+    tpmData.detectionMethod = "NONE";
+    tpmData.isSupported = false;
+    tpmData.status = "Unknown";
+    tpmData.errorMessage.clear();
+
+    DetectTpm();
+
+    if (hasTpm) {
+        Logger::Info("TPM detected: " + tpmData.manufacturerName + " v" + 
+                     tpmData.version + " (" + tpmData.status + ") [method: " + 
+                     tpmData.detectionMethod + "]");
+    }
+    else {
+        Logger::Info("TPM status: " + tpmData.platformInfo);
+    }
+}
+#endif
 }
 
 TpmInfo::~TpmInfo() {
     Logger::Debug("TPM detection end");
 }
 
+void TpmInfo::DetectTpm() {
+    try {
+#ifdef PLATFORM_WINDOWS
+        DetectTpmViaTbs();
+        DetectTpmViaWmi();
+        DetermineDetectionMethod();
+#elif defined(PLATFORM_MACOS)
+        DetectMacTpm();
+#elif defined(PLATFORM_LINUX)
+        DetectLinuxTpm();
+#endif
+    }
+    catch (const std::exception& e) {
+        Logger::Error("DetectTpm failed: " + std::string(e.what()));
+        tpmData.errorMessage = "Detection failed: " + std::string(e.what());
+    }
+}
+
+// macOS TPM检测实现
+#ifdef PLATFORM_MACOS
+void TpmInfo::DetectMacTpm() {
+    Logger::Debug("DetectMacTpm: Starting macOS TPM detection");
+    
+    tpmData.detectionMethod = "macOS System Integrity";
+    tpmData.isSupported = CheckMacTpmSupport();
+    
+    if (!tpmData.isSupported) {
+        tpmData.platformInfo = "macOS does not support TPM (uses Secure Enclave instead)";
+        Logger::Info("TPM: macOS uses Secure Enclave instead of TPM");
+        return;
+    }
+    
+    // 获取系统完整性保护信息
+    std::string sipStatus = GetMacSystemIntegrityProtection();
+    tpmData.platformInfo = "macOS Secure Enclave Status: " + sipStatus;
+    tpmData.status = sipStatus;
+    
+    // macOS使用Secure Enclave而不是TPM
+    tpmData.manufacturerName = "Apple";
+    tpmData.version = "Secure Enclave";
+    tpmData.isEnabled = true;
+    tpmData.isActivated = true;
+    tpmData.isReady = true;
+    tpmData.isOwned = true;
+    tpmData.specVersion = 2; // Secure Enclave 2.0+
+    
+    hasTpm = true;
+    Logger::Info("TPM: macOS Secure Enclave detected - " + sipStatus);
+}
+
+bool TpmInfo::CheckMacTpmSupport() {
+    try {
+        // 检查是否有Secure Enclave
+        FILE* pipe = popen("system_profiler SPiBridgeDataType | grep -i \"secure enclave\"", "r");
+        if (pipe) {
+            char buffer[256];
+            while (fgets(buffer, sizeof(buffer), pipe)) {
+                std::string line(buffer);
+                if (line.find("Secure Enclave") != std::string::npos) {
+                    pclose(pipe);
+                    return true;
+                }
+            }
+            pclose(pipe);
+        }
+        
+        // 检查系统完整性保护
+        FILE* pipe2 = popen("csrutil status | grep \"System Integrity Protection\"", "r");
+        if (pipe2) {
+            char buffer[256];
+            while (fgets(buffer, sizeof(buffer), pipe2)) {
+                std::string line(buffer);
+                if (line.find("System Integrity Protection status") != std::string::npos) {
+                    pclose(pipe2);
+                    return true;
+                }
+            }
+            pclose(pipe2);
+        }
+    }
+    catch (const std::exception& e) {
+        Logger::Error("CheckMacTpmSupport failed: " + std::string(e.what()));
+    }
+    
+    return false;
+}
+
+std::string TpmInfo::GetMacSystemIntegrityProtection() {
+    try {
+        FILE* pipe = popen("csrutil status", "r");
+        if (!pipe) return "Unknown";
+        
+        char buffer[1024];
+        std::string result;
+        
+        while (fgets(buffer, sizeof(buffer), pipe)) {
+            result += buffer;
+        }
+        pclose(pipe);
+        
+        // 解析SIP状态
+        if (result.find("System Integrity Protection status: enabled") != std::string::npos) {
+            return "Enabled";
+        } else if (result.find("System Integrity Protection status: disabled") != std::string::npos) {
+            return "Disabled";
+        } else if (result.find("System Integrity Protection status: unknown") != std::string::npos) {
+            return "Unknown";
+        }
+        
+        return "Not Available";
+    }
+    catch (const std::exception& e) {
+        Logger::Error("GetMacSystemIntegrityProtection failed: " + std::string(e.what()));
+        return "Error";
+    }
+}
+#endif
+
+// Linux TPM检测实现
+#ifdef PLATFORM_LINUX
+void TpmInfo::DetectLinuxTpm() {
+    Logger::Debug("DetectLinuxTpm: Starting Linux TPM detection");
+    
+    tpmData.detectionMethod = "Linux Device Check";
+    
+    if (!CheckLinuxTpmDevice()) {
+        tpmData.platformInfo = "No TPM device found on this system";
+        Logger::Info("TPM: No TPM device found on this Linux system");
+        return;
+    }
+    
+    // 获取TPM版本信息
+    std::string version = GetLinuxTpmVersion();
+    tpmData.version = version;
+    
+    // 检查TPM设备状态
+    FILE* pipe = popen("tpm2_getcap -c 2>/dev/null | head -20", "r");
+    if (pipe) {
+        char buffer[256];
+        while (fgets(buffer, sizeof(buffer), pipe)) {
+            std::string line(buffer);
+            if (line.find("TPM") != std::string::npos) {
+                tpmData.status = line;
+                break;
+            }
+        }
+        pclose(pipe);
+    }
+    
+    // 设置基本状态
+    tpmData.isEnabled = true;
+    tpmData.isActivated = true;
+    tpmData.isReady = true;
+    tpmData.isOwned = true;
+    tpmData.manufacturerName = "Unknown";
+    
+    if (version.find("2.0") != std::string::npos) {
+        tpmData.specVersion = 2;
+    } else if (version.find("1.2") != std::string::npos) {
+        tpmData.specVersion = 1;
+    } else {
+        tpmData.specVersion = 0;
+    }
+    
+    hasTpm = true;
+    Logger::Info("TPM: Linux TPM detected - " + version);
+}
+
+bool TpmInfo::CheckLinuxTpmDevice() {
+    // 检查常见的TPM设备路径
+    const std::vector<std::string> tpmDevices = {
+        "/dev/tpm0", "/dev/tpmrm0", "/dev/tpm1", "/dev/tpmrm1"
+    };
+    
+    for (const auto& device : tpmDevices) {
+        if (access(device.c_str(), F_OK) == 0) {
+            Logger::Debug("Found TPM device: " + device);
+            return true;
+        }
+    }
+    
+    // 检查sysfs中的TPM
+    if (access("/sys/class/tpm/tpm0", F_OK) == 0) {
+        Logger::Debug("Found TPM sysfs device");
+        return true;
+    }
+    
+    return false;
+}
+
+std::string TpmInfo::GetLinuxTpmVersion() {
+    FILE* pipe = popen("tpm2_getcap -v 2>/dev/null | head -5", "r");
+    if (!pipe) return "Unknown";
+    
+    char buffer[256];
+    std::string result;
+    
+    while (fgets(buffer, sizeof(buffer), pipe)) {
+        result += buffer;
+    }
+    pclose(pipe);
+    
+    // 解析版本信息
+    if (result.find("TPM 2.0") != std::string::npos) {
+        return "2.0";
+    } else if (result.find("TPM 1.2") != std::string::npos) {
+        return "1.2";
+    } else if (result.find("TPM 1.1") != std::string::npos) {
+        return "1.1";
+    }
+    
+    return "Unknown";
+}
+#endif
+
+// Windows实现
 void TpmInfo::DetectTpmViaWmi() {
     if (!wmiManager.IsInitialized()) {
         Logger::Warn("WMI manager not initialized");
