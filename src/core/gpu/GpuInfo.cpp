@@ -1,8 +1,16 @@
 ﻿#include "GpuInfo.h"
-#include "Logger.h"
-#include "WmiManager.h"
-#include <comutil.h>
-#include <C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8\include\nvml.h>
+#include "../Utils/Logger.h"
+#include "../Utils/CrossPlatformSystemInfo.h"
+
+#ifdef PLATFORM_WINDOWS
+    #include "WmiManager.h"
+    #include <comutil.h>
+    // CUDA 支持 - 仅在 CUDA_SUPPORTED 定义时包含
+    #ifdef CUDA_SUPPORTED
+        #include <nvml.h>
+    #endif
+#endif
+
 #include <algorithm>  // Add this header for std::transform
 #include <cctype>     // Add this header for character functions
 #include <cwctype>    // Add this header for wide character functions like towlower
@@ -73,77 +81,122 @@ bool GpuInfo::IsVirtualGpu(const std::wstring& name) {
     return false;
 }
 
-void GpuInfo::DetectGpusViaWmi() {
-    IEnumWbemClassObject* pEnumerator = nullptr;
-    HRESULT hres = pSvc->ExecQuery(
-        bstr_t("WQL"),
-        bstr_t("SELECT * FROM Win32_VideoController"),
-        WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY,
-        nullptr,
-        &pEnumerator
-    );
+void GpuInfo::QueryGpuInfo() {
+    try {
+        m_gpuData.clear();
+        
+#ifdef PLATFORM_WINDOWS
+        // 使用 WMI 查询 GPU 信息
+        std::wstring query = L"SELECT * FROM Win32_VideoController";
+        auto results = wmiManager.ExecuteQuery(query);
+        
+        for (const auto& result : results) {
+            GpuData gpu;
+            
+            // 基本信息
+            auto name = result[L"Name"];
+            auto description = result[L"Description"];
+            auto adapterRam = result[L"AdapterRAM"];
+            auto driverVersion = result[L"DriverVersion"];
+            auto videoProcessor = result[L"VideoProcessor"];
+            auto availability = result[L"Availability"];
+            
+            if (!name.empty()) {
+                gpu.name = name;
+            }
+            
+            if (!description.empty()) {
+                gpu.deviceId = description;
+            }
+            
+            if (!adapterRam.empty()) {
+                try {
+                    gpu.dedicatedMemory = std::stoull(adapterRam);
+                }
+                catch (...) {
+                    gpu.dedicatedMemory = 0;
+                }
+            }
+            
+            // 检测是否为 NVIDIA GPU
+            gpu.isNvidia = IsNvidiaGpu(gpu.name);
+            
+            // 检测是否为集成显卡
+            gpu.isIntegrated = IsIntegratedGpu(gpu.name);
+            
+            // 检测是否为虚拟 GPU
+            gpu.isVirtual = IsVirtualGpu(gpu.name);
+            
+            // 查询 NVIDIA GPU 的详细信息
+            #ifdef CUDA_SUPPORTED
+            if (gpu.isNvidia) {
+                QueryNvidiaGpuDetails(gpu);
+            }
+            #endif
 
-    if (FAILED(hres)) {
-        Logger::Error("WMI查询失败");
-        return;
+            // 检测图形API支持
+            DetectGraphicsAPIs(gpu);
+
+            m_gpuData.push_back(gpu);
+        }
+#else
+        // 使用跨平台系统信息管理器
+        auto& systemInfo = CrossPlatformSystemInfo::GetInstance();
+        if (systemInfo.Initialize()) {
+            auto gpuDevices = systemInfo.GetGpuDevices();
+            
+            for (const auto& device : gpuDevices) {
+                GpuData gpu;
+                
+                // 转换设备信息到 GPU 数据结构
+                gpu.name = std::wstring(device.name.begin(), device.name.end());
+                gpu.deviceId = std::wstring(device.deviceId.begin(), device.deviceId.end());
+                
+                // 从属性中提取内存信息
+                auto memoryIt = device.properties.find("memory");
+                if (memoryIt != device.properties.end()) {
+                    try {
+                        gpu.dedicatedMemory = std::stoull(memoryIt->second);
+                    }
+                    catch (...) {
+                        gpu.dedicatedMemory = 0;
+                    }
+                }
+                
+                // 检测 GPU 类型
+                gpu.isNvidia = IsNvidiaGpu(gpu.name);
+                gpu.isIntegrated = IsIntegratedGpu(gpu.name);
+                gpu.isVirtual = IsVirtualGpu(gpu.name);
+                
+                // 获取驱动版本信息
+                auto driverIt = device.properties.find("driver_version");
+                if (driverIt != device.properties.end()) {
+                    // 可以设置额外的驱动版本信息
+                }
+                
+                // 检测图形API支持
+                DetectGraphicsAPIs(gpu);
+                
+                m_gpuData.push_back(gpu);
+            }
+        }
+        
+        // 如果没有找到 GPU，添加一个默认条目
+        if (m_gpuData.empty()) {
+            GpuData defaultGpu;
+            defaultGpu.name = L"Unknown GPU";
+            defaultGpu.isVirtual = systemInfo.IsVirtualMachine();
+            m_gpuData.push_back(defaultGpu);
+        }
+#endif
     }
-
-    ULONG uReturn = 0;
-    IWbemClassObject* pclsObj = nullptr;
-    while (pEnumerator->Next(WBEM_INFINITE, 1, &pclsObj, &uReturn) == S_OK) {
-        GpuData data;
-        VARIANT vtName, vtPnpId, vtAdapterRAM, vtCurrentClockSpeed;
-        VariantInit(&vtName);
-        VariantInit(&vtPnpId);
-        VariantInit(&vtAdapterRAM);
-        VariantInit(&vtCurrentClockSpeed);
-
-        if (SUCCEEDED(pclsObj->Get(L"Name", 0, &vtName, 0, 0)) && vtName.vt == VT_BSTR) {
-            data.name = vtName.bstrVal;
-        }
-
-        if (SUCCEEDED(pclsObj->Get(L"PNPDeviceID", 0, &vtPnpId, 0, 0)) && vtPnpId.vt == VT_BSTR) {
-            data.deviceId = vtPnpId.bstrVal;
-        }
-
-        if (SUCCEEDED(pclsObj->Get(L"AdapterRAM", 0, &vtAdapterRAM, 0, 0)) && vtAdapterRAM.vt == VT_UI4) {
-            data.dedicatedMemory = static_cast<uint64_t>(vtAdapterRAM.uintVal);
-        }
-
-        if (SUCCEEDED(pclsObj->Get(L"CurrentClockSpeed", 0, &vtCurrentClockSpeed, 0, 0)) && vtCurrentClockSpeed.vt == VT_UI4) {
-            data.coreClock = static_cast<double>(vtCurrentClockSpeed.uintVal) / 1e6;
-        }
-
-        // 改进的虚拟显卡检测
-        data.isVirtual = IsVirtualGpu(data.name);
-        
-        // 记录所有GPU，包括虚拟GPU，但标记它们
-        data.isNvidia = (data.name.find(L"NVIDIA") != std::wstring::npos);
-        data.isIntegrated = (data.deviceId.find(L"VEN_8086") != std::wstring::npos);
-        
-        gpuList.push_back(data);
-        
-        // 不在这里记录GPU信息，避免重复日志
-        // GPU信息将在主程序中统一记录
-
-        VariantClear(&vtName);
-        VariantClear(&vtPnpId);
-        VariantClear(&vtAdapterRAM);
-        VariantClear(&vtCurrentClockSpeed);
-        pclsObj->Release();
-    }
-
-    pEnumerator->Release();
-
-    // 为NVIDIA GPU查询详细信息
-    for (size_t i = 0; i < gpuList.size(); ++i) {
-        if (gpuList[i].isNvidia && !gpuList[i].isVirtual) {
-            QueryNvidiaGpuInfo(static_cast<int>(i));
-        }
+    catch (const std::exception& e) {
+        Logger::Error("GpuInfo: Exception in QueryGpuInfo: " + std::string(e.what()));
     }
 }
 
 void GpuInfo::QueryIntelGpuInfo(int index) {
+#if defined(SUPPORT_DIRECTX)
     IDXGIFactory* pFactory = nullptr;
     if (FAILED(CreateDXGIFactory(__uuidof(IDXGIFactory), (void**)&pFactory))) {
         Logger::Error("无法创建DXGI工厂");
@@ -159,9 +212,13 @@ void GpuInfo::QueryIntelGpuInfo(int index) {
         pAdapter->Release();
     }
     pFactory->Release();
+#else
+    Logger::Info("DirectX 未启用，跳过 Intel GPU 信息查询");
+#endif
 }
 
 void GpuInfo::QueryNvidiaGpuInfo(int index) {
+#ifdef CUDA_SUPPORTED
     nvmlReturn_t initResult = nvmlInit();
     if (NVML_SUCCESS != initResult) {
         Logger::Error("NVML初始化失败: " + std::string(nvmlErrorString(initResult)));
@@ -206,8 +263,317 @@ void GpuInfo::QueryNvidiaGpuInfo(int index) {
     }
 
     nvmlShutdown();
+#else
+    Logger::Info("CUDA 未启用，跳过 NVIDIA GPU 信息查询");
+#endif
 }
 
 const std::vector<GpuInfo::GpuData>& GpuInfo::GetGpuData() const {
     return gpuList;
+}// 跨平台图形API检测实现
+void GpuInfo::DetectGraphicsAPIs(GpuData& gpu) {
+#ifdef PLATFORM_WINDOWS
+    DetectD3D12Support(gpu);
+    DetectOpenGLSupport(gpu);
+    DetectVulkanSupport(gpu);
+#elif defined(__APPLE__)
+    DetectMetalSupport(gpu);
+    DetectOpenGLSupport(gpu);
+    DetectVulkanSupport(gpu);
+#else
+    DetectOpenGLSupport(gpu);
+    DetectVulkanSupport(gpu);
+#endif
+}
+
+bool GpuInfo::DetectD3D12Support(GpuData& gpu) {
+#ifdef PLATFORM_WINDOWS
+    try {
+        Microsoft::WRL::ComPtr<IDXGIFactory4> factory;
+        HRESULT hr = CreateDXGIFactory2(0, IID_PPV_ARGS(&factory));
+        if (FAILED(hr)) {
+            return false;
+        }
+
+        Microsoft::WRL::ComPtr<ID3D12Device> device;
+        hr = D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device));
+        if (SUCCEEDED(hr)) {
+            gpu.supportsD3D12 = true;
+            gpu.d3d12Version = L"12.0";
+            
+            D3D12_FEATURE_DATA_FEATURE_LEVELS featureLevels = {};
+            D3D_FEATURE_LEVEL levels[] = {
+                D3D_FEATURE_LEVEL_12_2,
+                D3D_FEATURE_LEVEL_12_1,
+                D3D_FEATURE_LEVEL_12_0
+            };
+            featureLevels.NumFeatureLevels = ARRAYSIZE(levels);
+            featureLevels.pFeatureLevelsRequested = levels;
+            
+            hr = device->CheckFeatureSupport(D3D12_FEATURE_FEATURE_LEVELS, &featureLevels, sizeof(featureLevels));
+            if (SUCCEEDED(hr) && featureLevels.MaxSupportedFeatureLevel >= D3D_FEATURE_LEVEL_12_1) {
+                gpu.d3d12Version = L"12.1";
+            }
+            if (SUCCEEDED(hr) && featureLevels.MaxSupportedFeatureLevel >= D3D_FEATURE_LEVEL_12_2) {
+                gpu.d3d12Version = L"12.2";
+            }
+            
+            return true;
+        }
+    }
+    catch (...) {
+    }
+#endif
+    return false;
+}
+
+bool GpuInfo::DetectMetalSupport(GpuData& gpu) {
+#if defined(__APPLE__)
+    @try {
+        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        if (device) {
+            gpu.supportsMetal = true;
+            
+            NSOperatingSystemVersion osVersion = [[NSProcessInfo processInfo] operatingSystemVersion];
+            if (osVersion.majorVersion >= 13) {
+                gpu.metalVersion = L"3.0";
+            } else if (osVersion.majorVersion >= 12) {
+                gpu.metalVersion = L"2.4";
+            } else if (osVersion.majorVersion >= 11) {
+                gpu.metalVersion = L"2.0";
+            } else if (osVersion.majorVersion >= 10) {
+                gpu.metalVersion = L"1.2";
+            } else {
+                gpu.metalVersion = L"1.0";
+            }
+            
+            [device release];
+            return true;
+        }
+    }
+    @catch (...) {
+    }
+#endif
+    return false;
+}
+
+bool GpuInfo::DetectOpenGLSupport(GpuData& gpu) {
+    try {
+#ifdef PLATFORM_WINDOWS
+        HWND hWnd = GetDesktopWindow();
+        HDC hDC = GetDC(hWnd);
+        
+        PIXELFORMATDESCRIPTOR pfd = {0};
+        pfd.nSize = sizeof(pfd);
+        pfd.nVersion = 1;
+        pfd.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
+        pfd.iPixelType = PFD_TYPE_RGBA;
+        pfd.cColorBits = 24;
+        pfd.cAlphaBits = 8;
+        pfd.cDepthBits = 24;
+        
+        int pixelFormat = ChoosePixelFormat(hDC, &pfd);
+        if (pixelFormat != 0) {
+            SetPixelFormat(hDC, pixelFormat, &pfd);
+            
+            HGLRC hGLRC = wglCreateContext(hDC);
+            if (hGLRC) {
+                wglMakeCurrent(hDC, hGLRC);
+                
+                const char* version = (const char*)glGetString(GL_VERSION);
+                if (version) {
+                    gpu.supportsOpenGL = true;
+                    std::string versionStr(version);
+                    gpu.openGLVersion = std::wstring(versionStr.begin(), versionStr.end());
+                }
+                
+                wglMakeCurrent(nullptr, nullptr);
+                wglDeleteContext(hGLRC);
+            }
+        }
+        
+        ReleaseDC(hWnd, hDC);
+#elif defined(__APPLE__)
+        NSOpenGLPixelFormatAttribute attrs[] = {
+            NSOpenGLPFAOpenGLProfile, NSOpenGLProfileVersion4_1Core,
+            NSOpenGLPFADoubleBuffer,
+            NSOpenGLPFAAccelerated,
+            0
+        };
+        
+        NSOpenGLPixelFormat* pixelFormat = [[NSOpenGLPixelFormat alloc] initWithAttributes:attrs];
+        if (pixelFormat) {
+            NSOpenGLContext* context = [[NSOpenGLContext alloc] initWithFormat:pixelFormat shareContext:nil];
+            if (context) {
+                [context makeCurrentContext];
+                
+                const char* version = (const char*)glGetString(GL_VERSION);
+                if (version) {
+                    gpu.supportsOpenGL = true;
+                    std::string versionStr(version);
+                    gpu.openGLVersion = std::wstring(versionStr.begin(), versionStr.end());
+                }
+                
+                [NSOpenGLContext clearCurrentContext];
+                [context release];
+            }
+            [pixelFormat release];
+        }
+#else
+        EGLDisplay display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+        if (display != EGL_NO_DISPLAY) {
+            EGLint major, minor;
+            if (eglInitialize(display, &major, &minor)) {
+                EGLConfig config;
+                EGLint numConfigs;
+                EGLint configAttribs[] = {
+                    EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+                    EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
+                    EGL_RED_SIZE, 8,
+                    EGL_GREEN_SIZE, 8,
+                    EGL_BLUE_SIZE, 8,
+                    EGL_ALPHA_SIZE, 8,
+                    EGL_DEPTH_SIZE, 24,
+                    EGL_NONE
+                };
+                
+                if (eglChooseConfig(display, configAttribs, &config, 1, &numConfigs)) {
+                    EGLSurface surface = eglCreateWindowSurface(display, config, nullptr, nullptr);
+                    if (surface != EGL_NO_SURFACE) {
+                        EGLContext context = eglCreateContext(display, config, EGL_NO_CONTEXT, nullptr);
+                        if (context != EGL_NO_CONTEXT) {
+                            if (eglMakeCurrent(display, surface, surface, context)) {
+                                const char* version = (const char*)glGetString(GL_VERSION);
+                                if (version) {
+                                    gpu.supportsOpenGL = true;
+                                    std::string versionStr(version);
+                                    gpu.openGLVersion = std::wstring(versionStr.begin(), versionStr.end());
+                                }
+                            }
+                            eglDestroyContext(display, context);
+                        }
+                        eglDestroySurface(display, surface);
+                    }
+                }
+                eglTerminate(display);
+            }
+        }
+#endif
+    }
+    catch (...) {
+    }
+    return gpu.supportsOpenGL;
+}
+
+bool GpuInfo::DetectVulkanSupport(GpuData& gpu) {
+    try {
+#ifdef PLATFORM_WINDOWS
+        HMODULE vulkanLib = LoadLibraryA("vulkan-1.dll");
+        if (!vulkanLib) {
+            return false;
+        }
+        
+        auto vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)GetProcAddress(vulkanLib, "vkGetInstanceProcAddr");
+        if (!vkGetInstanceProcAddr) {
+            FreeLibrary(vulkanLib);
+            return false;
+        }
+#else
+        void* vulkanLib = dlopen("libvulkan.so", RTLD_LAZY);
+        if (!vulkanLib) {
+            return false;
+        }
+        
+        auto vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)dlsym(vulkanLib, "vkGetInstanceProcAddr");
+        if (!vkGetInstanceProcAddr) {
+            dlclose(vulkanLib);
+            return false;
+        }
+#endif
+
+        auto vkCreateInstance = (PFN_vkCreateInstance)vkGetInstanceProcAddr(nullptr, "vkCreateInstance");
+        if (!vkCreateInstance) {
+#ifdef PLATFORM_WINDOWS
+            FreeLibrary(vulkanLib);
+#else
+            dlclose(vulkanLib);
+#endif
+            return false;
+        }
+
+        VkApplicationInfo appInfo = {};
+        appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+        appInfo.pApplicationName = "TCMT GPU Detection";
+        appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
+        appInfo.pEngineName = "TCMT Engine";
+        appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
+        appInfo.apiVersion = VK_API_VERSION_1_0;
+
+        VkInstanceCreateInfo createInfo = {};
+        createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+        createInfo.pApplicationInfo = &appInfo;
+
+        VkInstance instance;
+        VkResult result = vkCreateInstance(&createInfo, nullptr, &instance);
+        if (result == VK_SUCCESS) {
+            gpu.supportsVulkan = true;
+            
+            uint32_t apiVersion;
+            auto vkEnumerateInstanceVersion = (PFN_vkEnumerateInstanceVersion)vkGetInstanceProcAddr(instance, "vkEnumerateInstanceVersion");
+            if (vkEnumerateInstanceVersion && vkEnumerateInstanceVersion(&apiVersion) == VK_SUCCESS) {
+                uint32_t major = VK_VERSION_MAJOR(apiVersion);
+                uint32_t minor = VK_VERSION_MINOR(apiVersion);
+                uint32_t patch = VK_VERSION_PATCH(apiVersion);
+                gpu.vulkanVersion = std::to_wstring(major) + L"." + std::to_wstring(minor) + L"." + std::to_wstring(patch);
+            } else {
+                gpu.vulkanVersion = L"1.0.0";
+            }
+
+            auto vkEnumeratePhysicalDevices = (PFN_vkEnumeratePhysicalDevices)vkGetInstanceProcAddr(instance, "vkEnumeratePhysicalDevices");
+            auto vkGetPhysicalDeviceProperties = (PFN_vkGetPhysicalDeviceProperties)vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceProperties");
+            
+            if (vkEnumeratePhysicalDevices && vkGetPhysicalDeviceProperties) {
+                uint32_t deviceCount = 0;
+                vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
+                
+                if (deviceCount > 0) {
+                    std::vector<VkPhysicalDevice> devices(deviceCount);
+                    vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
+                    
+                    for (const auto& device : devices) {
+                        VkPhysicalDeviceProperties properties;
+                        vkGetPhysicalDeviceProperties(device, &properties);
+                        
+                        std::string deviceName(properties.deviceName);
+                        std::wstring deviceNameWide(deviceName.begin(), deviceName.end());
+                        
+                        if (gpu.name.find(deviceNameWide) != std::wstring::npos) {
+                            uint32_t driverVersion = properties.driverVersion;
+                            uint32_t major = VK_VERSION_MAJOR(driverVersion);
+                            uint32_t minor = VK_VERSION_MINOR(driverVersion);
+                            uint32_t patch = VK_VERSION_PATCH(driverVersion);
+                            gpu.vulkanDriverVersion = std::to_wstring(major) + L"." + std::to_wstring(minor) + L"." + std::to_wstring(patch);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            auto vkDestroyInstance = (PFN_vkDestroyInstance)vkGetInstanceProcAddr(instance, "vkDestroyInstance");
+            if (vkDestroyInstance) {
+                vkDestroyInstance(instance, nullptr);
+            }
+        }
+
+#ifdef PLATFORM_WINDOWS
+        FreeLibrary(vulkanLib);
+#else
+        dlclose(vulkanLib);
+#endif
+
+        return gpu.supportsVulkan;
+    }
+    catch (...) {
+    }
+    return false;
 }

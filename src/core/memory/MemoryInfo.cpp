@@ -1,20 +1,26 @@
 #include "MemoryInfo.h"
 #include "../Utils/Logger.h"
+#include "../Utils/CrossPlatformSystemInfo.h"
 
 #ifdef PLATFORM_WINDOWS
     #include <windows.h>
-#elif defined(PLATFORM_MACOS)
+    typedef unsigned long long ULONGLONG;
+#elif defined(__APPLE__)
     #include <sys/sysctl.h>
     #include <mach/mach.h>
-    #include <mach/host_statistics.h>
+    #include <mach/mach_types.h>
     #include <mach/mach_host.h>
     #include <unistd.h>
     #include <sys/utsname.h>
-#elif defined(PLATFORM_LINUX)
+    #include <fstream>
+    #include <sstream>
+    typedef unsigned long long ULONGLONG;
+#elif defined(__linux__)
     #include <sys/sysinfo.h>
     #include <fstream>
     #include <sstream>
     #include <unistd.h>
+    typedef unsigned long long ULONGLONG;
 #endif
 
 MemoryInfo::MemoryInfo() {
@@ -269,4 +275,6 @@ uint64_t MemoryInfo::GetMacSwapTotal() const {
     }
     return 0;
 }
-#endif                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           
+#endif
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           

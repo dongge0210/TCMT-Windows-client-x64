@@ -148,8 +148,9 @@ void GpuInfo::DetectGpusViaWmi() {
 }
 
 void GpuInfo::QueryIntelGpuInfo(int index) {
+    #if defined(SUPPORT_DIRECTX)
     IDXGIFactory* pFactory = nullptr;
-    if (FAILED(CreateDXGIFactory(__uuidof(IDXGIFactory), (void**)&pFactory))) {
+    if (FAILED(CreateDXGIFactory(__uuidof(IDXIFactory), (void**)&pFactory))) {
         Logger::Error("无法创建DXGI工厂");
         return;
     }
@@ -163,6 +164,9 @@ void GpuInfo::QueryIntelGpuInfo(int index) {
         pAdapter->Release();
     }
     pFactory->Release();
+#else
+    Logger::Info("DirectX 未启用，跳过 GPU 显存信息查询");
+#endif
 }
 
 void GpuInfo::QueryNvidiaGpuInfo(int index) {

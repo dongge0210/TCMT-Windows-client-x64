@@ -12,6 +12,7 @@
     #include <CoreFoundation/CoreFoundation.h>
     #include <diskarbitration/diskarbitration.h>
     #include <sys/mount.h>
+    #include <sys/stat.h>
     #include <unistd.h>
     #include <thread>
     #include <atomic>
@@ -20,6 +21,7 @@
     #include <set>
     #include <fstream>
     #include <sstream>
+    #include <dirent.h>
     using namespace std::chrono_literals;
 #elif defined(PLATFORM_LINUX)
     #include <libudev.h>
@@ -32,6 +34,7 @@
     #include <set>
     #include <fstream>
     #include <sstream>
+    #include <dirent.h>
     using namespace std::chrono_literals;
 #endif
 
@@ -89,78 +92,89 @@ private:
     
     // macOS USB监控实现
 #ifdef PLATFORM_MACOS
-void USBInfoManager::USBMonitorImpl::MonitorMacUSBDevices() {
-    try {
-        // 获取当前挂载的USB设备
-        struct statfs *mounts;
-        int count = getmntinfo(&mounts, MNT_WAIT);
-        if (count == 0) return;
-        
-        std::set<std::string> newMountPoints;
-        
-        for (int i = 0; i < count; i++) {
-            std::string mountPoint = mounts[i].f_mntonname;
-            std::string devicePath = mounts[i].f_mntfromname;
+    void MonitorMacUSBDevices() {
+        try {
+            // 获取当前挂载的USB设备
+            struct statfs *mounts;
+            int count = getmntinfo(&mounts, MNT_WAIT);
+            if (count == 0) return;
             
-            // 检查是否为USB设备
-            if (devicePath.find("/dev/disk") == 0) {
-                std::string actualDevicePath = GetMacDevicePath(mountPoint);
-                if (!actualDevicePath.empty() && IsMacUSBDevice(actualDevicePath)) {
-                    newMountPoints.insert(mountPoint);
-                }
-            }
-        }
-        
-        // 比较新旧设备列表
-        {
-            std::lock_guard<std::mutex> lock(devicesMutex);
-            std::set<std::string> oldMountPoints;
-            for (const auto& device : currentDevices) {
-                oldMountPoints.insert(device.mountPoint);
-            }
+            std::set<std::string> newMountPoints;
             
-            // 检测新插入的设备
-            for (const auto& mountPoint : newMountPoints) {
-                if (oldMountPoints.find(mountPoint) == oldMountPoints.end()) {
-                    USBDeviceInfo info;
-                    if (GetMacDeviceInfo(mountPoint, info)) {
-                        info.state = USBState::Inserted;
-                        info.lastUpdate = time(nullptr);
-                        currentDevices.push_back(info);
-                        Logger::Info("USB inserted: " + mountPoint + " (" + info.volumeLabel + ")");
-                        
-                        if (parentManager->stateCallback) {
-                            parentManager->stateCallback(info);
-                        }
+            for (int i = 0; i < count; i++) {
+                std::string mountPoint = mounts[i].f_mntonname;
+                std::string devicePath = mounts[i].f_mntfromname;
+                
+                // 检查是否为USB设备
+                if (devicePath.find("/dev/disk") == 0) {
+                    std::string actualDevicePath = parentManager->GetMacDevicePath(mountPoint);
+                    if (!actualDevicePath.empty() && parentManager->IsMacUSBDevice(actualDevicePath)) {
+                        newMountPoints.insert(mountPoint);
                     }
                 }
             }
             
-            // 检测拔出的设备
-            for (const auto& mountPoint : oldMountPoints) {
-                if (newMountPoints.find(mountPoint) == newMountPoints.end()) {
-                    for (auto it = currentDevices.begin(); it != currentDevices.end(); ++it) {
-                        if (it->mountPoint == mountPoint) {
-                            it->state = USBState::Removed;
-                            it->lastUpdate = time(nullptr);
-                            Logger::Info("USB removed: " + mountPoint + " (" + it->volumeLabel + ")");
+            // 比较新旧设备列表
+            {
+                std::lock_guard<std::mutex> lock(devicesMutex);
+                std::set<std::string> oldMountPoints;
+                for (const auto& device : currentDevices) {
+                    oldMountPoints.insert(device.mountPoint);
+                }
+                
+                // 检测新插入的设备
+                for (const auto& mountPoint : newMountPoints) {
+                    if (oldMountPoints.find(mountPoint) == oldMountPoints.end()) {
+                        USBDeviceInfo info;
+                        if (parentManager->GetMacDeviceInfo(mountPoint, info)) {
+                            info.state = USBState::Inserted;
+                            info.lastUpdate = time(nullptr);
+                            currentDevices.push_back(info);
+                            Logger::Info("USB inserted: " + mountPoint + " (" + info.volumeLabel + ")");
                             
                             if (parentManager->stateCallback) {
-                                parentManager->stateCallback(*it);
+                                parentManager->stateCallback(info);
                             }
-                            break;
+                        }
+                    }
+                }
+                
+                // 检测拔出的设备
+                for (const auto& mountPoint : oldMountPoints) {
+                    if (newMountPoints.find(mountPoint) == newMountPoints.end()) {
+                        for (auto it = currentDevices.begin(); it != currentDevices.end(); ++it) {
+                            if (it->mountPoint == mountPoint) {
+                                it->state = USBState::Removed;
+                                it->lastUpdate = time(nullptr);
+                                Logger::Info("USB removed: " + mountPoint + " (" + it->volumeLabel + ")");
+                                
+                                if (parentManager->stateCallback) {
+                                    parentManager->stateCallback(*it);
+                                }
+                                break;
+                            }
                         }
                     }
                 }
             }
         }
+        catch (const std::exception& e) {
+            Logger::Error("MonitorMacUSBDevices failed: " + std::string(e.what()));
+        }
     }
-    catch (const std::exception& e) {
-        Logger::Error("MonitorMacUSBDevices failed: " + std::string(e.what()));
-    }
-}
+#endif
+    
+    USBInfoManager* parentManager;
+    std::thread monitorThread;
+    std::atomic<bool> stopFlag;
+    std::set<std::string> currentUSBPaths;
+    std::vector<USBDeviceInfo> currentDevices;
+    std::mutex devicesMutex;
+};
 
-std::string USBInfoManager::USBMonitorImpl::GetMacDevicePath(const std::string& mountPoint) {
+
+
+std::string USBInfoManager::GetMacDevicePath(const std::string& mountPoint) {
     try {
         // 通过diskutil获取设备路径
         std::string command = "diskutil info " + mountPoint + " | grep \"Device Node\"";
@@ -189,26 +203,36 @@ std::string USBInfoManager::USBMonitorImpl::GetMacDevicePath(const std::string& 
     return "";
 }
 
-bool USBInfoManager::USBMonitorImpl::IsMacUSBDevice(const std::string& devicePath) {
+bool USBInfoManager::IsMacUSBDevice(const std::string& devicePath) {
     try {
+        // 首先过滤掉系统卷
+        if (devicePath.find("/dev/disk1") == 0) {
+            // disk1 通常是系统卷
+            return false;
+        }
+        
         // 检查设备是否为外部设备
-        std::string command = "ioreg -p IODeviceTree -r -k \"IOPropertyMatch\" \"" + devicePath + "\" | grep \"External\"";
+        std::string command = "diskutil info " + devicePath + " 2>/dev/null | grep -E \"External|Removable|Protocol\"";
         FILE* pipe = popen(command.c_str(), "r");
         if (!pipe) return false;
         
         char buffer[256];
+        bool isExternal = false;
+        bool isUSB = false;
+        
         while (fgets(buffer, sizeof(buffer), pipe)) {
-            if (strstr(buffer, "External") != nullptr) {
-                pclose(pipe);
-                return true;
+            std::string line(buffer);
+            if (line.find("External") != std::string::npos) {
+                isExternal = true;
+            }
+            if (line.find("USB") != std::string::npos || line.find("Removable Media") != std::string::npos) {
+                isUSB = true;
             }
         }
         pclose(pipe);
         
-        // 备用方法：检查设备路径特征
-        if (devicePath.find("/dev/disk2") == 0 || devicePath.find("/dev/disk3") == 0) {
-            return true;
-        }
+        // 只有同时是外部设备和USB/可移动媒体才认为是USB设备
+        return isExternal && isUSB;
     }
     catch (const std::exception& e) {
         Logger::Error("IsMacUSBDevice failed: " + std::string(e.what()));
@@ -217,7 +241,7 @@ bool USBInfoManager::USBMonitorImpl::IsMacUSBDevice(const std::string& devicePat
     return false;
 }
 
-void USBInfoManager::USBMonitorImpl::GetMacDeviceProperties(const std::string& devicePath, USBDeviceInfo& info) {
+void USBInfoManager::GetMacDeviceProperties(const std::string& devicePath, USBDeviceInfo& info) {
     try {
         // 获取设备详细信息
         std::string command = "diskutil info " + devicePath;
@@ -272,7 +296,7 @@ void USBInfoManager::USBMonitorImpl::GetMacDeviceProperties(const std::string& d
     }
 }
 
-bool USBInfoManager::USBMonitorImpl::GetMacDeviceInfo(const std::string& mountPoint, USBDeviceInfo& info) {
+bool USBInfoManager::GetMacDeviceInfo(const std::string& mountPoint, USBDeviceInfo& info) {
     try {
         info.mountPoint = mountPoint;
         info.drivePath = mountPoint; // macOS使用挂载点作为驱动路径
@@ -293,7 +317,7 @@ bool USBInfoManager::USBMonitorImpl::GetMacDeviceInfo(const std::string& mountPo
         GetMacDeviceProperties(info.devicePath, info);
         
         // 检查update文件夹
-        info.isUpdateReady = parentManager->HasUpdateFolder(mountPoint);
+        info.isUpdateReady = HasUpdateFolder(mountPoint);
         
         return true;
     }
@@ -303,17 +327,16 @@ bool USBInfoManager::USBMonitorImpl::GetMacDeviceInfo(const std::string& mountPo
     }
 }
 
-DASessionRef USBInfoManager::USBMonitorImpl::CreateDiskArbitrationSession() {
+DASessionRef USBInfoManager::CreateDiskArbitrationSession() {
     DASessionRef session = DASessionCreate(kCFAllocatorDefault);
     return session;
 }
 
-void USBInfoManager::USBMonitorImpl::ReleaseDiskArbitrationSession(DASessionRef session) {
+void USBInfoManager::ReleaseDiskArbitrationSession(DASessionRef session) {
     if (session) {
         CFRelease(session);
     }
 }
-#endif
 
 // Windows实现
 #ifdef PLATFORM_WINDOWS
@@ -399,6 +422,7 @@ void USBInfoManager::USBMonitorImpl::DetectUSBChanges() {
     std::vector<USBDeviceInfo> currentDevices;
     std::mutex devicesMutex;
 };
+#endif
 
 // USBInfoManager 实现
 USBInfoManager::USBInfoManager() : pImpl(std::make_unique<USBMonitorImpl>(this)) {}
@@ -417,6 +441,8 @@ bool USBInfoManager::Initialize() {
         return false;
     }
 }
+
+
 
 void USBInfoManager::Cleanup() {
     StopMonitoring();
@@ -503,6 +529,228 @@ bool USBInfoManager::GetDriveInfo(const std::string& drivePath, USBDeviceInfo& i
 }
 #endif
 
+// Linux USB监控实现
+#ifdef PLATFORM_LINUX
+void USBInfoManager::USBMonitorImpl::MonitorLinuxUSBDevices() {
+    try {
+        // 获取当前挂载的USB设备
+        std::set<std::string> newMountPoints;
+        
+        // 读取 /proc/mounts 获取挂载点信息
+        std::ifstream mounts("/proc/mounts");
+        if (!mounts.is_open()) {
+            Logger::Error("无法打开 /proc/mounts");
+            return;
+        }
+        
+        std::string line;
+        while (std::getline(mounts, line)) {
+            std::istringstream iss(line);
+            std::string devicePath, mountPoint, fsType;
+            iss >> devicePath >> mountPoint >> fsType;
+            
+            // 检查是否为USB设备 (通常在 /dev/sd* 或 /dev/usb*)
+            if ((devicePath.find("/dev/sd") == 0 || devicePath.find("/dev/usb") == 0) &&
+                parentManager->IsLinuxUSBDevice(devicePath)) {
+                newMountPoints.insert(mountPoint);
+            }
+        }
+        
+        // 比较新旧设备列表
+        {
+            std::lock_guard<std::mutex> lock(devicesMutex);
+            std::set<std::string> oldMountPoints;
+            for (const auto& device : currentDevices) {
+                oldMountPoints.insert(device.mountPoint);
+            }
+            
+            // 检测新插入的设备
+            for (const auto& mountPoint : newMountPoints) {
+                if (oldMountPoints.find(mountPoint) == oldMountPoints.end()) {
+                    USBDeviceInfo info;
+                    if (parentManager->GetLinuxDeviceInfo(mountPoint, info)) {
+                        info.state = USBState::Inserted;
+                        info.lastUpdate = time(nullptr);
+                        currentDevices.push_back(info);
+                        Logger::Info("USB inserted: " + mountPoint + " (" + info.volumeLabel + ")");
+                        
+                        if (parentManager->stateCallback) {
+                            parentManager->stateCallback(info);
+                        }
+                    }
+                }
+            }
+            
+            // 检测拔出的设备
+            for (const auto& mountPoint : oldMountPoints) {
+                if (newMountPoints.find(mountPoint) == newMountPoints.end()) {
+                    for (auto it = currentDevices.begin(); it != currentDevices.end(); ++it) {
+                        if (it->mountPoint == mountPoint) {
+                            it->state = USBState::Removed;
+                            it->lastUpdate = time(nullptr);
+                            Logger::Info("USB removed: " + mountPoint + " (" + it->volumeLabel + ")");
+                            
+                            if (parentManager->stateCallback) {
+                                parentManager->stateCallback(*it);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    catch (const std::exception& e) {
+        Logger::Error("MonitorLinuxUSBDevices failed: " + std::string(e.what()));
+    }
+}
+
+bool USBInfoManager::GetLinuxDeviceInfo(const std::string& mountPoint, USBDeviceInfo& info) {
+    try {
+        info.mountPoint = mountPoint;
+        info.drivePath = mountPoint; // Linux使用挂载点作为驱动路径
+        
+        // 获取设备路径
+        info.devicePath = GetLinuxDevicePath(mountPoint);
+        if (info.devicePath.empty()) {
+            Logger::Warn("Cannot get device path for mount point: " + mountPoint);
+            return false;
+        }
+        
+        // 检查是否为USB设备
+        if (!IsLinuxUSBDevice(info.devicePath)) {
+            return false;
+        }
+        
+        // 获取设备属性
+        GetLinuxDeviceProperties(info.devicePath, info);
+        
+        // 检查update文件夹
+        info.isUpdateReady = HasUpdateFolder(mountPoint);
+        
+        return true;
+    }
+    catch (const std::exception& e) {
+        Logger::Error("GetLinuxDeviceInfo failed: " + std::string(e.what()));
+        return false;
+    }
+}
+
+std::string USBInfoManager::GetLinuxDevicePath(const std::string& mountPoint) {
+    try {
+        // 读取 /proc/mounts 获取设备路径
+        std::ifstream mounts("/proc/mounts");
+        if (!mounts.is_open()) {
+            return "";
+        }
+        
+        std::string line;
+        while (std::getline(mounts, line)) {
+            std::istringstream iss(line);
+            std::string devicePath, mp;
+            iss >> devicePath >> mp;
+            
+            if (mp == mountPoint) {
+                return devicePath;
+            }
+        }
+    }
+    catch (const std::exception& e) {
+        Logger::Error("GetLinuxDevicePath failed: " + std::string(e.what()));
+    }
+    
+    return "";
+}
+
+void USBInfoManager::GetLinuxDeviceProperties(const std::string& devicePath, USBDeviceInfo& info) {
+    try {
+        // 获取设备详细信息通过udev
+        struct udev* udev = udev_new();
+        if (!udev) {
+            Logger::Error("Failed to create udev context");
+            return;
+        }
+        
+        struct udev_device* device = udev_device_new_from_devname(udev, devicePath.c_str());
+        if (!device) {
+            Logger::Warn("Cannot find udev device for: " + devicePath);
+            udev_unref(udev);
+            return;
+        }
+        
+        // 获取设备属性
+        const char* vendor = udev_device_get_sysattr_value(device, "manufacturer");
+        if (vendor) {
+            info.vendorId = vendor;
+        }
+        
+        const char* product = udev_device_get_sysattr_value(device, "product");
+        if (product) {
+            info.volumeLabel = product;
+        }
+        
+        const char* serial = udev_device_get_sysattr_value(device, "serial");
+        if (serial) {
+            info.serialNumber = serial;
+        }
+        
+        // 获取磁盘空间信息
+        struct statvfs vfs;
+        if (statvfs(info.mountPoint.c_str(), &vfs) == 0) {
+            info.totalSize = vfs.f_blocks * vfs.f_frsize;
+            info.freeSpace = vfs.f_bavail * vfs.f_frsize;
+            info.usedSpace = info.totalSize - info.freeSpace;
+        }
+        
+        info.isRemovable = true;
+        
+        udev_device_unref(device);
+        udev_unref(udev);
+    }
+    catch (const std::exception& e) {
+        Logger::Error("GetLinuxDeviceProperties failed: " + std::string(e.what()));
+    }
+}
+
+bool USBInfoManager::IsLinuxUSBDevice(const std::string& devicePath) {
+    try {
+        // 检查设备是否为USB设备
+        struct udev* udev = udev_new();
+        if (!udev) {
+            return false;
+        }
+        
+        struct udev_device* device = udev_device_new_from_devname(udev, devicePath.c_str());
+        if (!device) {
+            udev_unref(udev);
+            return false;
+        }
+        
+        // 检查设备的父设备是否为USB设备
+        struct udev_device* parent = udev_device_get_parent(device);
+        bool isUSB = false;
+        
+        while (parent && !isUSB) {
+            const char* subsystem = udev_device_get_subsystem(parent);
+            if (subsystem && std::string(subsystem) == "usb") {
+                isUSB = true;
+                break;
+            }
+            parent = udev_device_get_parent(parent);
+        }
+        
+        udev_device_unref(device);
+        udev_unref(udev);
+        
+        return isUSB;
+    }
+    catch (const std::exception& e) {
+        Logger::Error("IsLinuxUSBDevice failed: " + std::string(e.what()));
+        return false;
+    }
+}
+#endif
+
 bool USBInfoManager::HasUpdateFolder(const std::string& path) {
     try {
 #ifdef PLATFORM_WINDOWS
@@ -514,22 +762,22 @@ bool USBInfoManager::HasUpdateFolder(const std::string& path) {
         }
         return false;
 #else
+        // macOS/Linux实现
         std::string updatePath = path + "/update";
         struct stat st;
         if (stat(updatePath.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
-            // 检查目录是否为空
             DIR* dir = opendir(updatePath.c_str());
             if (dir) {
                 struct dirent* entry;
-                bool hasFiles = false;
+                int count = 0;
                 while ((entry = readdir(dir)) != nullptr) {
                     if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
-                        hasFiles = true;
+                        count++;
                         break;
                     }
                 }
                 closedir(dir);
-                return hasFiles;
+                return count > 0;
             }
         }
         return false;

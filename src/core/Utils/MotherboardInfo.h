@@ -1,6 +1,9 @@
 #pragma once
 #include <string>
+
+#ifdef PLATFORM_WINDOWS
 #include <wbemidl.h>
+#endif
 
 struct MotherboardInfo {
     std::string manufacturer;
@@ -15,6 +18,7 @@ struct MotherboardInfo {
     MotherboardInfo() : isValid(false) {}
 };
 
+#ifdef PLATFORM_WINDOWS
 class MotherboardInfoCollector {
 public:
     static MotherboardInfo CollectMotherboardInfo(IWbemServices* pSvc);
@@ -24,3 +28,4 @@ private:
     static bool QueryWmiProperty(IWbemServices* pSvc, const std::wstring& className, 
                                 const std::wstring& propertyName, std::string& result);
 };
+#endif

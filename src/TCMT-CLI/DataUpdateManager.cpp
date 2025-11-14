@@ -333,7 +333,11 @@ std::string DataUpdateManager::GetCurrentTimestamp() {
     std::ostringstream oss;
     char buf[32];
     struct tm tm_info;
+#ifdef PLATFORM_WINDOWS
     localtime_s(&tm_info, &time_t);
+#else
+    localtime_r(&time_t, &tm_info);
+#endif
     std::strftime(buf, sizeof(buf), "%H:%M:%S", &tm_info);
     oss << buf;
 #if defined(_MSC_VER)

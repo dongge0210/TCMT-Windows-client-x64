@@ -1,11 +1,11 @@
 #pragma once
 
-#include <windows.h>
 #include <string>
 #include <functional>
 #include <thread>
 #include <atomic>
 #include <vector>
+#include "../core/common/CrossPlatformStubs.h"
 
 /**
  * Diagnostics pipe snapshot structure

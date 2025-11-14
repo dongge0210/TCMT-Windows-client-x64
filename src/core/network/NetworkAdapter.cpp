@@ -1,5 +1,6 @@
 #include "NetworkAdapter.h"
 #include "../Utils/Logger.h"
+#include "../Utils/CrossPlatformSystemInfo.h"
 #include <sstream>
 #include <iomanip>
 #include <vector>
@@ -18,6 +19,9 @@
     #include <sys/socket.h>
     #include <netinet/in.h>
     #include <arpa/inet.h>
+    #include <net/if.h>
+    #include <net/if_dl.h>
+    #include <ifaddrs.h>
     #include <ifaddrs.h>
     #include <net/if.h>
     #include <net/if_media.h>
@@ -44,15 +48,17 @@
 NetworkAdapter::NetworkAdapter(WmiManager& manager)
     : wmiManager(manager), initialized(false) {
     Logger::Debug("NetworkAdapter: Initializing Windows network adapter");
-    Initialize();
-}
 #else
-NetworkAdapter::NetworkAdapter()
-    : initialized(false) {
-    Logger::Debug("NetworkAdapter: Initializing network adapter");
+NetworkAdapter::NetworkAdapter() : initialized(false) {
+    Logger::Debug("NetworkAdapter: Initializing cross-platform network adapter");
+#endif
+    
+    // 初始化跨平台系统信息管理器
+    auto& systemInfo = CrossPlatformSystemInfo::GetInstance();
+    systemInfo.Initialize();
+    
     Initialize();
 }
-#endif
 
 NetworkAdapter::~NetworkAdapter() {
     Cleanup();
@@ -642,3 +648,719 @@ void NetworkAdapter::SafeRelease(IUnknown* pInterface) {
 const std::vector<NetworkAdapter::AdapterInfo>& NetworkAdapter::GetAdapters() const {
     return adapters;
 }
+// 跨平台网络适配器检测实现
+void NetworkAdapter::Initialize() {
+    if (initialized) {
+        return;
+    }
+
+    adapters.clear();
+    
+#ifdef PLATFORM_WINDOWS
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        Logger::Error("NetworkAdapter: WSAStartup failed");
+        return;
+    }
+#endif
+
+    QueryAdapterInfo();
+    initialized = true;
+}
+
+void NetworkAdapter::QueryAdapterInfo() {
+    adapters.clear();
+    
+#ifdef PLATFORM_WINDOWS
+    QueryWmiAdapterInfo();
+    UpdateAdapterAddresses();
+#else
+    // 使用跨平台系统信息管理器
+    auto& systemInfo = CrossPlatformSystemInfo::GetInstance();
+    if (systemInfo.Initialize()) {
+        auto networkDevices = systemInfo.GetNetworkAdapters();
+        
+        for (const auto& device : networkDevices) {
+            AdapterInfo adapter;
+            
+            // 转换设备信息到适配器数据结构
+            adapter.name = device.name;
+            adapter.description = device.description;
+            adapter.deviceId = device.deviceId;
+            
+            // 从属性中提取信息
+            auto ipIt = device.properties.find("ip_address");
+            if (ipIt != device.properties.end()) {
+                adapter.ip = ipIt->second;
+                adapter.ipAddresses.push_back(ipIt->second);
+            }
+            
+            auto gatewayIt = device.properties.find("gateway");
+            if (gatewayIt != device.properties.end()) {
+                adapter.gateway = gatewayIt->second;
+            }
+            
+            auto macIt = device.properties.find("mac_address");
+            if (macIt != device.properties.end()) {
+                adapter.mac = macIt->second;
+            }
+            
+            auto speedIt = device.properties.find("speed");
+            if (speedIt != device.properties.end()) {
+                try {
+                    adapter.speed = std::stoull(speedIt->second);
+                    adapter.speedString = FormatSpeed(adapter.speed);
+                }
+                catch (...) {
+                    adapter.speed = 0;
+                    adapter.speedString = "Unknown";
+                }
+            }
+            
+            // 设置状态信息
+            adapter.isEnabled = true;
+            adapter.isConnected = (adapter.speed > 0);
+            adapter.isVirtual = IsVirtualAdapter(adapter.name);
+            adapter.isWireless = (adapter.name.find("wl") == 0 || adapter.name.find("wlan") == 0);
+            
+            // 连接状态
+            if (adapter.isConnected) {
+                adapter.connectionStatus = "Connected";
+            } else {
+                adapter.connectionStatus = "Disconnected";
+            }
+            
+            // 默认值
+            adapter.mtu = 1500;
+            adapter.bytesReceived = 0;
+            adapter.bytesSent = 0;
+            adapter.packetsReceived = 0;
+            adapter.packetsSent = 0;
+            
+            adapters.push_back(adapter);
+        }
+    }
+    
+    // 如果跨平台管理器没有找到适配器，使用平台特定方法
+    if (adapters.empty()) {
+#if defined(PLATFORM_MACOS)
+        QueryMacNetworkAdapters();
+        UpdateMacAdapterAddresses();
+#elif defined(PLATFORM_LINUX)
+        QueryLinuxNetworkAdapters();
+        UpdateLinuxAdapterAddresses();
+#endif
+    }
+#endif
+}
+
+#ifdef PLATFORM_WINDOWS
+void NetworkAdapter::QueryWmiAdapterInfo() {
+    try {
+        std::wstring query = L"SELECT * FROM Win32_NetworkAdapter WHERE NetConnectionStatus = 2";
+        auto results = wmiManager.ExecuteQuery(query);
+        
+        for (const auto& result : results) {
+            AdapterInfo info;
+            
+            // 基本信息
+            auto name = result[L"Name"];
+            auto description = result[L"Description"];
+            auto mac = result[L"MACAddress"];
+            auto speed = result[L"Speed"];
+            auto adapterType = result[L"AdapterType"];
+            auto netConnectionStatus = result[L"NetConnectionStatus"];
+            
+            if (!name.empty()) {
+                info.name = std::string(name.begin(), name.end());
+            }
+            
+            if (!description.empty()) {
+                info.description = std::string(description.begin(), description.end());
+            }
+            
+            if (!mac.empty()) {
+                info.mac = std::string(mac.begin(), mac.end());
+            }
+            
+            if (!speed.empty()) {
+                try {
+                    info.speed = std::stoull(speed);
+                    info.speedString = FormatSpeed(info.speed);
+                } catch (...) {
+                    info.speed = 0;
+                    info.speedString = "Unknown";
+                }
+            }
+            
+            if (!adapterType.empty()) {
+                info.adapterType = std::string(adapterType.begin(), adapterType.end());
+            }
+            
+            // 连接状态
+            info.isConnected = (netConnectionStatus == L"2");
+            info.isEnabled = true;
+            
+            // 检测虚拟适配器
+            info.isVirtual = IsVirtualAdapter(name);
+            
+            // 检测无线适配器
+            info.isWireless = (name.find(L"Wireless") != std::wstring::npos || 
+                              name.find(L"Wi-Fi") != std::wstring::npos ||
+                              description.find(L"Wireless") != std::wstring::npos);
+            
+            // 连接状态描述
+            if (info.isConnected) {
+                info.connectionStatus = "Connected";
+            } else {
+                info.connectionStatus = "Disconnected";
+            }
+            
+            // 初始化统计字段
+            info.bytesReceived = 0;
+            info.bytesSent = 0;
+            info.packetsReceived = 0;
+            info.packetsSent = 0;
+            info.mtu = 1500; // 默认MTU
+            
+            adapters.push_back(info);
+        }
+    }
+    catch (const std::exception& e) {
+        Logger::Error("NetworkAdapter: WMI query failed: " + std::string(e.what()));
+    }
+}
+
+void NetworkAdapter::UpdateAdapterAddresses() {
+    ULONG bufferSize = 0;
+    
+    // 获取所需的缓冲区大小
+    if (GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_GATEWAYS, nullptr, nullptr, &bufferSize) == ERROR_BUFFER_OVERFLOW) {
+        std::vector<BYTE> buffer(bufferSize);
+        PIP_ADAPTER_ADDRESSES pAddresses = reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buffer.data());
+        
+        if (GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_GATEWAYS, nullptr, pAddresses, &bufferSize) == NO_ERROR) {
+            for (PIP_ADAPTER_ADDRESSES pCurrAddresses = pAddresses; pCurrAddresses != nullptr; pCurrAddresses = pCurrAddresses->Next) {
+                // 查找对应的适配器
+                for (auto& adapter : adapters) {
+                    std::wstring adapterName(pCurrAddresses->FriendlyName);
+                    std::string adapterNameStr(adapterName.begin(), adapterName.end());
+                    
+                    if (adapter.name == adapterNameStr) {
+                        // 更新IP地址
+                        adapter.ipAddresses.clear();
+                        
+                        // IPv4地址
+                        for (PIP_ADAPTER_UNICAST_ADDRESS pUnicast = pCurrAddresses->FirstUnicastAddress; pUnicast != nullptr; pUnicast = pUnicast->Next) {
+                            if (pUnicast->Address.lpSockaddr->sa_family == AF_INET) {
+                                sockaddr_in* pSockAddr = reinterpret_cast<sockaddr_in*>(pUnicast->Address.lpSockaddr);
+                                char strBuffer[INET_ADDRSTRLEN];
+                                inet_ntop(AF_INET, &pSockAddr->sin_addr, strBuffer, INET_ADDRSTRLEN);
+                                adapter.ipAddresses.push_back(strBuffer);
+                                if (adapter.ip.empty()) {
+                                    adapter.ip = strBuffer;
+                                }
+                            } else if (pUnicast->Address.lpSockaddr->sa_family == AF_INET6) {
+                                sockaddr_in6* pSockAddr = reinterpret_cast<sockaddr_in6*>(pUnicast->Address.lpSockaddr);
+                                char strBuffer[INET6_ADDRSTRLEN];
+                                inet_ntop(AF_INET6, &pSockAddr->sin6_addr, strBuffer, INET6_ADDRSTRLEN);
+                                adapter.ipv6Address = strBuffer;
+                            }
+                        }
+                        
+                        // 网关
+                        for (PIP_ADAPTER_GATEWAY_ADDRESS pGateway = pCurrAddresses->FirstGatewayAddress; pGateway != nullptr; pGateway = pGateway->Next) {
+                            if (pGateway->Address.lpSockaddr->sa_family == AF_INET) {
+                                sockaddr_in* pSockAddr = reinterpret_cast<sockaddr_in*>(pGateway->Address.lpSockaddr);
+                                char strBuffer[INET_ADDRSTRLEN];
+                                inet_ntop(AF_INET, &pSockAddr->sin_addr, strBuffer, INET_ADDRSTRLEN);
+                                adapter.gateway = strBuffer;
+                            } else if (pGateway->Address.lpSockaddr->sa_family == AF_INET6) {
+                                sockaddr_in6* pSockAddr = reinterpret_cast<sockaddr_in6*>(pGateway->Address.lpSockaddr);
+                                char strBuffer[INET6_ADDRSTRLEN];
+                                inet_ntop(AF_INET6, &pSockAddr->sin6_addr, strBuffer, INET6_ADDRSTRLEN);
+                                adapter.ipv6Gateway = strBuffer;
+                            }
+                        }
+                        
+                        // MTU
+                        adapter.mtu = pCurrAddresses->Mtu;
+                        
+                        // 获取统计信息
+                        if (pCurrAddresses->OperStatus == IfOperStatusUp) {
+                            MIB_IF_ROW2 ifRow;
+                            memset(&ifRow, 0, sizeof(MIB_IF_ROW2));
+                            ifRow.InterfaceLuid = pCurrAddresses->Luid;
+                            
+                            if (GetIfEntry2(&ifRow) == NO_ERROR) {
+                                adapter.bytesReceived = ifRow.InOctets;
+                                adapter.bytesSent = ifRow.OutOctets;
+                                adapter.packetsReceived = ifRow.InUcastPkts + ifRow.InNUcastPkts;
+                                adapter.packetsSent = ifRow.OutUcastPkts + ifRow.OutNUcastPkts;
+                            }
+                        }
+                        
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+#elif defined(PLATFORM_MACOS)
+void NetworkAdapter::QueryMacNetworkAdapters() {
+    struct ifaddrs* ifaddrsPtr = nullptr;
+    
+    if (getifaddrs(&ifaddrsPtr) == 0) {
+        for (struct ifaddrs* ifa = ifaddrsPtr; ifa != nullptr; ifa = ifa->ifa_next) {
+            if (ifa->ifa_addr == nullptr || (ifa->ifa_flags & IFF_UP) == 0) {
+                continue;
+            }
+            
+            std::string interfaceName(ifa->ifa_name);
+            
+            // 检查是否已经处理过这个接口
+            bool found = false;
+            for (const auto& adapter : adapters) {
+                if (adapter.name == interfaceName) {
+                    found = true;
+                    break;
+                }
+            }
+            
+            if (found) {
+                continue;
+            }
+            
+            AdapterInfo info;
+            info.name = interfaceName;
+            info.isEnabled = (ifa->ifa_flags & IFF_UP) != 0;
+            info.isConnected = (ifa->ifa_flags & IFF_RUNNING) != 0;
+            info.isVirtual = IsVirtualAdapter(interfaceName);
+            
+            // 检测无线适配器
+            info.isWireless = (interfaceName.find("en") == 0);
+            
+            // 连接状态
+            if (info.isConnected) {
+                info.connectionStatus = "Connected";
+            } else {
+                info.connectionStatus = "Disconnected";
+            }
+            
+            // 获取MAC地址
+            if (ifa->ifa_addr->sa_family == AF_LINK) {
+                struct sockaddr_dl* sdl = (struct sockaddr_dl*)ifa->ifa_addr;
+                if (sdl->sdl_alen == 6) {
+                    unsigned char* mac = (unsigned char*)LLADDR(sdl);
+                    info.mac = FormatMacAddress(mac, 6);
+                }
+            }
+            
+            // 获取接口类型和速度
+            GetInterfaceMTU(interfaceName, info);
+            GetInterfaceStats(interfaceName, info);
+            
+            // 默认值
+            info.speed = 0;
+            info.speedString = "Unknown";
+            info.adapterType = "Ethernet";
+            
+            adapters.push_back(info);
+        }
+        
+        freeifaddrs(ifaddrsPtr);
+    }
+}
+
+void NetworkAdapter::UpdateMacAdapterAddresses() {
+    struct ifaddrs* ifaddrsPtr = nullptr;
+    
+    if (getifaddrs(&ifaddrsPtr) == 0) {
+        for (struct ifaddrs* ifa = ifaddrsPtr; ifa != nullptr; ifa = ifa->ifa_next) {
+            if (ifa->ifa_addr == nullptr) {
+                continue;
+            }
+            
+            std::string interfaceName(ifa->ifa_name);
+            
+            // 查找对应的适配器
+            for (auto& adapter : adapters) {
+                if (adapter.name == interfaceName) {
+                    if (ifa->ifa_addr->sa_family == AF_INET) {
+                        struct sockaddr_in* addr_in = (struct sockaddr_in*)ifa->ifa_addr;
+                        char strBuffer[INET_ADDRSTRLEN];
+                        inet_ntop(AF_INET, &(addr_in->sin_addr), strBuffer, INET_ADDRSTRLEN);
+                        
+                        // 检查是否已存在
+                        bool exists = false;
+                        for (const auto& ip : adapter.ipAddresses) {
+                            if (ip == strBuffer) {
+                                exists = true;
+                                break;
+                            }
+                        }
+                        
+                        if (!exists) {
+                            adapter.ipAddresses.push_back(strBuffer);
+                            if (adapter.ip.empty()) {
+                                adapter.ip = strBuffer;
+                            }
+                        }
+                    } else if (ifa->ifa_addr->sa_family == AF_INET6) {
+                        struct sockaddr_in6* addr_in6 = (struct sockaddr_in6*)ifa->ifa_addr;
+                        char strBuffer[INET6_ADDRSTRLEN];
+                        inet_ntop(AF_INET6, &(addr_in6->sin6_addr), strBuffer, INET6_ADDRSTRLEN);
+                        adapter.ipv6Address = strBuffer;
+                    }
+                    break;
+                }
+            }
+        }
+        
+        freeifaddrs(ifaddrsPtr);
+    }
+    
+    // 获取网关信息
+    int mib[] = {CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_DUMP, 0};
+    size_t len;
+    
+    if (sysctl(mib, 6, nullptr, &len, nullptr, 0) == 0) {
+        std::vector<char> buffer(len);
+        if (sysctl(mib, 6, buffer.data(), &len, nullptr, 0) == 0) {
+            struct rt_msghdr* rtm = (struct rt_msghdr*)buffer.data();
+            struct sockaddr_in* sin = (struct sockaddr_in*)(rtm + 1);
+            struct sockaddr_in* gateway = (struct sockaddr_in*)((char*)sin + (sin->sin_len));
+            
+            if (rtm->rtm_addrs & RTA_GATEWAY) {
+                char gatewayStr[INET_ADDRSTRLEN];
+                inet_ntop(AF_INET, &(gateway->sin_addr), gatewayStr, INET_ADDRSTRLEN);
+                
+                for (auto& adapter : adapters) {
+                    if (!adapter.ip.empty()) {
+                        adapter.gateway = gatewayStr;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+void NetworkAdapter::GetInterfaceMTU(const std::string& interfaceName, AdapterInfo& info) const {
+    int mib[] = {CTL_NET, PF_ROUTE, 0, AF_LINK, NET_RT_IFLIST, 0};
+    size_t len;
+    
+    if (sysctl(mib, 6, nullptr, &len, nullptr, 0) == 0) {
+        std::vector<char> buffer(len);
+        if (sysctl(mib, 6, buffer.data(), &len, nullptr, 0) == 0) {
+            struct if_msghdr* ifm = (struct if_msghdr*)buffer.data();
+            struct sockaddr_dl* sdl = (struct sockaddr_dl*)(ifm + 1);
+            
+            if (sdl->sdl_nlen > 0) {
+                std::string currentName(sdl->sdl_data, sdl->sdl_nlen);
+                if (currentName == interfaceName) {
+                    info.mtu = ifm->ifm_mtu;
+                }
+            }
+        }
+    }
+}
+
+void NetworkAdapter::GetInterfaceStats(const std::string& interfaceName, AdapterInfo& info) const {
+    int mib[] = {CTL_NET, PF_ROUTE, 0, AF_LINK, NET_RT_IFLIST2, 0};
+    size_t len;
+    
+    if (sysctl(mib, 6, nullptr, &len, nullptr, 0) == 0) {
+        std::vector<char> buffer(len);
+        if (sysctl(mib, 6, buffer.data(), &len, nullptr, 0) == 0) {
+            struct if_msghdr2* ifm2 = (struct if_msghdr2*)buffer.data();
+            struct sockaddr_dl* sdl = (struct sockaddr_dl*)(ifm2 + 1);
+            
+            if (sdl->sdl_nlen > 0) {
+                std::string currentName(sdl->sdl_data, sdl->sdl_nlen);
+                if (currentName == interfaceName) {
+                    info.bytesReceived = ifm2->ifm_data.ifi_ibytes;
+                    info.bytesSent = ifm2->ifm_data.ifi_obytes;
+                    info.packetsReceived = ifm2->ifm_data.ifi_ipackets;
+                    info.packetsSent = ifm2->ifm_data.ifi_opackets;
+                }
+            }
+        }
+    }
+}
+
+#elif defined(PLATFORM_LINUX)
+void NetworkAdapter::QueryLinuxNetworkAdapters() {
+    std::ifstream netDev("/proc/net/dev");
+    if (!netDev.is_open()) {
+        Logger::Error("NetworkAdapter: Cannot open /proc/net/dev");
+        return;
+    }
+    
+    std::string line;
+    // 跳过前两行标题
+    std::getline(netDev, line);
+    std::getline(netDev, line);
+    
+    while (std::getline(netDev, line)) {
+        std::istringstream iss(line);
+        std::string interfaceName;
+        std::string stats;
+        
+        // 提取接口名称
+        size_t colonPos = line.find(':');
+        if (colonPos == std::string::npos) {
+            continue;
+        }
+        
+        interfaceName = line.substr(0, colonPos);
+        // 去除空格
+        interfaceName.erase(0, interfaceName.find_first_not_of(" \t"));
+        interfaceName.erase(interfaceName.find_last_not_of(" \t") + 1);
+        
+        AdapterInfo info;
+        info.name = interfaceName;
+        info.isEnabled = true; // Linux中接口存在通常表示启用
+        info.isVirtual = IsVirtualAdapter(interfaceName);
+        
+        // 检测无线适配器
+        info.isWireless = (interfaceName.find("wl") == 0 || interfaceName.find("wlan") == 0);
+        
+        // 解析统计信息
+        std::istringstream statsStream(line.substr(colonPos + 1));
+        uint64_t rxBytes, rxPackets, rxErrs, rxDrop, rxFifo, rxFrame, rxCompressed, rxMulticast;
+        uint64_t txBytes, txPackets, txErrs, txDrop, txFifo, txColls, txCarrier, txCompressed;
+        
+        statsStream >> rxBytes >> rxPackets >> rxErrs >> rxDrop >> rxFifo >> rxFrame >> rxCompressed >> rxMulticast
+                   >> txBytes >> txPackets >> txErrs >> txDrop >> txFifo >> txColls >> txCarrier >> txCompressed;
+        
+        info.bytesReceived = rxBytes;
+        info.bytesSent = txBytes;
+        info.packetsReceived = rxPackets;
+        info.packetsSent = txPackets;
+        
+        // 连接状态
+        info.isConnected = (rxBytes > 0 || txBytes > 0);
+        if (info.isConnected) {
+            info.connectionStatus = "Connected";
+        } else {
+            info.connectionStatus = "Disconnected";
+        }
+        
+        // 默认值
+        info.mtu = 1500;
+        info.speed = 0;
+        info.speedString = "Unknown";
+        info.adapterType = "Ethernet";
+        
+        adapters.push_back(info);
+    }
+}
+
+void NetworkAdapter::UpdateLinuxAdapterAddresses() {
+    struct ifaddrs* ifaddrsPtr = nullptr;
+    
+    if (getifaddrs(&ifaddrsPtr) == 0) {
+        for (struct ifaddrs* ifa = ifaddrsPtr; ifa != nullptr; ifa = ifa->ifa_next) {
+            if (ifa->ifa_addr == nullptr) {
+                continue;
+            }
+            
+            std::string interfaceName(ifa->ifa_name);
+            
+            // 查找对应的适配器
+            for (auto& adapter : adapters) {
+                if (adapter.name == interfaceName) {
+                    if (ifa->ifa_addr->sa_family == AF_INET) {
+                        struct sockaddr_in* addr_in = (struct sockaddr_in*)ifa->ifa_addr;
+                        char strBuffer[INET_ADDRSTRLEN];
+                        inet_ntop(AF_INET, &(addr_in->sin_addr), strBuffer, INET_ADDRSTRLEN);
+                        
+                        // 检查是否已存在
+                        bool exists = false;
+                        for (const auto& ip : adapter.ipAddresses) {
+                            if (ip == strBuffer) {
+                                exists = true;
+                                break;
+                            }
+                        }
+                        
+                        if (!exists) {
+                            adapter.ipAddresses.push_back(strBuffer);
+                            if (adapter.ip.empty()) {
+                                adapter.ip = strBuffer;
+                            }
+                        }
+                        
+                        // 获取子网掩码
+                        if (ifa->ifa_netmask != nullptr) {
+                            struct sockaddr_in* mask_in = (struct sockaddr_in*)ifa->ifa_netmask;
+                            char maskBuffer[INET_ADDRSTRLEN];
+                            inet_ntop(AF_INET, &(mask_in->sin_addr), maskBuffer, INET_ADDRSTRLEN);
+                            adapter.subnetMask = maskBuffer;
+                        }
+                    } else if (ifa->ifa_addr->sa_family == AF_INET6) {
+                        struct sockaddr_in6* addr_in6 = (struct sockaddr_in6*)ifa->ifa_addr;
+                        char strBuffer[INET6_ADDRSTRLEN];
+                        inet_ntop(AF_INET6, &(addr_in6->sin6_addr), strBuffer, INET6_ADDRSTRLEN);
+                        adapter.ipv6Address = strBuffer;
+                    }
+                    break;
+                }
+            }
+        }
+        
+        freeifaddrs(ifaddrsPtr);
+    }
+    
+    // 获取MTU信息
+    for (auto& adapter : adapters) {
+        std::string mtuPath = "/sys/class/net/" + adapter.name + "/mtu";
+        std::ifstream mtuFile(mtuPath);
+        if (mtuFile.is_open()) {
+            mtuFile >> adapter.mtu;
+        }
+        
+        // 获取速度信息
+        std::string speedPath = "/sys/class/net/" + adapter.name + "/speed";
+        std::ifstream speedFile(speedPath);
+        if (speedFile.is_open()) {
+            speedFile >> adapter.speed;
+            if (adapter.speed > 0) {
+                adapter.speedString = FormatSpeed(adapter.speed * 1000000); // Mbps to bps
+            }
+        }
+        
+        // 获取驱动信息
+        std::string driverPath = "/sys/class/net/" + adapter.name + "/device/driver";
+        std::ifstream driverFile(driverPath + "/module");
+        if (driverFile.is_open()) {
+            std::string driverName;
+            driverFile >> driverName;
+            adapter.driverVersion = driverName;
+        }
+    }
+    
+    // 获取网关信息
+    std::ifstream routeFile("/proc/net/route");
+    if (routeFile.is_open()) {
+        std::string line;
+        while (std::getline(routeFile, line)) {
+            std::istringstream iss(line);
+            std::string interface, destination, gateway;
+            iss >> interface >> destination >> gateway;
+            
+            if (destination == "00000000") { // 默认路由
+                uint32_t gatewayAddr;
+                std::stringstream ss;
+                ss << std::hex << gateway;
+                ss >> gatewayAddr;
+                
+                struct in_addr addr;
+                addr.s_addr = gatewayAddr;
+                
+                char gatewayStr[INET_ADDRSTRLEN];
+                inet_ntop(AF_INET, &addr, gatewayStr, INET_ADDRSTRLEN);
+                
+                for (auto& adapter : adapters) {
+                    if (adapter.name == interface) {
+                        adapter.gateway = gatewayStr;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+#endif
+
+// 通用辅助函数
+#ifdef PLATFORM_WINDOWS
+std::wstring NetworkAdapter::FormatMacAddress(const unsigned char* address, size_t length) const {
+    std::wstringstream ss;
+    for (size_t i = 0; i < length; ++i) {
+        if (i > 0) {
+            ss << L":";
+        }
+        ss << std::hex << std::setw(2) << std::setfill(L'0') << static_cast<int>(address[i]);
+    }
+    return ss.str();
+}
+
+std::wstring NetworkAdapter::FormatSpeed(uint64_t bitsPerSecond) const {
+    const wchar_t* units[] = {L"bps", L"Kbps", L"Mbps", L"Gbps", L"Tbps"};
+    int unit = 0;
+    double speed = static_cast<double>(bitsPerSecond);
+    
+    while (speed >= 1000.0 && unit < 4) {
+        speed /= 1000.0;
+        unit++;
+    }
+    
+    std::wstringstream ss;
+    ss << std::fixed << std::setprecision(2) << speed << L" " << units[unit];
+    return ss.str();
+}
+
+bool NetworkAdapter::IsVirtualAdapter(const std::wstring& name) const {
+    const std::vector<std::wstring> virtualPatterns = {
+        L"Virtual", L"VMware", L"Hyper-V", L"VBox", L"QEMU", L"TAP", L"TUN",
+        L"Loopback", L"Microsoft KM-TEST", L"Microsoft Hosted Network"
+    };
+    
+    for (const auto& pattern : virtualPatterns) {
+        if (name.find(pattern) != std::wstring::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+#else
+std::string NetworkAdapter::FormatMacAddress(const unsigned char* address, size_t length) const {
+    std::stringstream ss;
+    for (size_t i = 0; i < length; ++i) {
+        if (i > 0) {
+            ss << ":";
+        }
+        ss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(address[i]);
+    }
+    return ss.str();
+}
+
+std::string NetworkAdapter::FormatSpeed(uint64_t bitsPerSecond) const {
+    const char* units[] = {"bps", "Kbps", "Mbps", "Gbps", "Tbps"};
+    int unit = 0;
+    double speed = static_cast<double>(bitsPerSecond);
+    
+    while (speed >= 1000.0 && unit < 4) {
+        speed /= 1000.0;
+        unit++;
+    }
+    
+    std::stringstream ss;
+    ss << std::fixed << std::setprecision(2) << speed << " " << units[unit];
+    return ss.str();
+}
+
+bool NetworkAdapter::IsVirtualAdapter(const std::string& name) const {
+    const std::vector<std::string> virtualPatterns = {
+        "virtual", "vmware", "hyper-v", "vbox", "qemu", "tap", "tun",
+        "loopback", "docker", "virbr", "veth"
+    };
+    
+    std::string lowerName = name;
+    std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
+    
+    for (const auto& pattern : virtualPatterns) {
+        if (lowerName.find(pattern) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+#endif

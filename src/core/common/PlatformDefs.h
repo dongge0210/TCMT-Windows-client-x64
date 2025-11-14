@@ -2,17 +2,23 @@
 
 // 平台检测宏
 #if defined(_WIN32) || defined(_WIN64)
-    #define PLATFORM_WINDOWS
-    #define PLATFORM_NAME "Windows"
-    #define PLATFORM_WINDOWS_VERSION 1
+    #ifndef PLATFORM_WINDOWS
+        #define PLATFORM_WINDOWS
+        #define PLATFORM_NAME "Windows"
+        #define PLATFORM_WINDOWS_VERSION 1
+    #endif
 #elif defined(__APPLE__)
-    #define PLATFORM_MACOS
-    #define PLATFORM_NAME "macOS"
-    #define PLATFORM_MACOS_VERSION 1
+    #ifndef PLATFORM_MACOS
+        #define PLATFORM_MACOS
+        #define PLATFORM_NAME "macOS"
+        #define PLATFORM_MACOS_VERSION 1
+    #endif
 #elif defined(__linux__)
-    #define PLATFORM_LINUX
-    #define PLATFORM_NAME "Linux"
-    #define PLATFORM_LINUX_VERSION 1
+    #ifndef PLATFORM_LINUX
+        #define PLATFORM_LINUX
+        #define PLATFORM_NAME "Linux"
+        #define PLATFORM_LINUX_VERSION 1
+    #endif
 #else
     #error "Unsupported platform"
 #endif
@@ -75,12 +81,11 @@
 // 调试宏
 #ifdef _DEBUG
     #define DEBUG_MODE 1
-    #define DEBUG_BREAK() \
-        #ifdef PLATFORM_WINDOWS \
-            __debugbreak() \
-        #elif defined(PLATFORM_MACOS) || defined(PLATFORM_LINUX) \
-            __builtin_trap() \
-        #endif
+    #ifdef PLATFORM_WINDOWS
+        #define DEBUG_BREAK() __debugbreak()
+    #elif defined(PLATFORM_MACOS) || defined(PLATFORM_LINUX)
+        #define DEBUG_BREAK() __builtin_trap()
+    #endif
 #else
     #define DEBUG_MODE 0
     #define DEBUG_BREAK() do {} while(0)
@@ -107,12 +112,23 @@
 #define PACKED_STRUCT __attribute__((packed))
 #ifndef PRAGMA_PACK
     #ifdef _MSC_VER
-        #define PRAGMA_PACK(push, n) __pragma(pack(push, n))
-        #define PRAGMA_PACK(pop) __pragma(pack(pop))
+        #define PRAGMA_PACK_PUSH(n) __pragma(pack(push, n))
+        #define PRAGMA_PACK_POP() __pragma(pack(pop))
     #else
-        #define PRAGMA_PACK(push, n) _Pragma("pack(push, n)")
-        #define PRAGMA_PACK(pop) _Pragma("pack(pop)")
+        #define PRAGMA_PACK_PUSH(n) _Pragma("pack(push, n)")
+        #define PRAGMA_PACK_POP() _Pragma("pack(pop)")
     #endif
+#endif
+
+// 为了兼容性，保留旧的宏定义（仅在未定义时）
+#ifndef PRAGMA_PACK_PUSH
+#define PRAGMA_PACK(push, n) _Pragma("pack(push, n)")
+#define PRAGMA_PACK(pop) _Pragma("pack(pop)")
+#endif
+
+#ifndef PRAGMA_PACK_PUSH
+#define PRAGMA_PACK(push, n) PRAGMA_PACK_PUSH(n)
+#define PRAGMA_PACK(pop) PRAGMA_PACK_POP()
 #endif
 
 // 函数调用约定

@@ -6,9 +6,19 @@
 #include <thread>
 #include <algorithm>
 #include <cctype>
+#include <ctime>
+
+#ifdef PLATFORM_WINDOWS
+#else
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
+
+#include "../core/Utils/Logger.h"
 
 SharedMemoryReader::SharedMemoryReader() 
-    : hMapFile(nullptr), pBuf(nullptr), isConnected(false) {
+    : hMapFile(0), pBuf(nullptr), isConnected(false) {
 }
 
 SharedMemoryReader::~SharedMemoryReader() {
@@ -37,7 +47,7 @@ bool SharedMemoryReader::Initialize() {
 }
 
 bool SharedMemoryReader::TryConnect(const std::string& name) {
-    
+#ifdef PLATFORM_WINDOWS
     hMapFile = OpenFileMappingA(
         FILE_MAP_READ,
         FALSE,
@@ -58,14 +68,38 @@ bool SharedMemoryReader::TryConnect(const std::string& name) {
         FILE_MAP_READ,
         0,
         0,
-        EXPECTED_SIZE
-    );
+#else
+    // macOS/Linux POSIX shared memory implementation
+    std::string shmName = "/" + name;
+    int shmFd = shm_open(shmName.c_str(), O_RDONLY, 0666);
+    if (shmFd == -1) {
+        std::cerr << "Failed to open shared memory " << name << std::endl;
+        return false;
+    }
+    
+    pBuf = mmap(nullptr, sizeof(SharedMemoryBlock), PROT_READ, MAP_SHARED, shmFd, 0);
+    if (pBuf == MAP_FAILED) {
+        close(shmFd);
+        std::cerr << "Failed to map shared memory " << name << std::endl;
+        return false;
+    }
+    
+    hMapFile = shmFd; // Store file descriptor for cleanup
+#endif
+    
+    // Verify shared memory block size
+    if (sizeof(SharedMemoryBlock) != EXPECTED_SIZE) {
+        Logger::Error("SharedMemoryBlock size mismatch: expected " + 
+                     std::to_string(EXPECTED_SIZE) + 
+                     ", actual " + std::to_string(sizeof(SharedMemoryBlock)));
+        return false;
+    }
     
     if (pBuf == nullptr) {
         DWORD error = ::GetLastError();
         std::cerr << "Failed to map shared memory " << name << ", error: " << error << std::endl;
         CloseHandle(hMapFile);
-        hMapFile = nullptr;
+        hMapFile = 0;
         return false;
     }
     
@@ -160,7 +194,17 @@ bool SharedMemoryReader::ParseSharedMemoryBlock(const SharedMemoryBlock* block, 
         ParseUSBDevices(block->usbDevices, block->usbDeviceCount, info);
 
 
-        GetSystemTime(&info.lastUpdate);
+        // Cross-platform time update
+#ifdef PLATFORM_WINDOWS
+        GetSystemTime(&info.lastUpdate.windowsTime);
+#else
+        // For non-Windows platforms, use current time
+        auto now = std::chrono::system_clock::now();
+        auto duration = now.time_since_epoch();
+        auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(duration);
+        info.lastUpdate.unixTime = std::chrono::duration_cast<std::chrono::seconds>(duration).count();
+        info.lastUpdate.milliseconds = millis.count() % 1000;
+#endif
 
         return true;
     }
@@ -177,7 +221,7 @@ void SharedMemoryReader::ParseTemperatureSensors(const TemperatureSensor* sensor
     
     info.temperatures.clear();
     
-    int maxCount = min(count, 32);
+    int maxCount = std::min(count, 32);
     
     for (int i = 0; i < maxCount; ++i) {
         const TemperatureSensor& sensor = sensors[i];
@@ -216,7 +260,7 @@ void SharedMemoryReader::ParseSmartDisks(const SmartDiskScore* smartDisks, int c
         return;
     }
     
-    int maxCount = min(count, 16);
+    int maxCount = std::min(count, 16);
     
     for (int i = 0; i < maxCount; ++i) {
         const SmartDiskScore& disk = smartDisks[i];
@@ -238,7 +282,7 @@ void SharedMemoryReader::ParseUSBDevices(const SharedMemoryBlock::USBDeviceData*
     
     info.usbDevices.clear();
     
-    int maxCount = min(count, 8);
+    int maxCount = std::min(count, 8);
     
     for (int i = 0; i < maxCount; ++i) {
         const SharedMemoryBlock::USBDeviceData& device = usbDevices[i];
@@ -257,7 +301,12 @@ void SharedMemoryReader::ParseUSBDevices(const SharedMemoryBlock::USBDeviceData*
         usbInfo.freeSpace = device.freeSpace;
         usbInfo.isUpdateReady = (device.isUpdateReady != 0);
         usbInfo.state = static_cast<USBState>(device.state);
-        usbInfo.lastUpdate = device.lastUpdate;
+        // Cross-platform time assignment
+#ifdef PLATFORM_WINDOWS
+        usbInfo.lastUpdate = device.lastUpdate.windowsTime;
+#else
+        usbInfo.lastUpdate = device.lastUpdate.unixTime;
+#endif
         
         info.usbDevices.push_back(usbInfo);
     }
@@ -367,20 +416,28 @@ bool SharedMemoryReader::ValidateLayout() {
         return true;
     }
     catch (const std::exception& e) {
-        lastError = "验证布局时发生异常: " + std::string(e.what());
+        lastError = "Exception during layout validation: " + std::string(e.what());
         return false;
     }
 }
 
 void SharedMemoryReader::Cleanup() {
     if (pBuf != nullptr) {
+#ifdef PLATFORM_WINDOWS
         UnmapViewOfFile(pBuf);
+#else
+        munmap(pBuf, sizeof(SharedMemoryBlock));
+#endif
         pBuf = nullptr;
     }
     
-    if (hMapFile != nullptr) {
+    if (hMapFile != 0) {
+#ifdef PLATFORM_WINDOWS
         CloseHandle(hMapFile);
-        hMapFile = nullptr;
+#else
+        close(hMapFile);
+#endif
+        hMapFile = 0;
     }
     
     isConnected = false;
@@ -420,7 +477,7 @@ std::string SharedMemoryReader::GetDiagnosticsInfo() const {
         return oss.str();
     }
     catch (const std::exception& e) {
-        return "获取诊断信息时发生异常: " + std::string(e.what());
+        return "Exception getting diagnostics info: " + std::string(e.what());
     }
 }
 
@@ -460,7 +517,11 @@ std::string SharedMemoryReader::GetCurrentTimestamp() {
     
     std::ostringstream oss;
     struct tm timeinfo;
+#ifdef PLATFORM_WINDOWS
     localtime_s(&timeinfo, &time_t);
+#else
+    localtime_r(&time_t, &timeinfo);
+#endif
     oss << std::put_time(&timeinfo, "%Y-%m-%d %H:%M:%S");
     oss << "." << std::setfill('0') << std::setw(3) << ms.count();
     

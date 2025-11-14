@@ -69,13 +69,13 @@ void OSInfo::DetectMacSystemInfo() {
         uname(&uts);
         
         // 获取操作系统版本
-        osVersion = std::string(uts.sysname) + " " + GetMacKernelVersion();
+        osVersion = std::string(uts.sysname) + " " + GetKernelVersion();
         
         // 获取主机名
         hostname = std::string(uts.nodename);
         
         // 获取架构
-        architecture = GetMacArchitecture();
+        architecture = GetArchitecture();
         
         // 获取系统运行时间
         GetMacSystemReport();
@@ -96,7 +96,7 @@ void OSInfo::DetectMacSystemInfo() {
     }
 }
 
-std::string OSInfo::GetMacKernelVersion() const {
+std::string OSInfo::GetKernelVersion() const {
     try {
         size_t size = 0;
         sysctlbyname("kern.osversion", nullptr, &size, nullptr, 0);
@@ -113,7 +113,7 @@ std::string OSInfo::GetMacKernelVersion() const {
     return "Unknown";
 }
 
-std::string OSInfo::GetMacArchitecture() const {
+std::string OSInfo::GetArchitecture() const {
     try {
         size_t size = 0;
         sysctlbyname("hw.machine", nullptr, &size, nullptr, 0);
@@ -137,7 +137,7 @@ std::string OSInfo::GetMacArchitecture() const {
     return "Unknown";
 }
 
-std::string OSInfo::GetMacSystemReport() const {
+std::string OSInfo::GetMacSystemReport() {
     try {
         // 获取系统报告
         size_t size = 0;
@@ -511,7 +511,7 @@ std::string OSInfo::GetLinuxArchitecture() const {
                     std::string arch = line.substr(pos + 2);
                     // 移除前后空格
                     arch.erase(0, arch.find_first_not_of(" \t "));
-                    arch.erase(arch.find_last_not_of(" \t\n\r") + 1); // 修正此处
+                    arch.erase(arch.find_last_not_of(" \t\n\r") + 1); // Trim trailing whitespace
                     // 标准化架构名称
                     if (arch == "x86_64") return "x86_64";
                     if (arch == "aarch64") return "aarch64";
@@ -682,9 +682,9 @@ void OSInfo::DetectWindowsSystemInfo() {
         }
         
         // 获取主机名
-        char hostname[256];
-        if (gethostname(hostname, sizeof(hostname)) {
-            hostname = std::string(hostname);
+        char hostName[256];
+        if (gethostname(hostName, sizeof(hostName)) == 0) {
+            this->hostname = std::string(hostName);
         }
         
         // 获取架构
@@ -718,27 +718,5 @@ void OSInfo::DetectWindowsSystemInfo() {
 }
 #endif
 
-std::string OSInfo::GetKernelVersion() const {
-    try {
-#ifdef PLATFORM_WINDOWS
-        return std::to_string(majorVersion) + "." + std::to_string(minorVersion) + "." + std::to_string(buildNumber);
-#elif defined(PLATFORM_MACOS)
-        return GetMacKernelVersion();
-#elif defined(PLATFORM_LINUX)
-        return GetLinuxKernelVersion();
-#else
-        return "Unknown";
-#endif
-    }
-    catch (const std::exception& e) {
-        Logger::Error("GetKernelVersion failed: " + std::string(e.what()));
-    }
-    return "Unknown";
-}
 
-// Windows实现
-#ifdef PLATFORM_WINDOWS
-std::string OSInfo::GetVersion() const {
-    return osVersion;
-}
-#endif
+

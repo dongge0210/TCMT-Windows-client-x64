@@ -291,7 +291,11 @@ std::string SharedMemoryDataParser::GetCurrentTimestamp() {
     
     std::ostringstream oss;
     struct tm timeinfo;
+#ifdef PLATFORM_WINDOWS
     localtime_s(&timeinfo, &time_t);
+#else
+    localtime_r(&time_t, &timeinfo);
+#endif
     oss << std::put_time(&timeinfo, "%H:%M:%S");
     oss << "." << std::setfill('0') << std::setw(3) << ms.count();
     

@@ -68,7 +68,9 @@ private:
     // 跨平台私有方法
     void DetectSystemInfo();
     
-#ifdef PLATFORM_MACOS
+#ifdef PLATFORM_WINDOWS
+    void DetectWindowsSystemInfo();
+#elif defined(PLATFORM_MACOS)
     void DetectMacSystemInfo();
     std::string GetMacSystemReport();
     void GetMacHardwareInfo();

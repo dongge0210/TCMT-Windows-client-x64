@@ -1,298 +1,181 @@
-#include "CpuInfoCompat.h"
-#include "Logger.h"
-
-// 包含原有CpuInfo实现
 #include "CpuInfo.h"
+#include "CpuInfo.h"
+#include "../Utils/Logger.h"
 
-CpuInfoCompat::CpuInfoCompat(ImplementationMode mode) : m_mode(mode) {
-    Initialize();
-}
+#ifdef PLATFORM_MACOS
+#include <sys/sysctl.h>
+#include <mach/mach.h>
+#include <mach/mach_types.h>
+#include <mach/mach_host.h>
+#include <sys/utsname.h>
+#include <thread>
+#include <chrono>
 
-CpuInfoCompat::~CpuInfoCompat() {
-    Cleanup();
-}
-
-double CpuInfoCompat::GetUsage() {
+// Cross-platform stub implementation for macOS
+CpuInfo::CpuInfo() {
     try {
-        if (m_mode == ImplementationMode::Legacy && m_legacyCpuInfo) {
-            return m_legacyCpuInfo->GetUsage();
-        } else if (m_mode == ImplementationMode::Adapter && m_adapterCpuInfo) {
-            return m_adapterCpuInfo->GetUsage();
-        }
-    } catch (const std::exception& e) {
-        SetError(std::string("Failed to get CPU usage: ") + e.what());
+        DetectCores();
+        cpuName = GetNameFromSysctl();
+        // Initialize basic values
+        cpuUsage = 0.0;
+        counterInitialized = false;
+        totalCores = 0;
+        largeCores = 0;
+        smallCores = 0;
+        lastUpdateTime = 0;
+        lastSampleTick = 0;
+        prevSampleTick = 0;
+        lastSampleIntervalMs = 0.0;
+        cachedInstantMHz = 0.0;
+        lastFreqTick = 0;
+        freqCounterInitialized = false;
     }
-    return 0.0;
+    catch (const std::exception& e) {
+        Logger::Error("CPU信息初始化失败: " + std::string(e.what()));
+    }
 }
 
-std::string CpuInfoCompat::GetName() {
-    try {
-        if (m_mode == ImplementationMode::Legacy && m_legacyCpuInfo) {
-            return m_legacyCpuInfo->GetName();
-        } else if (m_mode == ImplementationMode::Adapter && m_adapterCpuInfo) {
-            return m_adapterCpuInfo->GetName();
-        }
-    } catch (const std::exception& e) {
-        SetError(std::string("Failed to get CPU name: ") + e.what());
-    }
-    return "";
+CpuInfo::~CpuInfo() {
 }
 
-int CpuInfoCompat::GetTotalCores() const {
-    try {
-        if (m_mode == ImplementationMode::Legacy && m_legacyCpuInfo) {
-            return m_legacyCpuInfo->GetTotalCores();
-        } else if (m_mode == ImplementationMode::Adapter && m_adapterCpuInfo) {
-            return m_adapterCpuInfo->GetTotalCores();
-        }
-    } catch (const std::exception& e) {
-        // 静默错误，因为这是const方法
-    }
-    return 0;
-}
-
-int CpuInfoCompat::GetSmallCores() const {
-    try {
-        if (m_mode == ImplementationMode::Legacy && m_legacyCpuInfo) {
-            return m_legacyCpuInfo->GetSmallCores();
-        } else if (m_mode == ImplementationMode::Adapter && m_adapterCpuInfo) {
-            return m_adapterCpuInfo->GetSmallCores();
-        }
-    } catch (const std::exception& e) {
-        // 静默错误，因为这是const方法
-    }
-    return 0;
-}
-
-int CpuInfoCompat::GetLargeCores() const {
-    try {
-        if (m_mode == ImplementationMode::Legacy && m_legacyCpuInfo) {
-            return m_legacyCpuInfo->GetLargeCores();
-        } else if (m_mode == ImplementationMode::Adapter && m_adapterCpuInfo) {
-            return m_adapterCpuInfo->GetLargeCores();
-        }
-    } catch (const std::exception& e) {
-        // 静默错误，因为这是const方法
-    }
-    return 0;
-}
-
-double CpuCompat::GetLargeCoreSpeed() const {
-    try {
-        if (m_mode == ImplementationMode::Legacy && m_legacyCpuInfo) {
-            return m_legacyCpuInfo->GetLargeCoreSpeed();
-        } else if (m_mode == ImplementationMode::Adapter && m_adapterCpuInfo) {
-            return m_adapterCpuInfo->GetLargeCoreSpeed();
-        }
-    } catch (const std::exception& e) {
-        // 静默错误，因为这是const方法
-    }
-    return 0.0;
-}
-
-double CpuCompat::GetSmallCoreSpeed() const {
-    try {
-        if (m_mode == ImplementationMode::Legacy && m_legacyCpuInfo) {
-            return m_legacyCpuInfo->GetSmallCoreSpeed();
-        } else if (m_mode == ImplementationMode::Adapter && m_adapterCpuInfo) {
-            return m_adapterCpuInfo->GetSmallCoreSpeed();
-        }
-    } catch (const std::exception& e) {
-        // 静默错误，因为这是const方法
-    }
-    return 0.0;
-}
-
-DWORD CpuInfoCompat::GetCurrentSpeed() const {
-    try {
-        if (m_mode == ImplementationMode::Legacy && m_legacyCpuInfo) {
-            return m_legacyCpuInfo->GetCurrentSpeed();
-        } else if (m_mode == ImplementationMode::Adapter && m_adapterCpuInfo) {
-            return static_cast<DWORD>(m_adapterCpuInfo->GetCurrentSpeed());
-        }
-    } catch (const std::exception& e) {
-        // 静默错误，因为这是const方法
-    }
-    return 0;
-}
-
-bool CpuCompat::IsHyperThreadingEnabled() const {
-    try {
-        if (m_mode == ImplementationMode::Legacy && m_legacyCpuInfo) {
-            return m_legacyCpuInfo->IsHyperThreadingEnabled();
-        } else if (m_mode == ImplementationMode::Adapter && m_adapterCpuInfo) {
-            return m_adapterCpuInfo->IsHyperThreadingEnabled();
-        }
-    } catch (const std::exception& e) {
-        // 静默错误，因为这是const方法
-    }
-    return false;
-}
-
-bool CpuCompat::IsVirtualizationEnabled() const {
-    try {
-        if (m_mode == ImplementationMode::Legacy && m_legacyCpuInfo) {
-            return m_legacyCpuInfo->IsVirtualizationEnabled();
-        } else if (m_mode == ImplementationMode::Adapter && m_adapterCpuInfo) {
-            return m_adapterCpuInfo->IsVirtualizationEnabled();
-        }
-    } catch (const std::exception& e) {
-        // 静默错误，因为这是const方法
-    }
-    return false;
-}
-
-double CpuCompat::GetLastSampleIntervalMs() const {
-    try {
-        if (m_mode == ImplementationMode::Legacy && m_legacyCpuInfo) {
-            return m_legacyCpuInfo->GetLastSampleIntervalMs();
-        } else if (m_mode == ImplementationMode::Adapter && m_adapterCpuInfo) {
-            return m_adapterCpuInfo->GetLastSampleIntervalMs();
-        }
-    } catch (const std::exception& e) {
-        // 静默错误，因为这是const方法
-    }
-    return 0.0;
-}
-
-double CpuCompat::GetBaseFrequencyMHz() const {
-    try {
-        if (m_mode == ImplementationMode::Legacy && m_legacyCpuInfo) {
-            return m_legacyCpuInfo->GetBaseFrequencyMHz();
-        } else if (m_mode == ImplementationMode::Adapter && m_adapterCpuInfo) {
-            return m_adapterCpuInfo->GetBaseFrequencyMHz();
-        }
-    } catch (const std::exception& e) {
-        // 静默错误，因为这是const方法
-    }
-    return 0.0;
-}
-
-double CpuCompat::GetCurrentFrequencyMHz() const {
-    try {
-        if (m_mode == ImplementationMode::Legacy && m_legacyCpuInfo) {
-            return m_legacyCpuInfo->GetCurrentFrequencyMHz();
-        } else if (m_mode == ImplementationMode::Adapter && m_adapterCpuInfo) {
-            return m_adapterCpuInfo->GetCurrentFrequencyMHz();
-        }
-    } catch (const std::exception& e) {
-        // 静默错误，因为这是const方法
-    }
-    return 0.0;
-}
-
-// 跨平台扩展方法
-bool CpuInfoCompat::SwitchToAdapter() {
-    if (!IsAdapterAvailable()) {
-        SetError("Adapter not available on this platform");
-        return false;
-    }
-
-    try {
-        // 尝试创建适配器
-        auto testAdapter = InfoFactory::CreateCpuAdapter();
-        if (testAdapter && testAdapter->Initialize()) {
-            Cleanup();
-            m_mode = ImplementationMode::Adapter;
-            m_adapterCpuInfo = std::move(testAdapter);
-            Logger::Info("Switched to adapter mode for CPU monitoring");
-            ClearError();
-            return true;
-        }
-    } catch (const std::exception& e) {
-        SetError(std::string("Failed to switch to adapter: ") + e.what());
-    }
+void CpuInfo::DetectCores() {
+    totalCores = 0;
+    largeCores = 0;
+    smallCores = 0;
     
-    return false;
-}
-
-bool CpuInfoCompat::SwitchToLegacy() {
-    try {
-        Cleanup();
-        m_mode = ImplementationMode::Legacy;
-        m_legacyCpuInfo = std::make_unique<CpuInfo>();
-        Logger::Info("Switched to legacy mode for CPU monitoring");
-        ClearError();
-        return true;
-    } catch (const std::exception& e) {
-        SetError(std::string("Failed to switch to legacy: ") + e.what());
+    size_t len = sizeof(totalCores);
+    if (sysctlbyname("hw.ncpu", &totalCores, &len, nullptr, 0) == 0) {
+        // For simplicity, assume all cores are performance cores on macOS
+        largeCores = totalCores;
     }
-    return false;
 }
 
-CpuInfoCompat::ImplementationMode CpuInfoCompat::GetCurrentMode() const {
-    return m_mode;
+void CpuInfo::UpdateCoreSpeeds() {
+    // macOS stub implementation
+    lastUpdateTime = static_cast<DWORD>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
 }
 
-bool CpuInfoCompat::IsAdapterAvailable() const {
-    // 检查当前平台是否支持适配器
-    #ifdef PLATFORM_WINDOWS
-        return true;  // Windows支持适配器
-    #elif defined(PLATFORM_MACOS)
-        return false; // macOS适配器待实现
-    #elif defined(PLATFORM_LINUX)
-        return false; // Linux适配器待实现
-    #else
-        return false;
-    #endif
-}
-
-std::string CpuInfoCompat::GetLastError() const {
-    return m_lastError;
-}
-
-void CpuInfoCompat::ClearError() {
-    m_lastError.clear();
-}
-
-void CpuInfoCompat::Initialize() {
-    ClearError();
+double CpuInfo::updateUsage() {
+    // Simple CPU usage calculation for macOS
+    static uint64_t lastIdle = 0, lastTotal = 0;
     
-    try {
-        if (m_mode == ImplementationMode::Legacy) {
-            m_legacyCpuInfo = std::make_unique<CpuInfo>();
-            Logger::Info("Initialized CPU info in legacy mode");
-        } else if (m_mode == ImplementationMode::Adapter) {
-            if (IsAdapterAvailable()) {
-                m_adapterCpuInfo = InfoFactory::CreateCpuAdapter();
-                if (m_adapterCpuInfo && m_adapterCpuInfo->Initialize()) {
-                    Logger::Info("Initialized CPU info in adapter mode");
-                } else {
-                    SetError("Failed to initialize adapter");
-                    // 回退到legacy模式
-                    m_mode = ImplementationMode::Legacy;
-                    m_legacyCpuInfo = std::make_unique<CpuInfo>();
-                    Logger::Warning("Fallback to legacy mode due to adapter initialization failure");
-                }
-            } else {
-                SetError("Adapter not available on this platform");
-                // 回退到legacy模式
-                m_mode = ImplementationMode::Legacy;
-                m_legacyCpuInfo = std::make_unique<CpuInfo>();
-                Logger::Warning("Fallback to legacy mode due to platform limitations");
+    natural_t numCPUsU = 0;
+    mach_msg_type_number_t numCPUs = 0;
+    processor_cpu_load_info_t cpuLoad;
+    mach_msg_type_number_t numCPUsLoad = 0;
+    
+    kern_return_t kr = host_processor_info(mach_host_self(), PROCESSOR_CPU_LOAD_INFO,
+                                       &numCPUsU, 
+                                       (processor_info_array_t*)&cpuLoad, &numCPUsLoad);
+    if (kr == KERN_SUCCESS) {
+        
+        uint64_t totalTicks = 0;
+        uint64_t idleTicks = 0;
+        
+        for (natural_t i = 0; i < numCPUs; i++) {
+            totalTicks += cpuLoad[i].cpu_ticks[CPU_STATE_USER] +
+                         cpuLoad[i].cpu_ticks[CPU_STATE_SYSTEM] +
+                         cpuLoad[i].cpu_ticks[CPU_STATE_IDLE] +
+                         cpuLoad[i].cpu_ticks[CPU_STATE_NICE];
+            idleTicks += cpuLoad[i].cpu_ticks[CPU_STATE_IDLE];
+        }
+        
+        if (lastTotal > 0) {
+            uint64_t totalDiff = totalTicks - lastTotal;
+            uint64_t idleDiff = idleTicks - lastIdle;
+            
+            if (totalDiff > 0) {
+                cpuUsage = 100.0 * (1.0 - (double)idleDiff / totalDiff);
+                if (cpuUsage < 0.0) cpuUsage = 0.0;
+                if (cpuUsage > 100.0) cpuUsage = 100.0;
             }
         }
-    } catch (const std::exception& e) {
-        SetError(std::string("Initialization failed: ") + e.what());
-        // 确保有可用的实现
-        if (!m_legacyCpuInfo) {
-            try {
-                m_legacyCpuInfo = std::make_unique<CpuInfo>();
-                m_mode = ImplementationMode::Legacy;
-            } catch (...) {
-                // 最后的保护
-                SetError("Critical: Failed to initialize any CPU info implementation");
-            }
-        }
+        
+        lastIdle = idleTicks;
+        lastTotal = totalTicks;
+        
+        vm_deallocate(mach_task_self(), (vm_address_t)cpuLoad, (vm_size_t)numCPUsU * sizeof(processor_cpu_load_info_t));
     }
+    
+    return cpuUsage;
 }
 
-void CpuInfoCompat::Cleanup() {
-    m_legacyCpuInfo.reset();
-    m_adapterCpuInfo.reset();
+double CpuInfo::GetUsage() {
+    return updateUsage();
 }
 
-void CpuCompat::SetError(const std::string& error) {
-    m_lastError = error;
-    Logger::Error("CpuInfoCompat error: " + error);
+std::string CpuInfo::GetNameFromSysctl() {
+    size_t len = 0;
+    sysctlbyname("machdep.cpu.brand_string", nullptr, &len, nullptr, 0);
+    if (len > 0) {
+        std::string cpuModel;
+        cpuModel.resize(len);
+        sysctlbyname("machdep.cpu.brand_string", &cpuModel[0], &len, nullptr, 0);
+        cpuModel.resize(len - 1);
+        return cpuModel;
+    }
+    return "Unknown CPU";
 }
+
+std::string CpuInfo::GetName() {
+    return cpuName;
+}
+
+DWORD CpuInfo::GetCurrentSpeed() const {
+    return static_cast<DWORD>(cachedInstantMHz);
+}
+
+int CpuInfo::GetTotalCores() const {
+    return totalCores;
+}
+
+int CpuInfo::GetSmallCores() const {
+    return smallCores;
+}
+
+int CpuInfo::GetLargeCores() const {
+    return largeCores;
+}
+
+double CpuInfo::GetLargeCoreSpeed() const {
+    return cachedInstantMHz;
+}
+
+double CpuInfo::GetSmallCoreSpeed() const {
+    return cachedInstantMHz;
+}
+
+double CpuInfo::GetBaseFrequencyMHz() const {
+    return cachedInstantMHz; // Using cached value as base frequency for macOS
+}
+
+double CpuInfo::GetCurrentFrequencyMHz() const {
+    return cachedInstantMHz;
+}
+
+bool CpuInfo::IsHyperThreadingEnabled() const {
+    return false; // Simplified for macOS
+}
+
+bool CpuInfo::IsVirtualizationEnabled() const {
+    return false; // Simplified for macOS
+}
+
+void CpuInfo::InitializeCounter() {
+    counterInitialized = true;
+}
+
+void CpuInfo::CleanupCounter() {
+    counterInitialized = false;
+}
+
+void CpuInfo::InitializeFrequencyCounter() {
+    // Stub for macOS
+}
+
+void CpuInfo::CleanupFrequencyCounter() {
+    // Stub for macOS
+}
+
+#endif // PLATFORM_MACOS

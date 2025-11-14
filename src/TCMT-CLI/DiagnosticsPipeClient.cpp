@@ -6,6 +6,26 @@
 // Use nlohmann::json from the bundled single_include in CPP-parsers
 #include <nlohmann/json.hpp>
 
+#ifdef PLATFORM_WINDOWS
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <errno.h>
+#include <cstring>
+#define INVALID_HANDLE_VALUE -1
+#define GENERIC_READ 0x80000000L
+#define OPEN_EXISTING 0
+#define FILE_ATTRIBUTE_NORMAL 0x80
+#define ERROR_PIPE_BUSY 231
+#define ERROR_FILE_NOT_FOUND 2
+#define ERROR_BROKEN_PIPE 109
+#define GetLastError() errno
+#define ReadFile(handle, buffer, size, bytesRead, overlapped) \
+    (*(bytesRead) = read(handle, buffer, size), (*(bytesRead) >= 0))
+#define CloseHandle(handle) close(handle)
+#endif
+
 const std::string DiagnosticsPipeClient::PIPE_NAME = "\\\\.\\pipe\\SysMonDiag";
 
 DiagnosticsPipeClient::DiagnosticsPipeClient() 
@@ -79,6 +99,7 @@ void DiagnosticsPipeClient::WorkerThread() {
 }
 
 bool DiagnosticsPipeClient::ConnectToPipe() {
+#ifdef PLATFORM_WINDOWS
     if (!WaitForPipeAvailable(5000)) {
         lastError = "Pipe wait timeout";
         return false;
@@ -142,6 +163,18 @@ bool DiagnosticsPipeClient::ConnectToPipe() {
     }
     
     return true;
+#else
+    // Non-Windows platforms: use Unix domain socket or FIFO
+    std::string pipePath = "/tmp/SysMonDiag";
+    
+    hPipe = open(pipePath.c_str(), O_RDONLY | O_NONBLOCK);
+    if (hPipe == INVALID_HANDLE_VALUE) {
+        lastError = "Cannot connect to diagnostic pipe (FIFO not found)";
+        return false;
+    }
+    
+    return true;
+#endif
 }
 
 bool DiagnosticsPipeClient::ReadFromPipe() {
@@ -151,6 +184,8 @@ bool DiagnosticsPipeClient::ReadFromPipe() {
     
     constexpr int BUFFER_SIZE = 4096;
     char buffer[BUFFER_SIZE];
+    
+#ifdef PLATFORM_WINDOWS
     DWORD bytesRead;
     std::string jsonData;
 
@@ -199,6 +234,48 @@ bool DiagnosticsPipeClient::ReadFromPipe() {
     }
     
     return true;
+#else
+    ssize_t bytesRead;
+    std::string jsonData;
+
+    while (true) {
+        bytesRead = read(hPipe, buffer, BUFFER_SIZE);
+        
+        if (bytesRead < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // No data available right now, try again later
+                return true;
+            } else {
+                lastError = "Failed to read pipe data: " + std::string(strerror(errno));
+                return false;
+            }
+        }
+        
+        if (bytesRead == 0) {
+            break;
+        }
+        
+        jsonData.append(buffer, bytesRead);
+        
+        if (bytesRead < BUFFER_SIZE) {
+            break;
+        }
+    }
+    
+    if (!jsonData.empty()) {
+        DiagnosticsPipeSnapshot snapshot;
+        if (ParseDiagnosticData(jsonData, snapshot)) {
+            if (onSnapshotReceived) {
+                onSnapshotReceived(snapshot);
+            }
+        } else {
+            lastError = "Failed to parse diagnostic data";
+            return false;
+        }
+    }
+    
+    return true;
+#endif
 }
 
 bool DiagnosticsPipeClient::ParseDiagnosticData(const std::string& jsonData, DiagnosticsPipeSnapshot& snapshot) {
@@ -266,6 +343,7 @@ bool DiagnosticsPipeClient::WaitForPipeAvailable(int timeoutMs) {
     auto startTime = std::chrono::steady_clock::now();
     auto timeoutDuration = std::chrono::milliseconds(timeoutMs);
     
+#ifdef PLATFORM_WINDOWS
     while (true) {
         if (WaitNamedPipeA(PIPE_NAME.c_str(), 0)) {
             return true;
@@ -278,6 +356,23 @@ bool DiagnosticsPipeClient::WaitForPipeAvailable(int timeoutMs) {
         
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
+#else
+    std::string pipePath = "/tmp/SysMonDiag";
+    
+    while (true) {
+        struct stat st;
+        if (stat(pipePath.c_str(), &st) == 0 && S_ISFIFO(st.st_mode)) {
+            return true;
+        }
+        
+        auto elapsed = std::chrono::steady_clock::now() - startTime;
+        if (elapsed >= timeoutDuration) {
+            return false;
+        }
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+#endif
 }
 
 void DiagnosticsPipeClient::HandleError(const std::string& errorMessage) {
@@ -289,7 +384,11 @@ void DiagnosticsPipeClient::HandleError(const std::string& errorMessage) {
 
 void DiagnosticsPipeClient::Cleanup() {
     if (hPipe != INVALID_HANDLE_VALUE) {
+#ifdef PLATFORM_WINDOWS
         CloseHandle(hPipe);
+#else
+        close(hPipe);
+#endif
         hPipe = INVALID_HANDLE_VALUE;
     }
     isConnected = false;

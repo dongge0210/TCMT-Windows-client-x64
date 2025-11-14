@@ -8,7 +8,11 @@
 #include <tss2/tss2_tcti.h>
 #endif
 
+#ifdef PLATFORM_WINDOWS
 TpmInfoEnhanced::TpmInfoEnhanced(WmiManager& manager) : TpmInfo(manager) {
+#else
+TpmInfoEnhanced::TpmInfoEnhanced() : TpmInfo() {
+#endif
     try {
         // 尝试使用tpm2-tss库进行检测
         DetectTpmViaTpm2Tss();

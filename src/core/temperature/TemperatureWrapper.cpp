@@ -11,7 +11,6 @@
     #include <sys/sysctl.h>
     #include <IOKit/IOKitLib.h>
     #include <IOKit/graphics/IOGraphicsLib.h>
-    #include <IOKit/graphics/IOGraphicsDevice.h>
     #include <CoreFoundation/CoreFoundation.h>
     #include <unistd.h>
     #include <fstream>
@@ -275,29 +274,7 @@ void TemperatureWrapper::LogMacSensorInfo(const std::vector<std::pair<std::strin
 }
 #endif
 
-// Windows实现
-#ifdef PLATFORM_WINDOWS
-static void LogRealGpuNames(const std::vector<GpuInfo::GpuData>& gpus, bool isDetailedLogging) {
-    if (!isDetailedLogging) return; // 只在详细日志周期显示
-    
-    std::vector<std::string> realGpuNames;
-    for (const auto& gpu : gpus) {
-        if (!gpu.isVirtual) {
-            realGpuNames.emplace_back(gpu.name.begin(), gpu.name.end());
-        }
-    }
-    if (!realGpuNames.empty()) {
-        std::string msg = "TemperatureWrapper: Real GPU name list: ";
-        for (size_t i = 0; i < realGpuNames.size(); ++i) {
-            msg += realGpuNames[i];
-            if (i + 1 < realGpuNames.size()) msg += ", ";
-        }
-        Logger::Debug(msg);
-    } else {
-        Logger::Debug("TemperatureWrapper: No real GPU detected");
-    }
-}
-
+// Cross-platform implementations
 void TemperatureWrapper::Initialize() {
     try {
 #ifdef PLATFORM_WINDOWS
@@ -329,11 +306,15 @@ void TemperatureWrapper::Initialize() {
 
 void TemperatureWrapper::Cleanup() {
     if (initialized) {
+#ifdef PLATFORM_WINDOWS
         LibreHardwareMonitorBridge::Cleanup();
+#endif
         initialized = false;
     }
+#ifdef PLATFORM_WINDOWS
     if (gpuInfo) { delete gpuInfo; gpuInfo = nullptr; }
     if (wmiManager) { delete wmiManager; wmiManager = nullptr; }
+#endif
 }
 
 std::vector<std::pair<std::string, double>> TemperatureWrapper::GetTemperatures() {
@@ -380,6 +361,185 @@ std::vector<std::pair<std::string, double>> TemperatureWrapper::GetTemperatures(
     
     return temps;
 }
+
+// Windows-specific helper function
+#ifdef PLATFORM_WINDOWS
+static void LogRealGpuNames(const std::vector<GpuInfo::GpuData>& gpus, bool isDetailedLogging) {
+    if (!isDetailedLogging) return; // 只在详细日志周期显示
+    
+    std::vector<std::string> realGpuNames;
+    for (const auto& gpu : gpus) {
+        if (!gpu.isVirtual) {
+            realGpuNames.emplace_back(gpu.name.begin(), gpu.name.end());
+        }
+    }
+    if (!realGpuNames.empty()) {
+        std::string msg = "TemperatureWrapper: Real GPU name list: ";
+        for (size_t i = 0; i < realGpuNames.size(); ++i) {
+            msg += realGpuNames[i];
+            if (i + 1 < realGpuNames.size()) msg += ", ";
+        }
+        Logger::Debug(msg);
+    } else {
+        Logger::Debug("TemperatureWrapper: No real GPU detected");
+    }
+}
+#endif // PLATFORM_WINDOWS
+
+// Linux温度监控实现
+#ifdef PLATFORM_LINUX
+std::vector<std::pair<std::string, double>> TemperatureWrapper::GetLinuxTemperatures() {
+    std::vector<std::pair<std::string, double>> temps;
+    
+    try {
+        // 获取CPU温度
+        double cpuTemp = GetLinuxCpuTemperature();
+        if (cpuTemp > 0) {
+            temps.emplace_back("CPU", cpuTemp);
+            Logger::Debug("TemperatureWrapper: CPU temperature: " + std::to_string(cpuTemp) + "°C");
+        }
+        
+        // 获取其他传感器温度
+        auto sensorTemps = GetLinuxSensorTemperatures();
+        temps.insert(temps.end(), sensorTemps.begin(), sensorTemps.end());
+    }
+    catch (const std::exception& e) {
+        Logger::Error("GetLinuxTemperatures failed: " + std::string(e.what()));
+    }
+    
+    return temps;
+}
+
+double TemperatureWrapper::GetLinuxCpuTemperature() {
+    try {
+        // 尝试从 /sys/class/thermal/thermal_zone*/temp 获取CPU温度
+        glob_t globResult;
+        if (glob("/sys/class/thermal/thermal_zone*/temp", GLOB_NOSORT, nullptr, &globResult) == 0) {
+            for (size_t i = 0; i < globResult.gl_pathc; i++) {
+                std::string tempPath = globResult.gl_pathv[i];
+                std::ifstream tempFile(tempPath);
+                if (tempFile.is_open()) {
+                    int tempMilliCelsius;
+                    tempFile >> tempMilliCelsius;
+                    tempFile.close();
+                    
+                    // 转换为摄氏度
+                    double tempCelsius = tempMilliCelsius / 1000.0;
+                    
+                    // 检查是否为CPU温度（通常thermal_zone0是CPU）
+                    if (tempCelsius > 0 && tempCelsius < 150) {
+                        globfree(&globResult);
+                        return tempCelsius;
+                    }
+                }
+            }
+            globfree(&globResult);
+        }
+        
+        // 备用方法：从 /sys/devices/platform/coretemp.0/hwmon/hwmon*/temp1_input
+        glob_t hwmonGlob;
+        if (glob("/sys/devices/platform/coretemp.0/hwmon/hwmon*/temp1_input", GLOB_NOSORT, nullptr, &hwmonGlob) == 0) {
+            for (size_t i = 0; i < hwmonGlob.gl_pathc; i++) {
+                std::string tempPath = hwmonGlob.gl_pathv[i];
+                std::ifstream tempFile(tempPath);
+                if (tempFile.is_open()) {
+                    int tempMilliCelsius;
+                    tempFile >> tempMilliCelsius;
+                    tempFile.close();
+                    
+                    double tempCelsius = tempMilliCelsius / 1000.0;
+                    if (tempCelsius > 0 && tempCelsius < 150) {
+                        globfree(&hwmonGlob);
+                        return tempCelsius;
+                    }
+                }
+            }
+            globfree(&hwmonGlob);
+        }
+    }
+    catch (const std::exception& e) {
+        Logger::Error("GetLinuxCpuTemperature failed: " + std::string(e.what()));
+    }
+    
+    return 0.0;
+}
+
+std::vector<std::pair<std::string, double>> TemperatureWrapper::GetLinuxSensorTemperatures() {
+    std::vector<std::pair<std::string, double>> sensors;
+    
+    try {
+        // 扫描 /sys/class/hwmon/hwmon*/ 获取所有硬件监控传感器
+        glob_t globResult;
+        if (glob("/sys/class/hwmon/hwmon*/", GLOB_NOSORT, nullptr, &globResult) == 0) {
+            for (size_t i = 0; i < globResult.gl_pathc; i++) {
+                std::string hwmonPath = globResult.gl_pathv[i];
+                
+                // 获取hwmon名称
+                std::string namePath = hwmonPath + "/name";
+                std::ifstream nameFile(namePath);
+                if (!nameFile.is_open()) continue;
+                
+                std::string sensorName;
+                std::getline(nameFile, sensorName);
+                nameFile.close();
+                
+                // 扫描所有温度输入
+                std::string tempPattern = hwmonPath + "/temp*_input";
+                glob_t tempGlob;
+                if (glob(tempPattern.c_str(), GLOB_NOSORT, nullptr, &tempGlob) == 0) {
+                    for (size_t j = 0; j < tempGlob.gl_pathc; j++) {
+                        std::string tempPath = tempGlob.gl_pathv[j];
+                        double temp = GetLinuxSensorTemperature(tempPath);
+                        
+                        if (temp > 0 && temp < 150) {
+                            // 提取温度编号
+                            size_t pos = tempPath.find_last_of('/');
+                            std::string tempFileName = (pos != std::string::npos) ? 
+                                tempPath.substr(pos + 1) : tempPath;
+                            
+                            sensors.emplace_back(sensorName + " - " + tempFileName, temp);
+                        }
+                    }
+                    globfree(&tempGlob);
+                }
+            }
+            globfree(&globResult);
+        }
+    }
+    catch (const std::exception& e) {
+        Logger::Error("GetLinuxSensorTemperatures failed: " + std::string(e.what()));
+    }
+    
+    return sensors;
+}
+
+double TemperatureWrapper::GetLinuxSensorTemperature(const std::string& sensorPath) {
+    try {
+        std::ifstream tempFile(sensorPath);
+        if (!tempFile.is_open()) {
+            return 0.0;
+        }
+        
+        int tempMilliCelsius;
+        tempFile >> tempMilliCelsius;
+        tempFile.close();
+        
+        // 转换为摄氏度
+        double tempCelsius = tempMilliCelsius / 1000.0;
+        
+        // 验证温度的合理性
+        if (tempCelsius < -50 || tempCelsius > 200) {
+            return 0.0;
+        }
+        
+        return tempCelsius;
+    }
+    catch (const std::exception& e) {
+        Logger::Error("GetLinuxSensorTemperature failed for " + sensorPath + ": " + std::string(e.what()));
+        return 0.0;
+    }
+}
+#endif // PLATFORM_LINUX
 
 bool TemperatureWrapper::IsInitialized() {
     return initialized;

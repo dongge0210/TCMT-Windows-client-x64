@@ -45,11 +45,24 @@ public:
         uint64_t speed;
         std::string speedString;
         
-        // macOS特有字段
+        // 跨平台网络字段
         std::vector<std::string> ipAddresses;  // 支持多个IP地址
         std::string gateway;
         std::string subnetMask;
         std::string dnsServers;
+        std::string ipv6Address;
+        std::string ipv6Gateway;
+        std::string dnsServersIPv6;
+        uint64_t bytesReceived;
+        uint64_t bytesSent;
+        uint64_t packetsReceived;
+        uint64_t packetsSent;
+        uint32_t mtu;
+        std::string driverVersion;
+        std::string firmwareVersion;
+        bool isVirtual;
+        bool isWireless;
+        std::string connectionStatus;
     };
 
 #ifdef PLATFORM_WINDOWS

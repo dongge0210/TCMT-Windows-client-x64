@@ -1,9 +1,13 @@
 #pragma once
+#include <string>
+
+#ifdef PLATFORM_WINDOWS
 #include <wbemidl.h>
 #include <comdef.h>
 #include <servprov.h>
-#include <string>
+#endif
 
+#ifdef PLATFORM_WINDOWS
 class WmiManager : public IServiceProvider {
 public:
     WmiManager();
@@ -27,3 +31,4 @@ private:
     bool initialized = false;
     LONG m_refCount = 1;
 };
+#endif

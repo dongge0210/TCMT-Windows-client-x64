@@ -4,6 +4,10 @@
 #include <vector>
 #include <string>
 
+#ifdef PLATFORM_WINDOWS
+    class WmiManager;
+#endif
+
 // 增强的TPM信息结构，包含tpm2-tss库提供的详细信息
 struct TpmDataEnhanced : public TpmInfo::TpmData {
     // 基础TPM信息
@@ -52,7 +56,11 @@ struct TpmDataEnhanced : public TpmInfo::TpmData {
 
 class TpmInfoEnhanced : public TpmInfo {
 public:
+#ifdef PLATFORM_WINDOWS
     TpmInfoEnhanced(WmiManager& manager);
+#else
+    TpmInfoEnhanced();
+#endif
     ~TpmInfoEnhanced();
     
     // 获取增强的TPM数据

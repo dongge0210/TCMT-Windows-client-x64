@@ -122,7 +122,6 @@ private:
     std::string GetMacDevicePath(const std::string& mountPoint);
     void GetMacDeviceProperties(const std::string& devicePath, USBDeviceInfo& info);
     bool IsMacUSBDevice(const std::string& devicePath);
-    void MonitorMacUSBDevices();
     DASessionRef CreateDiskArbitrationSession(); // 修正类型
     void ReleaseDiskArbitrationSession(DASessionRef session); // 修正类型
 #elif defined(PLATFORM_LINUX)

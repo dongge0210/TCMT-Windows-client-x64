@@ -7,22 +7,21 @@
 
 #ifdef PLATFORM_WINDOWS
     #include <windows.h>
-    #include <pdh.h>
+    typedef unsigned long long ULONG;
 #elif defined(PLATFORM_MACOS)
     #include <sys/sysctl.h>
     #include <mach/mach.h>
-    #include <mach/mach_types.h>
-    #include <mach/host_info.h>
-    #include <sys/utsname.h>
+    #include <CoreFoundation/CoreFoundation.h>
+    // ULONG is already defined by macOS headers as UInt32
     typedef unsigned long DWORD;
-    typedef unsigned long long ULONG;
+    typedef unsigned short WORD;
 #elif defined(PLATFORM_LINUX)
-    #include <sys/sysinfo.h>
     #include <fstream>
     #include <sstream>
     #include <unistd.h>
-    typedef unsigned long DWORD;
     typedef unsigned long long ULONG;
+    typedef unsigned long DWORD;
+    typedef unsigned short WORD;
 #endif
 
 // 跨平台通用类型定义

@@ -55,7 +55,6 @@
 #include "core/tpm/TpmInfo.h"  // TPM detection (TBS primary, WMI fallback)
 #include "core/tpm/TpmInfoEnhanced.h"  // Enhanced TPM detection using tpm2-tss
 #include "core/usb/USBInfo.h"  // USB device monitoring
-#include "core/tpm/TpmInfoEnhanced.h"  // Enhanced TPM detection using tpm2-tss
 
 #pragma comment(lib, "kernel32.lib")
 #pragma comment(lib, "user32.lib")

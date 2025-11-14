@@ -31,9 +31,11 @@
 #include <algorithm>
 #include <cctype>
 
+#ifdef PLATFORM_WINDOWS
 // Make sure Windows.h is included before any other headers that might redefine GetLastError
 #include <windows.h>
 #include <wincrypt.h>
+#endif
 
 #include "SharedMemoryManager.h"
 // Fix the include path case sensitivity
@@ -49,14 +51,7 @@
 #define SHARED_MEMORY_MANAGER_INCLUDED
 #include "DiagnosticsPipe.h"
 
-#ifndef WINUTILS_IMPLEMENTED
-// Fallback implementation for FormatWindowsErrorMessage
-inline std::string FallbackFormatWindowsErrorMessage(DWORD errorCode) {
-    std::stringstream ss;
-    ss << "错误码: " << errorCode;
-    return ss.str();
-}
-#endif
+
 
 
 // Initialize static members
@@ -73,6 +68,23 @@ SharedMemoryBlock* SharedMemoryManager::pBuffer = nullptr;
 std::string SharedMemoryManager::lastError = "";
 void* SharedMemoryManager::serviceManager = nullptr;
 USBInfoManager* SharedMemoryManager::usbManager = nullptr;
+
+// Cross-platform TCMT_STRNCPY_S replacement
+#ifdef PLATFORM_WINDOWS
+    #define TCMT_STRNCPY_S(dest, destsz, src, count) strncpy_s(dest, destsz, src, count)
+    #define TCMT_STRCPY_S(dest, destsz, src) TCMT_STRCPY_S(dest, destsz, src)
+#else
+    #define TCMT_STRNCPY_S(dest, destsz, src, count) \
+        do { \
+            strncpy(dest, src, std::min((size_t)(count), (size_t)(destsz))); \
+            dest[std::min((size_t)(count) - 1, (size_t)(destsz) - 1)] = '\0'; \
+        } while(0)
+    #define TCMT_STRCPY_S(dest, destsz, src) \
+        do { \
+            strncpy(dest, src, (destsz) - 1); \
+            dest[(destsz) - 1] = '\0'; \
+        } while(0)
+#endif
 
 bool SharedMemoryManager::InitSharedMemory() {
     // Clear any previous error
@@ -239,13 +251,28 @@ bool SharedMemoryManager::InitPosixSharedMemory() {
         return false;
     }
 
-    // 设置共享内存大小
-    if (ftruncate(shmFd, sizeof(SharedMemoryBlock)) == -1) {
-        lastError = "无法设置共享内存大小: " + std::string(strerror(errno));
-        Logger::Error(lastError);
-        close(shmFd);
-        shmFd = -1;
-        return false;
+    // 先检查当前大小
+    struct stat shm_stat;
+    if (fstat(shmFd, &shm_stat) == 0) {
+        if (static_cast<size_t>(shm_stat.st_size) < sizeof(SharedMemoryBlock)) {
+            // 只有当当前大小小于所需大小时才调整大小
+            if (ftruncate(shmFd, sizeof(SharedMemoryBlock)) == -1) {
+                lastError = "无法设置共享内存大小: " + std::string(strerror(errno));
+                Logger::Error(lastError);
+                close(shmFd);
+                shmFd = -1;
+                return false;
+            }
+        }
+    } else {
+        // 无法获取状态，尝试设置大小
+        if (ftruncate(shmFd, sizeof(SharedMemoryBlock)) == -1) {
+            lastError = "无法设置共享内存大小: " + std::string(strerror(errno));
+            Logger::Error(lastError);
+            close(shmFd);
+            shmFd = -1;
+            return false;
+        }
     }
 
     // 映射到进程地址空间
@@ -399,7 +426,7 @@ void SharedMemoryManager::WriteToSharedMemory(const SystemInfo& systemInfo) {
             
             // 复制传感器名称（限制长度）
             size_t nameLen = std::min(temp.first.length(), sizeof(sensor.name) - 1);
-            strncpy_s(sensor.name, sizeof(sensor.name), temp.first.c_str(), nameLen);
+            TCMT_STRNCPY_S(sensor.name, sizeof(sensor.name), temp.first.c_str(), nameLen);
             sensor.name[nameLen] = '\0';
             
             // 设置温度值（转换为0.1°C精度）
@@ -423,20 +450,20 @@ void SharedMemoryManager::WriteToSharedMemory(const SystemInfo& systemInfo) {
 #ifdef PLATFORM_WINDOWS
             MotherboardInfo motherboardInfo = MotherboardInfoCollector::CollectMotherboardInfo(static_cast<IWbemServices*>(GetSystemService()));
             if (motherboardInfo.isValid) {
-                strncpy_s(pBuffer->baseboardManufacturer, sizeof(pBuffer->baseboardManufacturer), 
-                           motherboardInfo.manufacturer.c_str(), _TRUNCATE);
-                strncpy_s(pBuffer->baseboardProduct, sizeof(pBuffer->baseboardProduct), 
-                           motherboardInfo.product.c_str(), _TRUNCATE);
-                strncpy_s(pBuffer->baseboardVersion, sizeof(pBuffer->baseboardVersion), 
-                           motherboardInfo.version.c_str(), _TRUNCATE);
-                strncpy_s(pBuffer->baseboardSerial, sizeof(pBuffer->baseboardSerial), 
-                           motherboardInfo.serialNumber.c_str(), _TRUNCATE);
-                strncpy_s(pBuffer->biosVendor, sizeof(pBuffer->biosVendor), 
-                           motherboardInfo.biosVendor.c_str(), _TRUNCATE);
-                strncpy_s(pBuffer->biosVersion, sizeof(pBuffer->biosVersion), 
-                           motherboardInfo.biosVersion.c_str(), _TRUNCATE);
-                strncpy_s(pBuffer->biosDate, sizeof(pBuffer->biosDate), 
-                           motherboardInfo.biosReleaseDate.c_str(), _TRUNCATE);
+                TCMT_STRNCPY_S(pBuffer->baseboardManufacturer, sizeof(pBuffer->baseboardManufacturer), 
+                           motherboardInfo.manufacturer.c_str(), 255);
+                TCMT_STRNCPY_S(pBuffer->baseboardProduct, sizeof(pBuffer->baseboardProduct), 
+                           motherboardInfo.product.c_str(), 255);
+                TCMT_STRNCPY_S(pBuffer->baseboardVersion, sizeof(pBuffer->baseboardVersion), 
+                           motherboardInfo.version.c_str(), 255);
+                TCMT_STRNCPY_S(pBuffer->baseboardSerial, sizeof(pBuffer->baseboardSerial), 
+                           motherboardInfo.serialNumber.c_str(), 255);
+                TCMT_STRNCPY_S(pBuffer->biosVendor, sizeof(pBuffer->biosVendor), 
+                           motherboardInfo.biosVendor.c_str(), 255);
+                TCMT_STRNCPY_S(pBuffer->biosVersion, sizeof(pBuffer->biosVersion), 
+                           motherboardInfo.biosVersion.c_str(), 255);
+                TCMT_STRNCPY_S(pBuffer->biosDate, sizeof(pBuffer->biosDate), 
+                           motherboardInfo.biosReleaseDate.c_str(), 255);
             } else {
                 SetDefaultMotherboardInfo();
             }
@@ -470,12 +497,12 @@ void SharedMemoryManager::WriteToSharedMemory(const SystemInfo& systemInfo) {
                     auto& usbData = pBuffer->usbDevices[i];
                     
                     // 复制驱动器路径
-                    strncpy_s(usbData.drivePath, sizeof(usbData.drivePath), 
-                              usbDevice.drivePath.c_str(), _TRUNCATE);
+                    TCMT_STRNCPY_S(usbData.drivePath, sizeof(usbData.drivePath), 
+                              usbDevice.drivePath.c_str(), 255);
                     
                     // 复制卷标名称
-                    strncpy_s(usbData.volumeLabel, sizeof(usbData.volumeLabel), 
-                              usbDevice.volumeLabel.c_str(), _TRUNCATE);
+                    TCMT_STRNCPY_S(usbData.volumeLabel, sizeof(usbData.volumeLabel), 
+                              usbDevice.volumeLabel.c_str(), 255);
                     
                     // 设置容量信息
                     usbData.totalSize = usbDevice.totalSize;
@@ -487,7 +514,12 @@ void SharedMemoryManager::WriteToSharedMemory(const SystemInfo& systemInfo) {
                     usbData.reserved = 0;
                     
                     // 设置时间
-                    usbData.lastUpdate = usbDevice.lastUpdate;
+#ifdef PLATFORM_WINDOWS
+                    usbData.lastUpdate.windowsTime = usbDevice.lastUpdate.windowsTime;
+#else
+                    usbData.lastUpdate.unixTime = usbDevice.lastUpdate;
+                    usbData.lastUpdate.milliseconds = 0;
+#endif
                 }
             } catch (const std::exception& e) {
                 Logger::Error("获取USB设备信息异常: " + std::string(e.what()));
@@ -500,6 +532,7 @@ void SharedMemoryManager::WriteToSharedMemory(const SystemInfo& systemInfo) {
         memset(pBuffer->extensionPad, 0, sizeof(pBuffer->extensionPad));
 
         // 计算SHA256哈希
+#ifdef PLATFORM_WINDOWS
         try {
             // 使用Windows Cryptography API计算SHA256
             HCRYPTPROV hCryptProv = NULL;
@@ -544,6 +577,10 @@ void SharedMemoryManager::WriteToSharedMemory(const SystemInfo& systemInfo) {
             Logger::Error("SHA256计算未知异常");
             memset(pBuffer->sharedmemHash, 0, sizeof(pBuffer->sharedmemHash));
         }
+#else
+        // 非Windows平台暂时不计算哈希，保持为0
+        memset(pBuffer->sharedmemHash, 0, sizeof(pBuffer->sharedmemHash));
+#endif
 
         // 检查是否有实际数据更新，如果有则增加snapshotVersion
         bool hasDataUpdate = false;
@@ -633,8 +670,8 @@ void SharedMemoryManager::CollectMacMotherboardInfo() {
             std::string manufacturer = line.substr(line.find(":") + 2);
             manufacturer.erase(0, manufacturer.find_first_not_of(" \t"));
             manufacturer.erase(manufacturer.find_last_not_of(" \t\r\n") + 1);
-            strncpy_s(pBuffer->baseboardManufacturer, sizeof(pBuffer->baseboardManufacturer), 
-                       manufacturer.c_str(), _TRUNCATE);
+            TCMT_STRNCPY_S(pBuffer->baseboardManufacturer, sizeof(pBuffer->baseboardManufacturer), 
+                       manufacturer.c_str(), 255);
             foundManufacturer = true;
         }
         // 可以添加更多字段解析
@@ -651,8 +688,8 @@ void SharedMemoryManager::CollectLinuxMotherboardInfo() {
     if (dmi.is_open()) {
         std::string vendor;
         std::getline(dmi, vendor);
-        strncpy_s(pBuffer->baseboardManufacturer, sizeof(pBuffer->baseboardManufacturer), 
-                   vendor.c_str(), _TRUNCATE);
+        TCMT_STRNCPY_S(pBuffer->baseboardManufacturer, sizeof(pBuffer->baseboardManufacturer), 
+                   vendor.c_str(), 255);
         dmi.close();
     } else {
         SetDefaultMotherboardInfo();
@@ -661,11 +698,11 @@ void SharedMemoryManager::CollectLinuxMotherboardInfo() {
 #endif
 
 void SharedMemoryManager::SetDefaultMotherboardInfo() {
-    strcpy_s(pBuffer->baseboardManufacturer, sizeof(pBuffer->baseboardManufacturer), "未知");
-    strcpy_s(pBuffer->baseboardProduct, sizeof(pBuffer->baseboardProduct), "未知");
-    strcpy_s(pBuffer->baseboardVersion, sizeof(pBuffer->baseboardVersion), "未知");
-    strcpy_s(pBuffer->baseboardSerial, sizeof(pBuffer->baseboardSerial), "未知");
-    strcpy_s(pBuffer->biosVendor, sizeof(pBuffer->biosVendor), "未知");
-    strcpy_s(pBuffer->biosVersion, sizeof(pBuffer->biosVersion), "未知");
-    strcpy_s(pBuffer->biosDate, sizeof(pBuffer->biosDate), "未知");
+    TCMT_STRCPY_S(pBuffer->baseboardManufacturer, sizeof(pBuffer->baseboardManufacturer), "未知");
+    TCMT_STRCPY_S(pBuffer->baseboardProduct, sizeof(pBuffer->baseboardProduct), "未知");
+    TCMT_STRCPY_S(pBuffer->baseboardVersion, sizeof(pBuffer->baseboardVersion), "未知");
+    TCMT_STRCPY_S(pBuffer->baseboardSerial, sizeof(pBuffer->baseboardSerial), "未知");
+    TCMT_STRCPY_S(pBuffer->biosVendor, sizeof(pBuffer->biosVendor), "未知");
+    TCMT_STRCPY_S(pBuffer->biosVersion, sizeof(pBuffer->biosVersion), "未知");
+    TCMT_STRCPY_S(pBuffer->biosDate, sizeof(pBuffer->biosDate), "未知");
 }

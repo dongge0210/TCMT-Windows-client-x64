@@ -13,6 +13,8 @@
     #pragma comment(lib, "Shell32.lib")
 #elif defined(PLATFORM_MACOS)
     #include <sys/sysctl.h>
+    #include <sys/statvfs.h>
+    #include <sys/mount.h>
     #include <sys/mount.h>
     #include <diskarbitration/diskarbitration.h>
     #include <IOKit/IOKitLib.h>
@@ -28,6 +30,8 @@
     #include <sstream>
     #include <algorithm>
     #include <glob.h>
+    #include <dirent.h>
+    #include <unistd.h>
 #endif
 
 DiskInfo::DiskInfo() : initialized(false) { 
@@ -220,6 +224,273 @@ void DiskInfo::GetMacDiskPerformance(const std::string& devicePath, DriveInfo& i
 // Windows实现（保持原有逻辑）
 #ifdef PLATFORM_WINDOWS
 void DiskInfo::QueryWindowsDrives() {
+    Logger::Debug("DiskInfo: 查询Windows磁盘信息");
+    
+    // 获取逻辑驱动器信息
+    DWORD drives = GetLogicalDrives();
+    for (int i = 0; i < 26; i++) {
+        if (drives & (1 << i)) {
+            char driveLetter = 'A' + i;
+            std::string rootPath = std::string(1, driveLetter) + ":\\";
+            
+            DriveInfo info;
+            info.letter = driveLetter;
+            info.mountPoint = rootPath;
+            info.devicePath = "\\\\.\\\\PhysicalDrive" + std::to_string(i);
+            
+            // 获取磁盘空间
+            ULARGE_INTEGER freeBytesAvailable, totalBytes, totalFreeBytes;
+            if (GetDiskFreeSpaceExA(rootPath.c_str(), &freeBytesAvailable, &totalBytes, &totalFreeBytes)) {
+                info.totalSize = totalBytes.QuadPart;
+                info.freeSpace = freeBytesAvailable.QuadPart;
+                info.usedSpace = info.totalSize - info.freeSpace;
+            }
+            
+            // 获取卷标和文件系统
+            char volumeName[MAX_PATH + 1] = {0};
+            char fileSystemName[MAX_PATH + 1] = {0};
+            DWORD volumeSerialNumber = 0;
+            DWORD maximumComponentLength = 0;
+            DWORD fileSystemFlags = 0;
+            
+            if (GetVolumeInformationA(rootPath.c_str(), volumeName, MAX_PATH + 1,
+                                     &volumeSerialNumber, &maximumComponentLength,
+                                     &fileSystemFlags, fileSystemName, MAX_PATH + 1)) {
+                info.label = volumeName;
+                info.fileSystem = fileSystemName;
+            }
+            
+            // 检查是否为可移动设备
+            UINT driveType = GetDriveTypeA(rootPath.c_str());
+            info.isRemovable = (driveType == DRIVE_REMOVABLE || driveType == DRIVE_CDROM);
+            
+            // 检查是否为SSD（简化实现）
+            info.isSSD = false;
+            info.interfaceType = "Unknown";
+            
+            drives.push_back(info);
+            Logger::Debug("DiskInfo: 添加Windows磁盘 - 驱动器 " + std::string(1, driveLetter) + ": " + info.label);
+        }
+    }
+    
+    Logger::Debug("DiskInfo: Windows磁盘查询完成，共找到 " + std::to_string(drives.size()) + " 个磁盘");
+}
+#endif
+
+// Linux磁盘查询实现
+#ifdef PLATFORM_LINUX
+void DiskInfo::QueryLinuxDrives() {
+    Logger::Debug("DiskInfo: 查询Linux磁盘信息");
+    
+    // 读取 /proc/mounts 获取挂载点信息
+    std::ifstream mounts("/proc/mounts");
+    if (!mounts.is_open()) {
+        Logger::Error("无法打开 /proc/mounts");
+        return;
+    }
+    
+    std::string line;
+    while (std::getline(mounts, line)) {
+        std::istringstream iss(line);
+        std::string device, mountPoint, fsType, options;
+        int dump, pass;
+        
+        if (!(iss >> device >> mountPoint >> fsType >> options >> dump >> pass)) {
+            continue;
+        }
+        
+        // 过滤掉不需要的挂载点
+        if (mountPoint.empty() || 
+            mountPoint == "/proc" || 
+            mountPoint == "/sys" || 
+            mountPoint == "/dev" ||
+            mountPoint.find("/proc/") == 0 ||
+            mountPoint.find("/sys/") == 0) {
+            continue;
+        }
+        
+        DriveInfo info;
+        info.devicePath = device;
+        info.mountPoint = mountPoint;
+        info.fileSystem = fsType;
+        info.letter = 0; // Linux不使用驱动器字母
+        
+        // 获取磁盘空间信息
+        struct statvfs fs;
+        if (statvfs(mountPoint.c_str(), &fs) == 0) {
+            info.totalSize = fs.f_blocks * fs.f_frsize;
+            info.freeSpace = fs.f_bavail * fs.f_frsize;
+            info.usedSpace = info.totalSize - info.freeSpace;
+        }
+        
+        // 获取卷标
+        info.label = GetLinuxDiskLabel(device);
+        
+        // 检查是否为可移动设备
+        info.isRemovable = (device.find("/dev/sd") == 0 || device.find("/dev/nvme") == 0);
+        
+        // 检查是否为SSD
+        info.isSSD = IsLinuxSSD(device);
+        
+        // 确定接口类型
+        if (device.find("/dev/nvme") == 0) {
+            info.interfaceType = "NVMe";
+        } else if (device.find("/dev/sd") == 0) {
+            info.interfaceType = "SATA";
+        } else if (device.find("/dev/hd") == 0) {
+            info.interfaceType = "IDE";
+        } else {
+            info.interfaceType = "Unknown";
+        }
+        
+        drives.push_back(info);
+        Logger::Debug("DiskInfo: 添加Linux磁盘 - 挂载点: " + info.mountPoint + 
+                     ", 设备: " + info.devicePath + 
+                     ", 文件系统: " + info.fileSystem);
+    }
+    
+    mounts.close();
+    Logger::Debug("DiskInfo: Linux磁盘查询完成，共找到 " + std::to_string(drives.size()) + " 个磁盘");
+}
+
+bool DiskInfo::IsLinuxSSD(const std::string& devicePath) const {
+    try {
+        // 通过 /sys/block 检查设备类型
+        std::string deviceName = devicePath;
+        size_t pos = deviceName.find_last_of('/');
+        if (pos != std::string::npos) {
+            deviceName = deviceName.substr(pos + 1);
+        }
+        
+        // 处理分区（如 sda1 -> sda）
+        if (deviceName.length() > 0 && std::isdigit(deviceName.back())) {
+            while (!deviceName.empty() && std::isdigit(deviceName.back())) {
+                deviceName.pop_back();
+            }
+        }
+        
+        std::string queuePath = "/sys/block/" + deviceName + "/queue/rotational";
+        std::ifstream file(queuePath);
+        if (file.is_open()) {
+            int rotational;
+            file >> rotational;
+            file.close();
+            return rotational == 0; // 0 表示SSD，1 表示HDD
+        }
+    }
+    catch (const std::exception& e) {
+        Logger::Error("检查Linux SSD状态失败: " + std::string(e.what()));
+    }
+    
+    return false;
+}
+
+std::string DiskInfo::GetLinuxFileSystem(const std::string& mountPoint) const {
+    struct statfs fs;
+    if (statfs(mountPoint.c_str(), &fs) == 0) {
+        // 转换文件系统类型
+        switch (fs.f_type) {
+            case 0xEF53: return "ext4";
+            case 0xEF51: return "ext3";
+            case 0xEF52: return "ext2";
+            case 0x01021994: return "tmpfs";
+            case 0x9fa0: return "proc";
+            case 0x62656572: return "btrfs";
+            case 0x58465342: return "xfs";
+            case 0x65735546: return "fuse";
+            case 0x65735543: return "cifs";
+            case 0x517B: return "reiserfs";
+            case 0x012FF7B7: return "coh";
+            case 0x199C: return "udf";
+            case 0x137D: return "devpts";
+            case 0x9fa2: return "nfs";
+            case 0x5346544E: return "ntfs";
+            case 0x4d44: return "msdos";
+            case 0x4000: return "vfat";
+            case 0x4244: return "hfs";
+            case 0x482b: return "hfsplus";
+            case 0x65735541: return "aufs";
+            case 0x09041934: return "pstorefs";
+            case 0x73636673: return "securityfs";
+            case 0x6573556d: return "mqueue";
+            case 0x65735574: return "tmpfs";
+            case 0x65735563: return "cgroup";
+            case 0x61676673: return "autofs";
+            case 0x696e6f73: return "inodefs";
+            case 0x74646174: return "data";
+            case 0x62666973: return "bpf";
+            case 0xcafe4a11: return "smackfs";
+            case 0x53464846: return "hostfs";
+            case 0x65735564: return "dax";
+            case 0x43414d53: return "ecryptfs";
+            case 0xf97cff8c: return "overlayfs";
+            case 0x6573554f: return "fuseblk";
+            case 0x65735570: return "pipefs";
+            case 0x65735563: return "cgroup2";
+            case 0x73616368: return "cachefiles";
+            case 0x65735573: return "sockfs";
+            case 0x65735575: return "userfaultfd";
+            case 0x65735572: return "ramfs";
+            case 0x65735568: return "hugetlbfs";
+            case 0x6573556d: return "mqueue";
+            case 0x65735564: return "dax";
+            case 0x65735563: return "cgroup";
+            case 0x65735574: return "tmpfs";
+            case 0x6573556c: return "lxcfs";
+            case 0x65735570: return "pstore";
+            case 0x6573556d: return "mqueue";
+            case 0x65735573: return "sockfs";
+            case 0x65735566: return "function";
+            default: return "Unknown";
+        }
+    }
+    return "Unknown";
+}
+
+std::string DiskInfo::GetLinuxDiskLabel(const std::string& devicePath) const {
+    try {
+        // 尝试从 /dev/disk/by-label 获取卷标
+        std::string deviceName = devicePath;
+        size_t pos = deviceName.find_last_of('/');
+        if (pos != std::string::npos) {
+            deviceName = deviceName.substr(pos + 1);
+        }
+        
+        std::string labelPath = "/dev/disk/by-label";
+        if (access(labelPath.c_str(), F_OK) == 0) {
+            DIR* dir = opendir(labelPath.c_str());
+            if (dir) {
+                struct dirent* entry;
+                while ((entry = readdir(dir)) != nullptr) {
+                    if (entry->d_name[0] != '.') {
+                        char target[PATH_MAX];
+                        std::string fullPath = labelPath + "/" + entry->d_name;
+                        ssize_t len = readlink(fullPath.c_str(), target, sizeof(target) - 1);
+                        if (len != -1) {
+                            target[len] = '\0';
+                            std::string targetPath(target);
+                            pos = targetPath.find_last_of('/');
+                            if (pos != std::string::npos) {
+                                std::string targetName = targetPath.substr(pos + 1);
+                                if (targetName == deviceName) {
+                                    closedir(dir);
+                                    return std::string(entry->d_name);
+                                }
+                            }
+                        }
+                    }
+                }
+                closedir(dir);
+            }
+        }
+    }
+    catch (const std::exception& e) {
+        Logger::Error("获取Linux磁盘卷标失败: " + std::string(e.what()));
+    }
+    
+    return "";
+}
+#endif
 
 void DiskInfo::Refresh() { 
     Logger::Debug("DiskInfo: 刷新磁盘信息");

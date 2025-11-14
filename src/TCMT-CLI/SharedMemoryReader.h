@@ -1,15 +1,15 @@
 #pragma once
 
-#include <windows.h>
 #include <string>
 #include <vector>
 #include <memory>
 #include "../core/DataStruct/DataStruct.h"
+#include "../core/common/CrossPlatformStubs.h"
 
 class SharedMemoryReader {
 private:
     HANDLE hMapFile;
-    LPVOID pBuf;
+    void* pBuf;
     bool isConnected;
     std::string lastError;
     

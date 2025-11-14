@@ -1,7 +1,9 @@
 #include "MotherboardInfo.h"
 #include "Logger.h"
-#include <comdef.h>
 #include <sstream>
+
+#ifdef PLATFORM_WINDOWS
+#include <comdef.h>
 
 std::string MotherboardInfoCollector::BstrToString(const BSTR& bstr) {
     if (bstr == nullptr) return "";
@@ -127,4 +129,4 @@ MotherboardInfo MotherboardInfoCollector::CollectMotherboardInfo(IWbemServices* 
     }
     
     return info;
-}
+}#endif

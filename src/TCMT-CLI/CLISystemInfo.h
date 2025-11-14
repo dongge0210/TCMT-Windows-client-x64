@@ -67,10 +67,18 @@ struct CLIUSBDeviceData {
     uint64_t freeSpace;
     bool isUpdateReady;
     int state;
+#ifdef PLATFORM_WINDOWS
     SYSTEMTIME lastUpdate;
+#else
+    time_t lastUpdate;
+#endif
     
     CLIUSBDeviceData() : totalSize(0), freeSpace(0), isUpdateReady(false), state(0) {
+#ifdef PLATFORM_WINDOWS
         memset(&lastUpdate, 0, sizeof(lastUpdate));
+#else
+        lastUpdate = 0;
+#endif
     }
 };
 

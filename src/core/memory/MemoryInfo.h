@@ -7,7 +7,7 @@
 #elif defined(PLATFORM_MACOS)
     #include <sys/sysctl.h>
     #include <mach/mach.h>
-    #include <mach/host_statistics.h>
+    #include <mach/mach_types.h>
     #include <mach/mach_host.h>
     #include <sys/utsname.h>
     typedef unsigned long long ULONGLONG;
@@ -47,7 +47,7 @@ private:
     MEMORYSTATUSEX memStatus;
 #elif defined(PLATFORM_MACOS)
     vm_statistics64_data_t vmStats;
-    host_statistics64_data_t hostStats;
+    vm_statistics64_data_t hostStats;
     mach_port_t hostPort;
     bool vmStatsValid;
 #elif defined(PLATFORM_LINUX)
